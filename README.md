@@ -8,7 +8,7 @@
 
 ¹Politecnico di Torino &nbsp;·&nbsp; ²Huawei Noah's Ark Lab &nbsp;·&nbsp; ³University College London
 
-[![Paper](https://img.shields.io/badge/Paper-arXiv-red?style=flat-square&logo=arxiv)](.)
+[![Paper](https://img.shields.io/badge/Paper-arXiv-red?style=flat-square&logo=arxiv)](https://github.com/SemanticVLA/EmbodimentSemantic/blob/main/EmbodimentSemantic.pdf)
 [![Dataset](https://img.shields.io/badge/Dataset-HuggingFace-yellow?style=flat-square&logo=huggingface)](https://huggingface.co/datasets/SemVLA/EmbodimentSemantic)
 [![Code](https://img.shields.io/badge/Code-GitHub-black?style=flat-square&logo=github)](https://github.com/SemanticVLA/EmbodimentSemantic)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](vla_benchmarking/LICENSE)
