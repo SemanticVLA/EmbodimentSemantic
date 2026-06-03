@@ -5,10 +5,6 @@ BIDIRECTIONAL_RELATIONS = frozenset([
     "is_inside", "contains",
 ])
 
-UNIDIRECTIONAL_RELATIONS = frozenset([
-    "is_on_top_of", "is_in_front_of", "is_left_of", "is_inside",
-])
-
 INVERSE_MAP = {
     "is_left_of": "is_right_of",   "is_right_of": "is_left_of",
     "is_in_front_of": "is_behind", "is_behind": "is_in_front_of",

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 Save frame images and scene graph CSVs for a specific (task, demo, frame).
+Predictions are re-parsed from JSONL logs; CSV outputs here are inspection
+artifacts for the rendered figure.
 
-Outputs into figures/<stem>/:
-    agentview.png          — raw frame image
-    eye_in_hand.png        — raw frame image
-    agentview_gt.csv       — ground truth triplets with TP/FN label
-    agentview_pred.csv     — predicted triplets with TP/FP label
-    eye_in_hand_gt.csv
-    eye_in_hand_pred.csv
+Outputs into figures/<model>/<task_id_or_task>/<demo>/<camera>/:
+    frame_000000.png          - raw frame image
+    frame_000000_hires.png    - optional high-resolution simulator render
+    frame_000000_gt.csv       - ground truth triplets with TP/FN label
+    frame_000000_pred.csv     - predicted triplets with TP/FP label
+    frame_000000_figure.png   - image + GT/pred tables
 
 Usage:
     python plot_frame.py `
@@ -21,9 +22,12 @@ Usage:
 
 import argparse
 import csv as csv_mod
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 import h5py
 import matplotlib.pyplot as plt
@@ -33,10 +37,15 @@ import numpy as np
 import yaml
 from PIL import Image
 
-from vlm_bench.eval import _load_gt, _load_pred_csv
-from vlm_bench.io_utils import frame_to_pil, list_hdf5_files
+from vlm_bench.eval import FrameResult
+from vlm_bench.io_utils import frame_to_pil, list_hdf5_files, parse_triplets
 
 CAMERAS = ["agentview", "eye_in_hand"]
+
+_SCENE_GRAPH_KEY = {
+    "agentview": "agentview_scene_graph",
+    "eye_in_hand": "robot0_eye_in_hand_scene_graph",
+}
 
 TASK_NAMES = {
     0: "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate",
@@ -50,6 +59,20 @@ TASK_NAMES = {
     8: "pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate",
     9: "pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate",
 }
+
+
+def _safe_path_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "unnamed"
+
+
+def _frame_stem(frame: int) -> str:
+    return f"frame_{frame:06d}"
+
+
+def _task_output_component(task_id: Optional[int], task: str) -> str:
+    if task_id is not None:
+        return f"task_{task_id}"
+    return _safe_path_component(task)
 
 
 def _find_hdf5(task: str, input_dir: Path) -> Path:
@@ -67,22 +90,47 @@ def _load_image(hdf5_path: Path, demo: str, frame: int, camera: str, rotate180: 
     return frame_to_pil(arr, rotate180=(rotate180 and camera == "agentview"))
 
 
+def _load_gt(hdf5_path: Path, demo: str, frame: int, camera: str) -> set[tuple]:
+    key = _SCENE_GRAPH_KEY[camera]
+    with h5py.File(hdf5_path, "r") as f:
+        frames = json.loads(f[f"data/{demo}/obs/{key}"][()].decode("utf-8"))
+    if frame >= len(frames):
+        return set()
+    return {tuple(t) for t in frames[frame]}
+
+
 def _load_pred(model_dir: Path, camera: str, task: str, demo: str, frame: int) -> set[tuple]:
     task = task.strip()
-    csv_dir = model_dir / camera / "csv"
-    if not csv_dir.is_dir():
+    json_dir = model_dir / camera / "json"
+    if not json_dir.is_dir():
         return set()
-    for csv_path in sorted(csv_dir.glob("*.csv")):
-        if task in csv_path.stem:
-            index = _load_pred_csv(csv_path)
-            return index.get((demo, camera, frame), set())
-    return set()
+    pred = set()
+    for jsonl_path in sorted(json_dir.glob("*.jsonl")):
+        if task not in jsonl_path.stem:
+            continue
+        with jsonl_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    rec_frame = int(rec.get("frame", -1))
+                except (TypeError, ValueError):
+                    continue
+                if rec.get("demo") != demo or rec.get("camera") != camera or rec_frame != frame:
+                    continue
+                pred.update(parse_triplets(rec.get("response", "")))
+    return pred
 
 
 def _make_figure(camera: str, img_path: Path, gt_path: Path, pred_path: Path, out_dir: Path,
-                 task: str = "", demo: str = "", frame: int = 0):
+                 frame_stem: str, task: str = "", demo: str = "", frame: int = 0):
     """Render image + GT/pred tables side-by-side and save as PNG."""
-    hires_path = out_dir / f"{camera}_hires.png"
+    hires_path = out_dir / f"{frame_stem}_hires.png"
     src = hires_path if hires_path.exists() else img_path
     img = np.array(Image.open(src))
 
@@ -141,7 +189,6 @@ def _make_figure(camera: str, img_path: Path, gt_path: Path, pred_path: Path, ou
     ax_img = fig.add_subplot(gs[0, 0])
     ax_img.imshow(img)
     ax_img.axis("off")
-    is_hires = hires_path.exists()
     cam_label = camera.replace("_", " ")
     subtitle = f"{task}   |   {demo}   |   frame {frame}"
     ax_img.set_title(f"{cam_label}\n{subtitle}", fontsize=11, fontweight="bold",
@@ -258,7 +305,7 @@ def _make_figure(camera: str, img_path: Path, gt_path: Path, pred_path: Path, ou
         bbox_transform=ax_right.transAxes,
     )
 
-    out_path = out_dir / f"{camera}_figure.png"
+    out_path = out_dir / f"{frame_stem}_figure.png"
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"Saved figure {out_path}")
@@ -310,16 +357,23 @@ def main():
 
     hdf5_path = _find_hdf5(args.task, input_dir)
 
-    # output folder: figures/<model>_<task>_<demo>_f<frame>/
-    safe_task = args.task[:50]
-    out_dir = Path("figures") / f"{args.model}_{safe_task}_{args.demo}_f{args.frame}"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    frame_stem = _frame_stem(args.frame)
+    fig_root = (
+        Path("figures")
+        / _safe_path_component(args.model)
+        / _task_output_component(args.task_id, args.task)
+        / _safe_path_component(args.demo)
+    )
+    fig_root.mkdir(parents=True, exist_ok=True)
 
     for camera in CAMERAS:
+        camera_dir = fig_root / camera
+        camera_dir.mkdir(parents=True, exist_ok=True)
+
         # ── image ─────────────────────────────────────────────────────────────
         try:
             img = _load_image(hdf5_path, args.demo, args.frame, camera, rotate180)
-            img_path = out_dir / f"{camera}.png"
+            img_path = camera_dir / f"{frame_stem}.png"
             img.save(img_path)
             print(f"Saved {img_path}")
         except Exception as e:
@@ -328,6 +382,9 @@ def main():
         # ── graphs ────────────────────────────────────────────────────────────
         gt = _load_gt(hdf5_path, args.demo, args.frame, camera)
         pred = _load_pred(model_dir, camera, args.task, args.demo, args.frame)
+        result = FrameResult(args.task, args.demo, args.frame, camera, gt, pred)
+        gt = result.gt
+        pred = result.pred
 
         tp = gt & pred
         fp = pred - gt
@@ -342,8 +399,8 @@ def main():
             for a, r, b in sorted(pred)
         ]
 
-        gt_path = out_dir / f"{camera}_gt.csv"
-        pred_path = out_dir / f"{camera}_pred.csv"
+        gt_path = camera_dir / f"{frame_stem}_gt.csv"
+        pred_path = camera_dir / f"{frame_stem}_pred.csv"
         _write_csv(gt_path, gt_rows)
         _write_csv(pred_path, pred_rows)
         print(f"Saved {gt_path}  ({len(gt)} triplets: {len(tp)} TP, {len(fn)} FN)")
@@ -351,39 +408,40 @@ def main():
 
     # ── hi-res re-render via simulator ───────────────────────────────────────
     if args.hires:
-        import os
         render_script = Path(__file__).parent / "render_hires.py"
         rotate_flag = ["--rotate-agentview"] if rotate180 else []
         # Call the conda env's python directly — avoids conda run resetting sys.path
         python_exe = Path(f"C:/Users/hassa/anaconda3/envs/{args.conda_env}/python.exe")
         if not python_exe.exists():
             print(f"WARNING: python not found at {python_exe}, skipping hi-res render")
-            args.hires = None
-        env = os.environ.copy()
-        cmd = [
-            str(python_exe), str(render_script),
-            "--hdf5", str(hdf5_path),
-            "--demo", args.demo,
-            "--frame", str(args.frame),
-            "--res", str(args.hires),
-            "--out-dir", str(out_dir),
-            *rotate_flag,
-        ]
-        print(f"\nRunning hi-res render ({args.hires}×{args.hires}) via {args.conda_env}...")
-        result = subprocess.run(cmd, text=True)
-        if result.returncode != 0:
-            print(f"WARNING: hi-res render failed (exit {result.returncode})")
+        else:
+            cmd = [
+                str(python_exe), str(render_script),
+                "--hdf5", str(hdf5_path),
+                "--demo", args.demo,
+                "--frame", str(args.frame),
+                "--res", str(args.hires),
+                "--out-dir", str(fig_root),
+                "--nested-output",
+                "--frame-stem", frame_stem,
+                *rotate_flag,
+            ]
+            print(f"\nRunning hi-res render ({args.hires}x{args.hires}) via {args.conda_env}...")
+            result = subprocess.run(cmd, text=True)
+            if result.returncode != 0:
+                print(f"WARNING: hi-res render failed (exit {result.returncode})")
 
     # ── matplotlib figures ────────────────────────────────────────────────────
     for camera in CAMERAS:
-        img_path = out_dir / f"{camera}.png"
-        gt_path = out_dir / f"{camera}_gt.csv"
-        pred_path = out_dir / f"{camera}_pred.csv"
+        camera_dir = fig_root / camera
+        img_path = camera_dir / f"{frame_stem}.png"
+        gt_path = camera_dir / f"{frame_stem}_gt.csv"
+        pred_path = camera_dir / f"{frame_stem}_pred.csv"
         if img_path.exists() and gt_path.exists() and pred_path.exists():
-            _make_figure(camera, img_path, gt_path, pred_path, out_dir,
+            _make_figure(camera, img_path, gt_path, pred_path, camera_dir, frame_stem,
                          task=args.task, demo=args.demo, frame=args.frame)
 
-    print(f"\nAll outputs in: {out_dir}")
+    print(f"\nAll outputs in: {fig_root}")
 
 
 if __name__ == "__main__":

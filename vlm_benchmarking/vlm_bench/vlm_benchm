@@ -10,11 +10,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _model_csv_paths(model_out_dir: Path, cameras: list[str], prompt_version: str) -> list[Path]:
-    csv_paths = []
+def _model_jsonl_paths(model_out_dir: Path, cameras: list[str], prompt_version: str) -> list[Path]:
+    jsonl_paths = []
     for cam in cameras:
-        csv_paths.extend(sorted((model_out_dir / cam / "csv").glob(f"*_{cam}_{prompt_version}.csv")))
-    return sorted(list(set(csv_paths)))
+        jsonl_paths.extend(sorted((model_out_dir / cam / "json").glob(f"*_{cam}_{prompt_version}.jsonl")))
+    return sorted(list(set(jsonl_paths)))
 
 
 class _Tee:
@@ -105,7 +105,7 @@ def _main(args):
 
     from vlm_bench.models import build_model
     from vlm_bench.runner import run_experiment
-    from vlm_bench.eval import aggregate, evaluate_csv, print_aggregate_report
+    from vlm_bench.eval import aggregate, evaluate_jsonl, print_aggregate_report
 
     # resolve deprecated aliases (new args win)
     max_tasks = args.tasks if args.tasks is not None else args.max_files
@@ -115,7 +115,12 @@ def _main(args):
     active_cameras = args.cameras if args.cameras is not None else config["extraction"].get("cameras", ["agentview"])
     config_prompt_version = config["extraction"].get("prompt_version", "v1")
 
-    frame_indices = config["extraction"]["frame_indices"]
+    if "frame_step" in config["extraction"]:
+        step = config["extraction"]["frame_step"]
+        step = 1 if step == 0 else step
+        frame_indices = list(range(0, config["extraction"].get("frame_max", 10000), step))
+    else:
+        frame_indices = config["extraction"].get("frame_indices", [0])
     active_frame_indices = frame_indices[:args.frames] if args.frames is not None else frame_indices
     
     for model_name in args.models:
@@ -143,28 +148,25 @@ def _main(args):
         finally:
             model.close()
 
-        # evaluate only the CSVs just generated in this run
+        # evaluate only the JSONL logs just generated in this run
         model_out_dir = Path(args.output_dir) / model_name
         all_results = []
-        csv_paths = _model_csv_paths(model_out_dir, active_cameras, config_prompt_version)
+        jsonl_paths = _model_jsonl_paths(model_out_dir, active_cameras, config_prompt_version)
 
-        for csv_path in csv_paths:
-            results = list(evaluate_csv(
-                csv_path, Path(args.input_dir), active_cameras,
-                active_frame_indices, direction="b",
+        for jsonl_path in jsonl_paths:
+            results = list(evaluate_jsonl(
+                jsonl_path, Path(args.input_dir), active_cameras, active_frame_indices,
             ))
             all_results.extend(results)
-            if results and (len(csv_paths) == 1 or args.verbose):
+            if results and (len(jsonl_paths) == 1 or args.verbose):
                 print_aggregate_report(
-                    aggregate(results, direction="b"),
-                    label=csv_path.name,
-                    direction="b",
+                    aggregate(results),
+                    label=jsonl_path.name,
                 )
-        if len(csv_paths) > 1 and all_results:
+        if len(jsonl_paths) > 1 and all_results:
             print_aggregate_report(
-                aggregate(all_results, direction="b"),
+                aggregate(all_results),
                 label=f"{model_name} — ALL FILES COMBINED",
-                direction="b",
             )
 
 

@@ -19,8 +19,8 @@ cd ~/vlm_benchmarking
 # Usage:
 # sbatch eval_job.sh --model-dir output/<name>/
 # sbatch eval_job.sh --model-dir output/<name1>/ output/<name2>/
-# sbatch eval_job.sh --csv output/<name>/<camera>/csv/<file>.csv
-# sbatch eval_job.sh --model-dir output/<name>/ --direction u --save-csv results/<name>.csv
+# sbatch eval_job.sh --jsonl output/<name>/<camera>/json/<file>.jsonl
+# sbatch eval_job.sh --model-dir output/<name>/ --save-csv results/<name>.csv
 #
 # <name> is whatever was passed as --name during the run (or model ID with / replaced by --)
 # All flags are passed through to evaluate.py — see python evaluate.py --help

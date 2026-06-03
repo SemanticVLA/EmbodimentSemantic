@@ -60,11 +60,11 @@ def _build_model_from_args(args):
     return instance
 
 
-def _model_csv_paths(model_out_dir: Path, cameras: list[str], prompt_version: str) -> list[Path]:
-    csv_paths = []
+def _model_jsonl_paths(model_out_dir: Path, cameras: list[str], prompt_version: str) -> list[Path]:
+    jsonl_paths = []
     for cam in cameras:
-        csv_paths.extend(sorted((model_out_dir / cam / "csv").glob(f"*_{cam}_{prompt_version}.csv")))
-    return sorted(list(set(csv_paths)))
+        jsonl_paths.extend(sorted((model_out_dir / cam / "json").glob(f"*_{cam}_{prompt_version}.jsonl")))
+    return sorted(list(set(jsonl_paths)))
 
 
 class _Tee:
@@ -105,7 +105,7 @@ def parse_args():
     parser.add_argument("--model",   help="Model ID (HuggingFace path or API model name)")
     parser.add_argument("--type",    choices=list(_TYPE_TO_CLASS), help="Backend type")
     parser.add_argument("--name",    help="Override output folder name (default: model ID with / replaced by --)")
-    parser.add_argument("--input-dir",  help="Directory containing HDF5 files or SO1001 task directories")
+    parser.add_argument("--input-dir",  help="Directory containing HDF5 files or SO101 task directories")
     parser.add_argument("--output-dir", default="output", help="Root output directory")
 
     # ── Inference params (all optional, sensible defaults) ────────────────────
@@ -126,13 +126,13 @@ def parse_args():
     # ── Run control ───────────────────────────────────────────────────────────
     parser.add_argument("--config",       default="config.yaml")
     parser.add_argument("--models-config", default="models.yaml")
-    parser.add_argument("--tasks",  type=int, default=None, help="Limit number of tasks (HDF5 files or SO1001 task dirs) processed")
+    parser.add_argument("--tasks",  type=int, default=None, help="Limit number of tasks (HDF5 files or SO101 task dirs) processed")
     parser.add_argument("--task-id", type=int, default=None, help="Run only task at this 0-based index")
     parser.add_argument("--demos",  type=int, default=None, help="Limit demos/episodes per task")
     parser.add_argument("--frames", type=int, default=None, help="Use only first N frame indices from config.yaml")
-    parser.add_argument("--cameras", nargs="+", help="Override cameras (HDF5: agentview eye_in_hand; SO1001: agent_view wrist)")
-    parser.add_argument("--dataset-type", choices=["hdf5", "so1001"], default=None,
-                        help="Dataset format: hdf5 (default, auto-detected) or so1001 (MP4-based LeRobot format)")
+    parser.add_argument("--cameras", nargs="+", help="Override cameras (HDF5: agentview eye_in_hand; SO101: agent_view wrist)")
+    parser.add_argument("--dataset-type", choices=["hdf5", "so101"], default=None,
+                        help="Dataset format: hdf5 (default, auto-detected) or so101 (MP4-based LeRobot format)")
     parser.add_argument("--save-frames", nargs="?", const="debug_frames", default=None,
                         help="Save sampled input frames to a folder for inspection (default folder: debug_frames)")
     parser.add_argument("--list-models", action="store_true", help="Print known model IDs from models.yaml and exit")
@@ -216,8 +216,8 @@ def main():
         tee_err.close()
 
 
-def _is_so1001_input(input_dir: str) -> bool:
-    """Detect SO1001 dataset by presence of task subdirs containing a 'videos' folder."""
+def _is_so101_input(input_dir: str) -> bool:
+    """Detect SO101 dataset by presence of task subdirs containing a 'videos' folder."""
     root = Path(input_dir)
     for d in root.iterdir():
         if d.is_dir() and (d / "videos").is_dir():
@@ -235,7 +235,7 @@ def _main(args):
     # Determine dataset type: explicit flag > auto-detect
     dataset_type = args.dataset_type
     if dataset_type is None:
-        dataset_type = "so1001" if _is_so1001_input(args.input_dir) else "hdf5"
+        dataset_type = "so101" if _is_so101_input(args.input_dir) else "hdf5"
     print(f"  Dataset type : {dataset_type}\n")
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Loading model: {args.model} ...")
@@ -243,10 +243,10 @@ def _main(args):
     model = _build_model_from_args(args)
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Model loaded in {time.perf_counter()-t_load:.1f}s\n")
 
-    if dataset_type == "so1001":
-        from vlm_bench.so1001_runner import run_so1001_experiment
+    if dataset_type == "so101":
+        from vlm_bench.so101_runner import run_so101_experiment
         try:
-            run_so1001_experiment(
+            run_so101_experiment(
                 model=model,
                 config=config,
                 input_dir=args.input_dir,
@@ -261,12 +261,12 @@ def _main(args):
             )
         finally:
             model.close()
-        print("\nSO1001 run complete. No ground-truth evaluation available for this dataset.")
+        print("\nSO101 run complete. No ground-truth evaluation available for this dataset.")
         return
 
     # HDF5 path
     from vlm_bench.runner import run_experiment
-    from vlm_bench.eval import aggregate, evaluate_csv, print_aggregate_report
+    from vlm_bench.eval import aggregate, evaluate_jsonl, print_aggregate_report
 
     active_cameras = args.cameras if args.cameras is not None else config["extraction"].get("cameras", ["agentview"])
     config_prompt_version = config["extraction"].get("prompt_version", "v1")
@@ -298,25 +298,22 @@ def _main(args):
 
     model_out_dir = Path(args.output_dir) / model.registry_name
     all_results = []
-    csv_paths = _model_csv_paths(model_out_dir, active_cameras, config_prompt_version)
+    jsonl_paths = _model_jsonl_paths(model_out_dir, active_cameras, config_prompt_version)
 
-    for csv_path in csv_paths:
-        results = list(evaluate_csv(
-            csv_path, Path(args.input_dir), active_cameras,
-            active_frame_indices, direction="b",
+    for jsonl_path in jsonl_paths:
+        results = list(evaluate_jsonl(
+            jsonl_path, Path(args.input_dir), active_cameras, active_frame_indices,
         ))
         all_results.extend(results)
-        if results and (len(csv_paths) == 1 or args.verbose):
+        if results and (len(jsonl_paths) == 1 or args.verbose):
             print_aggregate_report(
-                aggregate(results, direction="b"),
-                label=csv_path.name,
-                direction="b",
+                aggregate(results),
+                label=jsonl_path.name,
             )
-    if len(csv_paths) > 1 and all_results:
+    if len(jsonl_paths) > 1 and all_results:
         print_aggregate_report(
-            aggregate(all_results, direction="b"),
+            aggregate(all_results),
             label=f"{model.registry_name} — ALL FILES COMBINED",
-            direction="b",
         )
 
 

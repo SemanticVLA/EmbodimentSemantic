@@ -1,8 +1,0 @@
-objectA,relation,objectB,label
-akita_black_bowl_1,is_behind,cookies_1,TP
-akita_black_bowl_1,is_in_front_of,flat_stove_1,TP
-akita_black_bowl_1,is_left_of,wooden_cabinet_1,TP
-akita_black_bowl_1,is_right_of,akita_black_bowl_2,TP
-akita_black_bowl_1,is_right_of,glazed_rim_porcelain_ramekin_1,TP
-akita_black_bowl_1,is_right_of,plate_1,TP
-akita_black_bowl_2,is_left_of,akita_black_bowl_1,TP

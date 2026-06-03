@@ -1,6 +1,6 @@
 # VLM Benchmarking
 
-Benchmark vision-language models (local and API-based) on spatial relation extraction from robot manipulation HDF5 datasets. Each model is queried per-frame, per-camera, and results are saved as triplet CSVs and raw JSONL logs. After inference, evaluation runs automatically and reports macro/micro F1, per-relation F1, coverage, hallucination rate, direction consistency, and per-object recall.
+Benchmark vision-language models (local and API-based) on spatial relation extraction from robot manipulation HDF5 datasets. Each model is queried per-frame, per-camera, and results are saved as triplet CSVs and raw JSONL logs. After inference, evaluation runs automatically and reports macro/micro F1, per-relation F1, relation-type coverage, hallucination rate, direction consistency, and per-object recall.
 
 ## How it works
 
@@ -46,13 +46,13 @@ Every ordered pair (A, B) gets exactly one relation; inverses are always emitted
 
 ### Evaluation (`vlm_bench/eval.py`)
 
-Predicted CSVs are compared against HDF5 ground-truth scene graphs at the triplet level:
+Raw JSONL responses are re-parsed and compared against HDF5 ground-truth scene graphs at the triplet level. CSVs are still written for inspection, but they are not used as the metric source:
 
 - **TP** = predicted ∩ GT
 - **FP** = predicted − GT
 - **FN** = GT − predicted
 
-By default, evaluation is bidirectional. Unidirectional mode (`--direction u`) filters inverse relations before scoring.
+Evaluation is bidirectional over the full 8-relation ontology used in the prompt. For the visually identical LIBERO black bowls, scoring is frame-level permutation-invariant over `akita_black_bowl_1` and `akita_black_bowl_2`: each frame is scored with the predicted bowl IDs unchanged and swapped, and the higher-F1 assignment is used. The two bowl instances remain distinct; unsuffixed bowl names do not receive this leniency.
 
 **Reported metrics:**
 
@@ -61,9 +61,9 @@ By default, evaluation is bidirectional. Unidirectional mode (`--direction u`) f
 | Macro F1 | Mean of per-frame F1 scores |
 | Micro F1 | Pooled TP/FP/FN across all frames |
 | Per-relation F1 | P/R/F1 per relation type |
-| Coverage | Fraction of GT relation types appearing in predictions |
+| Relation-type coverage | Fraction of GT relation types appearing in predictions |
 | Hallucination rate | FP / (TP + FP) |
-| Direction consistency | (b-mode) Fraction of inverse pairs both predicted |
+| Direction consistency | Fraction of inverse pairs both predicted |
 | Per-object recall | Recall per object across all frames |
 | Mean per-task F1 | Average per-task F1 across all evaluated tasks |
 
@@ -122,14 +122,14 @@ objects:                      # exact object names used in prompts
   - wooden_cabinet_1
   - flat_stove_1
 
-so1001:
+so101:
   prompt_version: v1
-  frame_step: 30              # SO1001: every Nth video frame; 30 FPS means 1 sample/sec
+  frame_step: 30              # SO101: every Nth video frame; 30 FPS means 1 sample/sec
   frame_max: 10000
   cameras:
     - agent_view
     - wrist
-  objects:                    # exact SO1001 object names used in prompts
+  objects:                    # exact SO101 object names used in prompts
     - black_bowl
     - drawer
     - stove
@@ -180,15 +180,15 @@ python run.py --model Qwen/Qwen2.5-VL-7B-Instruct --type vllm \
     --input-dir data/libero_spatial_v5/ --tasks 2 --demos 5 --frames 1 --cameras eye_in_hand
 ```
 
-**SO1001 inference:**
+**SO101 inference:**
 
 ```bash
-python run.py --dataset-type so1001 --model Qwen/Qwen2.5-VL-7B-Instruct --type vllm \
-    --input-dir data/SO1001_dataset/ --name qwen-so1001
+python run.py --dataset-type so101 --model Qwen/Qwen2.5-VL-7B-Instruct --type vllm \
+    --input-dir data/SO101_dataset/ --name qwen-so101
 
-python run.py --dataset-type so1001 --model Qwen/Qwen2.5-VL-7B-Instruct --type vllm \
-    --input-dir data/SO1001_dataset/ --task-id 0 --demos 1 --frames 5 \
-    --cameras agent_view --save-frames debug_frames/so1001-smoke
+python run.py --dataset-type so101 --model Qwen/Qwen2.5-VL-7B-Instruct --type vllm \
+    --input-dir data/SO101_dataset/ --task-id 0 --demos 1 --frames 5 \
+    --cameras agent_view --save-frames debug_frames/so101-smoke
 ```
 
 **vLLM tuning flags:**
@@ -212,7 +212,7 @@ python run.py --list-models
 | `--model` | required | Model ID (HuggingFace path or API model name) |
 | `--type` | required | Backend: `vllm`, `nvidia`, `gemini`, `openai`, `anthropic`, `hf` |
 | `--name` | model ID (/ → --) | Output folder name under `output/` |
-| `--input-dir` | required | Directory containing HDF5 files or SO1001 task directories |
+| `--input-dir` | required | Directory containing HDF5 files or SO101 task directories |
 | `--output-dir` | `output` | Root output directory |
 | `--batch-size` | `8` | Batch size |
 | `--max-new-tokens` | `4096` | Max output tokens |
@@ -223,12 +223,12 @@ python run.py --list-models
 | `--max-pixels` | none | vLLM vision max pixels (e.g. `1048576` for Qwen) |
 | `--quantization` | none | vLLM quantization (`awq`, `fp8`) |
 | `--thinking-budget` | none | Gemini thinking budget tokens |
-| `--tasks` | all | Limit to first N HDF5 files or SO1001 task directories |
+| `--tasks` | all | Limit to first N HDF5 files or SO101 task directories |
 | `--task-id` | none | Run only the task at this 0-based index |
 | `--demos` | all | Limit to first N demos/episodes per task |
 | `--frames` | all | Use only first N frame indices from config |
-| `--cameras` | config value | Override cameras (`agentview`, `eye_in_hand`; SO1001: `agent_view`, `wrist`) |
-| `--dataset-type` | auto | Force `hdf5` or `so1001` |
+| `--cameras` | config value | Override cameras (`agentview`, `eye_in_hand`; SO101: `agent_view`, `wrist`) |
+| `--dataset-type` | auto | Force `hdf5` or `so101` |
 | `--save-frames` | off | Save sampled input frames to a folder for inspection |
 | `--config` | `config.yaml` | Config file path |
 | `--list-models` | — | Print known model IDs from `models.yaml` and exit |
@@ -238,44 +238,61 @@ python run.py --list-models
 
 ## Standalone evaluation
 
-Evaluate existing CSVs without re-running inference:
+Evaluate existing JSONL logs without re-running inference:
 
 ```bash
 # entire model output folder
 python evaluate.py --model-dir output/qwen2.5-7b/ --input-dir data/libero_spatial_v5/
 
-# single CSV
-python evaluate.py --csv output/qwen2.5-7b/agentview/csv/task_agentview_v4.csv \
+# single JSONL
+python evaluate.py --jsonl output/qwen2.5-7b/agentview/json/task_agentview_v4.jsonl \
     --input-dir data/libero_spatial_v5/
-
-# unidirectional evaluation
-python evaluate.py --model-dir output/qwen2.5-7b/ \
-    --input-dir data/libero_spatial_v5/ --direction u
 
 # compare two models, save per-frame breakdown
 python evaluate.py --model-dir output/qwen2.5-7b/ output/gemini-3.1-pro-preview/ \
     --input-dir data/libero_spatial_v5/ --save-csv results/comparison.csv
 
-# re-parse raw JSONL logs instead of CSVs
-python evaluate.py --model-dir-jsonl output/qwen2.5-7b/ --input-dir data/libero_spatial_v5/
+# regenerate parsed CSV artifacts from JSONL logs
+python evaluate.py --model-dir output/qwen2.5-7b/ --input-dir data/libero_spatial_v5/ \
+    --reparse-jsonl-to-csv
 ```
 
 **CLI reference:**
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--csv` | — | One or more prediction CSV files |
 | `--jsonl` | — | One or more prediction JSONL log files |
-| `--model-dir` | — | One or more model output folders (auto-globs CSVs) |
-| `--model-dir-jsonl` | — | One or more model output folders (auto-globs JSONLs) |
+| `--model-dir` | — | One or more model output folders (auto-globs JSONLs) |
 | `--input-dir` | required | Directory containing HDF5 files |
-| `--direction` | `b` | `b` = bidirectional, `u` = unidirectional |
 | `--frames` | all | Use only first N frame indices from config |
 | `--cameras` / `--camera` | all in file | Restrict to selected cameras |
 | `--verbose` / `-v` | off | Print per-frame TP/FP/FN breakdown |
 | `--save-csv` | none | Save per-frame results to a CSV |
 
-> Exactly one of `--csv`, `--jsonl`, `--model-dir`, or `--model-dir-jsonl` is required.
+> Exactly one of `--jsonl` or `--model-dir` is required.
+
+### Paper-wide results and plots
+
+`evaluate_all.py` is the paper-results entry point. It evaluates all model folders from JSONL, rewrites `paper_results.csv`, regenerates aggregate plots under `figures/paper_results/`, and replays the existing qualitative Gemini frame specs under `figures/gemini-3.1-pro-preview/` with `plot_frame.py`.
+
+```bash
+python evaluate_all.py --input-dir data/libero_spatial_v5/ --output-dir output/ --out paper_results.csv
+
+# evaluation only, no plot regeneration
+python evaluate_all.py --input-dir data/libero_spatial_v5/ --no-plots
+```
+
+Useful plotting flags:
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--no-plots` | off | Skip all figure regeneration |
+| `--no-paper-plots` | off | Skip `figures/paper_results/` regeneration |
+| `--no-frame-plots` | off | Skip qualitative frame plot regeneration |
+| `--paper-figures-dir` | `figures/paper_results` | Aggregate plot output directory |
+| `--frame-figure-model` | `gemini-3.1-pro-preview` | Model folder under `figures/` to replay with `plot_frame.py` |
+| `--frame-hires` | none | Optional simulator render resolution for qualitative frames |
+| `--workers` | `4` | Parallel model/camera evaluation workers |
 
 ---
 
@@ -319,8 +336,8 @@ sbatch eval_job.sh --model-dir output/qwen2.5-7b/
 # compare two models
 sbatch eval_job.sh --model-dir output/qwen2.5-7b/ output/mistral-large-3/
 
-# unidirectional + save results
-sbatch eval_job.sh --model-dir output/qwen2.5-7b/ --direction u --save-csv results/qwen_eval.csv
+# save per-frame metric rows
+sbatch eval_job.sh --model-dir output/qwen2.5-7b/ --save-csv results/qwen_eval.csv
 ```
 
 Logs are written to `logs/slurm_<job_id>.out` (inference) and `logs/slurm_eval_<job_id>.out` (evaluation).

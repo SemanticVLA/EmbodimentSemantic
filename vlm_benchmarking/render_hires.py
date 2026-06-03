@@ -7,6 +7,9 @@ Called by plot_frame.py --hires, but can also be used standalone:
     conda run -n vla_bench_py312 python render_hires.py \
         --hdf5 data/libero_spatial_v5/pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate_demo.hdf5 \
         --demo demo_0 --frame 0 --res 512 --out-dir figures/my_output
+
+For plot_frame.py's nested layout, add:
+        --nested-output --frame-stem frame_000000
 """
 
 import argparse
@@ -32,11 +35,16 @@ def main():
     parser.add_argument("--frame", type=int, required=True)
     parser.add_argument("--res", type=int, default=512, help="Square resolution for hi-res render")
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--nested-output", action="store_true",
+                        help="Write <out-dir>/<camera>/<frame-stem>_hires.png")
+    parser.add_argument("--frame-stem", default=None,
+                        help="Filename stem for nested output, e.g. frame_000000")
     parser.add_argument("--rotate-agentview", action="store_true")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    frame_stem = args.frame_stem or f"frame_{args.frame:06d}"
 
     hdf5_path = Path(args.hdf5)
     with h5py.File(hdf5_path, "r") as f:
@@ -89,7 +97,12 @@ def main():
         # else: keep raw — matches original HDF5 storage
 
         img = Image.fromarray(img_arr.astype(np.uint8))
-        out_path = out_dir / f"{cam_key}_hires.png"
+        if args.nested_output:
+            cam_dir = out_dir / cam_key
+            cam_dir.mkdir(parents=True, exist_ok=True)
+            out_path = cam_dir / f"{frame_stem}_hires.png"
+        else:
+            out_path = out_dir / f"{cam_key}_hires.png"
         img.save(out_path)
         print(f"Saved {out_path}")
 

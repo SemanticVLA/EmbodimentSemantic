@@ -1,22 +1,22 @@
 dataset,row_type,task,camera,episodes_or_demos,raw_frames,sampled_frames,frame_step,frame_max,fps,frame_len_min,frame_len_max,notes
-SO1001,config,ALL,ALL,,,8252,30,10000,30.0,,,"cameras=agent_view|wrist; samples about 1 frame per second"
-SO1001,total,ALL,ALL,257,240598,8252,30,10000,30.0,,,"raw/sample totals across both configured cameras"
-SO1001,total,ALL,per_camera,257,120299,4126,30,10000,30.0,,,"per single configured RGB camera"
-SO1001,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-le,agent_view,53,27840,949,30,10000,30.0,,,
-SO1001,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-le,wrist,53,27840,949,30,10000,30.0,,,
-SO1001,task_total,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-le,ALL,53,55680,1898,30,10000,30.0,,,
-SO1001,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-ri,agent_view,47,26787,917,30,10000,30.0,,,"metadata missing episode indices 12|13|14|15"
-SO1001,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-ri,wrist,47,26787,917,30,10000,30.0,,,"metadata missing episode indices 12|13|14|15"
-SO1001,task_total,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-ri,ALL,47,53574,1834,30,10000,30.0,,,"metadata missing episode indices 12|13|14|15"
-SO1001,task_camera,place-the-black-bowl-from-on-top-of-the-drawer-to-the-stove,agent_view,52,21547,740,30,10000,30.0,,,
-SO1001,task_camera,place-the-black-bowl-from-on-top-of-the-drawer-to-the-stove,wrist,52,21547,740,30,10000,30.0,,,
-SO1001,task_total,place-the-black-bowl-from-on-top-of-the-drawer-to-the-stove,ALL,52,43094,1480,30,10000,30.0,,,
-SO1001,task_camera,place-the-black-bowl-from-the-left-to-the-top-of-the-stove,agent_view,53,22569,775,30,10000,30.0,,,
-SO1001,task_camera,place-the-black-bowl-from-the-left-to-the-top-of-the-stove,wrist,53,22569,775,30,10000,30.0,,,
-SO1001,task_total,place-the-black-bowl-from-the-left-to-the-top-of-the-stove,ALL,53,45138,1550,30,10000,30.0,,,
-SO1001,task_camera,place-the-black-bowl-from-the-right-to-the-top-of-the-stove,agent_view,52,21556,745,30,10000,30.0,,,
-SO1001,task_camera,place-the-black-bowl-from-the-right-to-the-top-of-the-stove,wrist,52,21556,745,30,10000,30.0,,,
-SO1001,task_total,place-the-black-bowl-from-the-right-to-the-top-of-the-stove,ALL,52,43112,1490,30,10000,30.0,,,
+SO101,config,ALL,ALL,,,8252,30,10000,30.0,,,"cameras=agent_view|wrist; samples about 1 frame per second"
+SO101,total,ALL,ALL,257,240598,8252,30,10000,30.0,,,"raw/sample totals across both configured cameras"
+SO101,total,ALL,per_camera,257,120299,4126,30,10000,30.0,,,"per single configured RGB camera"
+SO101,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-le,agent_view,53,27840,949,30,10000,30.0,,,
+SO101,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-le,wrist,53,27840,949,30,10000,30.0,,,
+SO101,task_total,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-le,ALL,53,55680,1898,30,10000,30.0,,,
+SO101,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-ri,agent_view,47,26787,917,30,10000,30.0,,,"metadata missing episode indices 12|13|14|15"
+SO101,task_camera,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-ri,wrist,47,26787,917,30,10000,30.0,,,"metadata missing episode indices 12|13|14|15"
+SO101,task_total,move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-ri,ALL,47,53574,1834,30,10000,30.0,,,"metadata missing episode indices 12|13|14|15"
+SO101,task_camera,place-the-black-bowl-from-on-top-of-the-drawer-to-the-stove,agent_view,52,21547,740,30,10000,30.0,,,
+SO101,task_camera,place-the-black-bowl-from-on-top-of-the-drawer-to-the-stove,wrist,52,21547,740,30,10000,30.0,,,
+SO101,task_total,place-the-black-bowl-from-on-top-of-the-drawer-to-the-stove,ALL,52,43094,1480,30,10000,30.0,,,
+SO101,task_camera,place-the-black-bowl-from-the-left-to-the-top-of-the-stove,agent_view,53,22569,775,30,10000,30.0,,,
+SO101,task_camera,place-the-black-bowl-from-the-left-to-the-top-of-the-stove,wrist,53,22569,775,30,10000,30.0,,,
+SO101,task_total,place-the-black-bowl-from-the-left-to-the-top-of-the-stove,ALL,53,45138,1550,30,10000,30.0,,,
+SO101,task_camera,place-the-black-bowl-from-the-right-to-the-top-of-the-stove,agent_view,52,21556,745,30,10000,30.0,,,
+SO101,task_camera,place-the-black-bowl-from-the-right-to-the-top-of-the-stove,wrist,52,21556,745,30,10000,30.0,,,
+SO101,task_total,place-the-black-bowl-from-the-right-to-the-top-of-the-stove,ALL,52,43112,1490,30,10000,30.0,,,
 LIBERO,config,ALL,ALL,,,25296,5,300,,,,"cameras=agentview|eye_in_hand; candidate frame indices=0|5|10|...|295"
 LIBERO,total,ALL,ALL,500,124500,25296,5,300,,,,"raw/sample totals across both configured cameras"
 LIBERO,total,ALL,per_camera,500,62250,12648,5,300,,,,"per single configured camera"
@@ -50,5 +50,5 @@ LIBERO,task_total,pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate,
 LIBERO,task_camera,pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate,agentview,50,6880,1395,5,300,,117,193,
 LIBERO,task_camera,pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate,eye_in_hand,50,6880,1395,5,300,,117,193,
 LIBERO,task_total,pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate,ALL,50,13760,2790,5,300,,117,193,
-COMPARISON,total,SO1001_vs_LIBERO,ALL,,240598,8252,30/5,,,,,SO1001 raw/sampled totals
-COMPARISON,total,LIBERO_vs_SO1001,ALL,,124500,25296,5/30,,,,,LIBERO raw/sampled totals
+COMPARISON,total,SO101_vs_LIBERO,ALL,,240598,8252,30/5,,,,,SO101 raw/sampled totals
+COMPARISON,total,LIBERO_vs_SO101,ALL,,124500,25296,5/30,,,,,LIBERO raw/sampled totals

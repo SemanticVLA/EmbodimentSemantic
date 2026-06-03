@@ -19,9 +19,9 @@ objects:
   - wooden_cabinet_1
   - flat_stove_1
 
-so1001:
+so101:
   prompt_version: v1
-  frame_step: 30 # SO1001 videos are 30 FPS locally; 30 samples one frame per second
+  frame_step: 30 # SO101 videos are 30 FPS locally; 30 samples one frame per second
   frame_max: 10000
   cameras:
     - agent_view
