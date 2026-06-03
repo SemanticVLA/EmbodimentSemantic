@@ -216,9 +216,12 @@ A key finding: models achieve high relation-type coverage (up to 0.98) but low e
 
 ## VLA Benchmark
 
-Tests whether live scene graphs improve downstream robot control. The interface wraps the LeRobot evaluation environment for Pi0 and Pi05 policies fine-tuned on LIBERO-Spatial. At each timestep, object geometry and world-frame relations are extracted from MuJoCo state, serialized as text, and appended to the task prompt — no policy retraining required. Optional scene randomization perturbs object poses before each episode to test robustness beyond memorized LIBERO layouts.
+The VLA interface evaluates whether injecting live spatial scene graphs into existing fine-tuned policies improves downstream robot control — with no retraining or architecture changes. Two policies are tested: **Pi0** (`lerobot/pi0_libero_finetuned`) and **Pi05** (`lerobot/pi05_libero_finetuned`), both fine-tuned on LIBERO-Spatial. Each policy is evaluated under two prompt conditions:
 
-### Setup
+- **`standard`** — original LIBERO task description only
+- **`scene_graph`** — same description augmented with live object–relation–object triplets extracted from the current MuJoCo state, subject-filtered to `akita_black_bowl_1`
+
+### Installation
 
 Requires Python 3.12+, a CUDA GPU, and Git.
 
@@ -231,21 +234,9 @@ python setup_env.py   # clones LIBERO, installs lerobot[pi] + robosuite, runs sm
 
 > **Windows:** Enable Developer Mode (Settings → System → For Developers) for HuggingFace symlinks, or run as Administrator.
 
-Set a HuggingFace token to avoid rate limits:
-
-```powershell
-# PowerShell
-$env:HF_TOKEN="hf_your_token_here"
-```
-
-```bash
-# bash/zsh
-export HF_TOKEN="hf_your_token_here"
-```
-
 ### Running
 
-Evaluation is controlled via environment variables. All commands are run from inside `vla_benchmarking/`.
+Evaluation is controlled via environment variables from inside `vla_benchmarking/`.
 
 **PowerShell:**
 
@@ -259,24 +250,14 @@ $env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[4]"; python run_lerobot_eval_wi
 CONTEXT_MODE=scene_graph TASK_IDS=[4] python run_lerobot_eval_with_context.py
 ```
 
-**Key environment variables:**
-
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `CONTEXT_MODE` | *(required)* | `standard`, `scene_graph`, `bounding_boxes`, `scene_graph_bounding_boxes` |
 | `TASK_IDS` | `[0]` | Task indices, e.g. `[3]` or `[0,1,2]` |
 | `MODELS` | `lerobot/pi0_libero_base` | HuggingFace policy checkpoint |
 | `DEVICE` | `cuda` | `cuda` or `cpu` |
 | `N_EPISODES` | `1` | Episodes per task |
-| `BATCH_SIZE` | `1` | Parallel episodes |
 | `SEED` | `1000` | Random seed |
-
-**Configuration** (`config.py`):
-
-```python
-RANDOMIZE_SCENES = True                            # False for fixed standard LIBERO layouts
-SCENE_GRAPH_SUBJECT_FILTER = "akita_black_bowl_1"  # None to inject the full dense graph
-```
 
 **Visualize scene swaps without running a policy:**
 
@@ -285,19 +266,58 @@ python randomize_scenes_demo.py        # all tasks → swap_outputs/
 python randomize_scenes_demo.py 3 7    # specific tasks only
 ```
 
-### Results
+### Scene Perturbations
 
-Scene-graph injection improves several Pi05 tasks without any retraining:
+Beyond the default LIBERO layouts, the benchmark applies four types of task-conditioned perturbations to test policy robustness:
 
-| Task ID | Pi05 std | Pi05 + scene graph | Δ |
-|---|---|---|---|
-| T0 | 100.0% | 100.0% | +0.0 pp |
-| T4 | 46.0% | **76.0%** | **+30.0 pp** |
-| T5 | 0.0% | 2.0% | +2.0 pp |
-| T7 | 8.0% | 16.0% | +8.0 pp |
-| T8 | 44.0% | 24.0% | −20.0 pp |
+**Object removal** — strips distractor objects from the scene before the env loads, testing whether policies rely on irrelevant context:
 
-The negative result on T8 shows that added relational context can interfere when the prompt becomes misaligned with the policy's learned task representation — a diagnostic the benchmark is designed to expose.
+| Task | Removed objects |
+| --- | --- |
+| T4 | `cookies_1`, `glazed_rim_porcelain_ramekin_1` |
+| T8 | `glazed_rim_porcelain_ramekin_1`, `cookies_1` |
+
+**Prompt override** — replaces the task description string while keeping the same BDDL goal condition:
+
+| Task | Override prompt |
+| --- | --- |
+| T0 | *"pick up the black bowl in front of the ramekin and place it on the plate"* |
+| T7 | *"pick up the black bowl behind the wooden cabinet and place it on the plate"* |
+
+**Camera override** — switches to out-of-distribution viewpoints to test visual robustness:
+
+| Task | Cameras |
+| --- | --- |
+| T2 | `frontview`, `robot0_robotview` |
+| T6 | `frontview`, `robot0_robotview` |
+
+**Pose swaps and moves** — rearranges object positions before each episode reset, then settles physics with the robot frozen:
+
+| Task | Operations |
+| --- | --- |
+| T1 | Swap `bowl_1`↔`bowl_2`, swap `ramekin`↔`cookies`, swap `cookies`↔`plate`, swap `bowl_1`↔`ramekin` |
+| T3 | Swap `bowl_2`↔`plate`, swap `ramekin`↔`bowl_2` |
+| T5 | Swap `cookies`↔`ramekin`, swap `bowl_1`↔`bowl_2`, move `bowl_1` by (0, 0, +0.05), move `plate` by (−0.05, −0.45, +0.5) |
+| T9 | Swap `bowl_2`↔`plate`, swap `cookies`↔`bowl_2`, move `bowl_2` by (0, −0.1, 0) |
+
+### VLA Results
+
+Scene-graph injection improves several Pi05 tasks without any retraining. The largest gain is +30 pp on T4; T8 degrades by −20 pp, showing that relational context can interfere when it conflicts with the policy's learned prompt representation.
+
+| Task | Pi0 std | Pi0 + sg | Δ | Pi05 std | Pi05 + sg | Δ |
+| --- | --- | --- | --- | --- | --- | --- |
+| T0 | 2.0% | 2.0% | +0.0 | 100.0% | 100.0% | +0.0 |
+| T1 | 0.0% | 0.0% | +0.0 | 0.0% | 0.0% | +0.0 |
+| T2 | 90.0% | **94.0%** | +4.0 | 0.0% | 0.0% | +0.0 |
+| T3 | 0.0% | 0.0% | +0.0 | 0.0% | 0.0% | +0.0 |
+| T4 | 0.0% | 0.0% | +0.0 | 46.0% | **76.0%** | **+30.0** |
+| T5 | 0.0% | 0.0% | +0.0 | 0.0% | 2.0% | +2.0 |
+| T6 | 90.0% | 90.0% | +0.0 | 0.0% | 0.0% | +0.0 |
+| T7 | 0.0% | 0.0% | +0.0 | 8.0% | 16.0% | +8.0 |
+| T8 | 0.0% | 0.0% | +0.0 | 44.0% | 24.0% | **−20.0** |
+| T9 | 0.0% | 0.0% | +0.0 | 0.0% | 0.0% | +0.0 |
+
+*std = standard prompt; sg = scene-graph-augmented prompt. Δ in percentage points over 50 episodes.*
 
 ---
 
