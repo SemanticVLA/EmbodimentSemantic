@@ -4,7 +4,7 @@
 
 > Hassan Jaber¹, Refinath S N², Luca Cagliero¹, Christopher E. Mower², Haitham Bou-Ammar²³  
 > ¹Politecnico di Torino · ²Huawei Noah's Ark Lab · ³University College London  
-> *10th Conference on Robot Learning (CoRL 2026), Austin TX*
+> *2026*
 
 ![LIBERO scene-graph comparison: ground-truth (top) vs. Gemini predictions (bottom). Green edges are correct triplets, red edges are errors.](assets/banner.png)
 
