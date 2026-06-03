@@ -40,12 +40,12 @@ The dataset has two components:
 | --- | --- |
 | Tasks | 10 |
 | Demonstrations | 500 (50 per task) |
-| Paired timesteps | 62,250 |
-| Total RGB frames | 124,500 |
+| Recorded frames per camera | 62,250 |
+| Total recorded frames (both cameras) | 124,500 |
 | Frames per demo | 75–197 (mean 124.5) |
 | Cameras | 2 (`agentview`, `eye_in_hand`) |
 | RGB resolution | 128 × 128 |
-| Canonical objects | 7 |
+| Canonical objects | 7 (`akita_black_bowl_1`, `akita_black_bowl_2`, `cookies_1`, `glazed_rim_porcelain_ramekin_1`, `plate_1`, `wooden_cabinet_1`, `flat_stove_1`) |
 | Directed relations | 8 |
 | Mean triplets / frame (agentview) | 42.0 |
 | Mean triplets / frame (eye_in_hand) | 16.73 |
@@ -56,10 +56,13 @@ The dataset has two components:
 | --- | --- |
 | Tasks | 5 |
 | Demonstrations | 257 (47–53 per task) |
-| Total raw frames | 240,598 |
-| Total sampled frames | 8,252 |
+| Total recorded frames (both cameras) | 240,598 |
+| Recorded frames per camera | 120,299 |
+| Total frames used for VLM eval (both cameras) | 8,252 |
+| VLM eval frames per camera | 4,126 |
 | Cameras | 2 (`agent_view`, `wrist`) |
-| Frame rate | 30 FPS (sampled at ~1 fps, step 30) |
+| Frame rate | 30 FPS (1 frame/sec sampled, step 30) |
+| Canonical objects | 5 (`black_bowl`, `red_drawer`, `black_stove`, `cookie`, `white_plate`) |
 | Format | LeRobot |
 
 ### LIBERO-Spatial Tasks
