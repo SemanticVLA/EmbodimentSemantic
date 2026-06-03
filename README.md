@@ -9,8 +9,8 @@
 ¹Politecnico di Torino &nbsp;·&nbsp; ²Huawei Noah's Ark Lab &nbsp;·&nbsp; ³University College London
 
 [![Paper](https://img.shields.io/badge/Paper-arXiv-red?style=flat-square&logo=arxiv)](.)
-[![Dataset](https://img.shields.io/badge/Dataset-HuggingFace-yellow?style=flat-square&logo=huggingface)](.)
-[![Code](https://img.shields.io/badge/Code-GitHub-black?style=flat-square&logo=github)](.)
+[![Dataset](https://img.shields.io/badge/Dataset-HuggingFace-yellow?style=flat-square&logo=huggingface)](https://huggingface.co/datasets/SemVLA/EmbodimentSemantic)
+[![Code](https://img.shields.io/badge/Code-GitHub-black?style=flat-square&logo=github)](https://github.com/SemanticVLA/EmbodimentSemantic)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](vla_benchmarking/LICENSE)
 
 ![LIBERO scene-graph comparison: ground-truth (top) vs. Gemini predictions (bottom). Green edges are correct triplets, red edges are errors.](assets/banner.png)
@@ -26,7 +26,7 @@ Spatial grounding remains a key limitation of vision–language–action (VLA) s
 The dataset has two components:
 
 - **LIBERO benchmark** — 500 simulator demonstrations (62,250 paired timesteps, 124,500 RGB frames) across 10 LIBERO-Spatial tasks. Ground-truth scene graphs are derived automatically from MuJoCo geometry, world coordinates, and camera projections, giving exact triplet-level supervision without manual annotation.
-- **SO101 real-robot dataset** — 50 teleoperated episodes across 5 tabletop bowl-placement tasks collected with the low-cost SO101 arm. Includes external-camera, wrist-camera, and depth streams in LeRobot format.
+- **SO101 real-robot dataset** — 257 teleoperated episodes across 5 tabletop bowl-placement tasks collected with the low-cost SO101 arm. Includes external-camera, wrist-camera, and depth streams in LeRobot format.
 
 ![SO101 data collection setup](assets/so101_data_collection_setup.png)
 
@@ -218,7 +218,7 @@ python evaluate.py --model-dir output/qwen2.5-7b/ --input-dir data/libero_spatia
 |---|---|---|
 | gemini-3.1-pro | **0.5674** | **0.3773** |
 | InternVL3-78B | 0.3519 | 0.2101 |
-| Qwen3-VL-8B-Instruct | 0.2877 | 0.2108 |
+| Qwen3-VL-8B-Instruct | 0.2837 | 0.2108 |
 | InternVL3_5-14B | 0.2561 | 0.1265 |
 | gemma-4-E4B-it | 0.2209 | 0.1472 |
 | Molmo2-8B | 0.1888 | 0.1459 |
