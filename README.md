@@ -28,6 +28,8 @@ The dataset has two components:
 - **LIBERO benchmark** — 500 simulator demonstrations (62,250 paired timesteps, 124,500 RGB frames) across 10 LIBERO-Spatial tasks. Ground-truth scene graphs are derived automatically from MuJoCo geometry, world coordinates, and camera projections, giving exact triplet-level supervision without manual annotation.
 - **SO101 real-robot dataset** — 50 teleoperated episodes across 5 tabletop bowl-placement tasks collected with the low-cost SO101 arm. Includes external-camera, wrist-camera, and depth streams in LeRobot format.
 
+![SO101 data collection setup](assets/so101_data_collection_setup.png)
+
 ---
 
 ## Dataset Statistics
