@@ -34,8 +34,10 @@ The dataset has two components:
 
 ## Dataset Statistics
 
+### LIBERO Simulator Benchmark
+
 | Attribute | Value |
-|---|---|
+| --- | --- |
 | Tasks | 10 |
 | Demonstrations | 500 (50 per task) |
 | Paired timesteps | 62,250 |
@@ -47,6 +49,18 @@ The dataset has two components:
 | Directed relations | 8 |
 | Mean triplets / frame (agentview) | 42.0 |
 | Mean triplets / frame (eye_in_hand) | 16.73 |
+
+### SO101 Real-Robot Dataset
+
+| Attribute | Value |
+| --- | --- |
+| Tasks | 5 |
+| Demonstrations | 257 (47–53 per task) |
+| Total raw frames | 240,598 |
+| Total sampled frames | 8,252 |
+| Cameras | 2 (`agent_view`, `wrist`) |
+| Frame rate | 30 FPS (sampled at ~1 fps, step 30) |
+| Format | LeRobot |
 
 ### LIBERO-Spatial Tasks
 
