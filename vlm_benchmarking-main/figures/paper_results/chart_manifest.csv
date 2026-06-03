@@ -1,0 +1,22 @@
+chart,category,description,files
+macro_f1_by_model,summary,"Macro F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\macro_f1_by_model.png
+macro_precision_by_model,summary,"Macro precision by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\macro_precision_by_model.png
+macro_recall_by_model,summary,"Macro recall by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\macro_recall_by_model.png
+micro_f1_by_model,summary,"Micro F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\micro_f1_by_model.png
+micro_precision_by_model,summary,"Micro precision by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\micro_precision_by_model.png
+micro_recall_by_model,summary,"Micro recall by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\micro_recall_by_model.png
+mean_per_task_f1_by_model,summary,"Mean per-task F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\mean_per_task_f1_by_model.png
+coverage_by_model,summary,"Relation-type coverage by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\coverage_by_model.png
+hallucination_rate_by_model,summary,"Hallucination rate by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\hallucination_rate_by_model.png
+reversal_rate_by_model,summary,"Reversal rate by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\reversal_rate_by_model.png
+direction_consistency_by_model,summary,"Direction consistency by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\summary\direction_consistency_by_model.png
+contains_f1_by_model,relations,"contains F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\contains_f1_by_model.png
+is_behind_f1_by_model,relations,"is_behind F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\is_behind_f1_by_model.png
+is_below_of_f1_by_model,relations,"is_below_of F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\is_below_of_f1_by_model.png
+is_in_front_of_f1_by_model,relations,"is_in_front_of F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\is_in_front_of_f1_by_model.png
+is_inside_f1_by_model,relations,"is_inside F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\is_inside_f1_by_model.png
+is_left_of_f1_by_model,relations,"is_left_of F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\is_left_of_f1_by_model.png
+is_on_top_of_f1_by_model,relations,"is_on_top_of F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\is_on_top_of_f1_by_model.png
+is_right_of_f1_by_model,relations,"is_right_of F1 by model, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\relations\is_right_of_f1_by_model.png
+mean_relation_f1_by_camera,aggregate,"Mean relation F1 across evaluated models, grouped by camera",C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\aggregate\mean_relation_f1_by_camera.png
+completeness_by_model,aggregate,Completed evaluation frames as a percentage of expected frames,C:\Users\hassa\OneDrive\Desktop\vlm_benchmarking\figures\paper_results\aggregate\completeness_by_model.png

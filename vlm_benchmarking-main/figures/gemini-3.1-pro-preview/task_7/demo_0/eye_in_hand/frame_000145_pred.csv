@@ -1,0 +1,7 @@
+objectA,relation,objectB,label
+akita_black_bowl_1,is_behind,plate_1,FP
+akita_black_bowl_1,is_behind,wooden_cabinet_1,FP
+plate_1,is_in_front_of,akita_black_bowl_1,FP
+plate_1,is_on_top_of,wooden_cabinet_1,FP
+wooden_cabinet_1,is_below_of,plate_1,FP
+wooden_cabinet_1,is_in_front_of,akita_black_bowl_1,FP

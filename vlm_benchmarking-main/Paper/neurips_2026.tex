@@ -1,0 +1,557 @@
+\documentclass{article}
+
+\usepackage[eandd, nonanonymous]{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{tabularx}
+
+\title{SemVLA: A Spatial Scene-Graph Benchmark for Vision-Language Models on LIBERO Manipulation Trajectories}
+
+\author{%
+  Hassan Jaber \\
+  Politecnico di Torino \\
+  \texttt{s338920@studenti.polito.it}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We present a work-in-progress Evaluations \& Datasets track submission centered on spatial scene-graph extraction for robot manipulation trajectories. The project currently contributes three implemented components: (1) a LIBERO-derived dataset of ten bowl-placement tasks with 500 demonstrations and paired overhead and wrist-camera RGB observations, (2) a graph-construction pipeline that augments each frame with object-centric spatial ground truth, and (3) a benchmarking stack for querying vision-language models (VLMs) and scoring predicted triplets against frame-level ground truth. The benchmark focuses on a fixed object vocabulary and eight directed spatial predicates, enabling dense frame-wise evaluation of relational perception under viewpoint changes and partial visibility. The repository already supports prompt-controlled extraction, resumable inference, automatic evaluation, and per-task error analysis. Existing outputs provide preliminary agent-view results on a stride-10 subset across all demonstrations, while the wrist-view benchmark and the downstream vision-language-action (VLA) prompting study remain in progress. This draft documents the methodology, dataset design, evaluation protocol, and current evidence available from the repository at this stage.
+\end{abstract}
+
+\section{Introduction}
+General-purpose VLMs are increasingly used as perceptual front ends for embodied systems, but their relational understanding is still difficult to quantify in robot-centric settings. Benchmarks based on captioning or open-ended question answering do not directly measure whether a model can recover the spatial structure needed for downstream planning, monitoring, or action conditioning.
+
+This project targets that gap with a frame-level benchmark for extracting symbolic spatial scene graphs from robot manipulation trajectories. Rather than asking for free-form descriptions, we require models to output structured triplets of the form $(\texttt{objectA}, \texttt{relation}, \texttt{objectB})$ under a fixed ontology. This makes it possible to compare models with exact-match precision, recall, and F1, while also exposing failure modes such as hallucinated relations, direction flips, and object-specific blind spots.
+
+The current repository covers four practical stages. First, a data-generation stage produces LIBERO-based manipulation trajectories. Second, an augmentation stage derives graph ground truth and writes it back into the HDF5 files. Third, a VLM benchmarking stage queries local and API models and evaluates their predictions. Fourth, a planned VLA stage will test whether prompting with graph-structured context improves policy performance. Only the first three stages are implemented in the repository today, so this draft focuses on the dataset and benchmark that can already be inspected and reproduced.
+
+\paragraph{Current contributions.}
+At the present stage, the project contributes:
+\begin{itemize}
+    \item a spatially focused dataset slice built from ten LIBERO bowl-placement tasks;
+    \item a deterministic graph-generation pipeline that creates frame-level ground-truth triplets for two camera views;
+    \item a benchmark harness for multi-model VLM evaluation with exact triplet scoring and task-level reporting; and
+    \item preliminary benchmark results on a released agent-view subset already stored in the repository outputs.
+\end{itemize}
+
+\section{Related Work}
+This work sits at the intersection of scene-graph style relational perception, spatial reasoning benchmarks for vision-language models, and embodied robot evaluation. Classical scene-graph datasets such as Visual Genome \citep{krishna2017visualgenome} established the value of representing images through objects and relations, but they were built for natural-image understanding rather than robot-centric control. Spatial relation benchmarks such as SpatialSense \citep{yang2019spatialsense} and Visual Spatial Reasoning (VSR) \citep{liu2022vsr} narrow the focus to prepositions and relational language, while Winoground \citep{thrush2022winoground} probes compositional alignment through caption-image matching. These datasets are useful diagnostics, but they typically operate on static web images and evaluate classification, retrieval, or caption consistency rather than direct scene-graph extraction from temporally aligned robot observations. In contrast, SemVLA asks for explicit frame-level triplets under a fixed ontology with exact precision/recall scoring. The resulting evaluation target is narrower than broad caption understanding, but also more faithful to the symbolic relational structure a manipulation system might actually consume.
+
+Our benchmark is also related to recent work that studies spatial capability in VLMs more directly. SpatialEval \citep{wang2024spatialeval} broadens evaluation to multimodal spatial intelligence across question types, and SpatialVLM \citep{chen2024spatialvlm} improves spatial reasoning through large-scale 3D-oriented supervision. These efforts are important because they show that strong models still struggle once success depends on grounded spatial reasoning rather than object recognition alone. However, their tasks are not framed as exact recovery of ordered object-object relations from robot observations. SemVLA instead isolates a more specific problem: given a manipulation frame and a fixed object set, can a model recover the correct symbolic relation graph? That framing also distinguishes our benchmark from robot-oriented spatial datasets with explicit relation annotations: those efforts are closer to supervised scene-graph recognition resources, whereas SemVLA is designed as a diagnostic benchmark for prompt-based extraction and exact triplet evaluation of off-the-shelf VLMs.
+
+On the robotics side, recent benchmarks and large-scale policy datasets have accelerated progress in language-conditioned robot learning, but their primary target is downstream task performance. LIBERO \citep{liu2023libero} provides a controlled benchmark for transfer across manipulation tasks, while RT-1 \citep{brohan2022rt1}, RT-2 \citep{brohan2023rt2}, Open X-Embodiment \citep{openx2023}, and OpenVLA \citep{kim2024openvla} emphasize scalable policy learning, action generation, and cross-embodiment generalization. Those benchmarks tell us whether a policy succeeds, transfers, or improves with language and web-scale pretraining; they do not directly test whether the underlying model has recovered the object-to-object spatial structure present in its observations. SemVLA is intended to fill that gap. Its main contribution is not broader multimodal competence or end-to-end control, but a diagnostic testbed that combines robot manipulation imagery, paired third-person and egocentric views, deterministic frame-level relational labels, and exact triplet evaluation under a fixed ontology. This makes it possible to localize failures by relation type, task, and viewpoint, and to study spatial grounding separately from downstream policy success.
+
+\section{Benchmark and Dataset}
+The benchmark is organized around scene-graph extraction from RGB frames stored in per-task HDF5 files. Each task file contains multiple demonstrations; each demonstration contains image observations from a fixed overhead camera (\texttt{agentview}) and a wrist-mounted camera (\texttt{eye\_in\_hand}), along with graph annotations stored under camera-specific keys.
+
+\begin{table}[t]
+    \caption{Ontology used by SemVLA. The benchmark fixes both the object vocabulary and the relation set so that evaluation is exact and directly comparable across models.}
+    \label{tab:ontology}
+    \centering
+    \begin{tabularx}{\linewidth}{llX}
+        \toprule
+        Type & Name & Description \\
+        \midrule
+        Object & \texttt{akita\_black\_bowl\_1} & Manipulated bowl instance \\
+        Object & \texttt{akita\_black\_bowl\_2} & Secondary bowl instance / distractor \\
+        Object & \texttt{cookies\_1} & Cookie box object \\
+        Object & \texttt{glazed\_rim\_porcelain\_ramekin\_1} & Ramekin reference object \\
+        Object & \texttt{plate\_1} & Target placement object \\
+        Object & \texttt{wooden\_cabinet\_1} & Cabinet / drawer reference object \\
+        Object & \texttt{flat\_stove\_1} & Stove reference surface \\
+        \midrule
+        Relation & \texttt{is\_left\_of} / \texttt{is\_right\_of} & Lateral ordering \\
+        Relation & \texttt{is\_in\_front\_of} / \texttt{is\_behind} & Depth ordering under the active camera frame \\
+        Relation & \texttt{is\_on\_top\_of} / \texttt{is\_below\_of} & Vertical stacking \\
+        Relation & \texttt{is\_inside} / \texttt{contains} & Containment \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+Evaluation uses the full directed eight-relation ontology, matching the bidirectional graph requested in the prompt.
+
+The current dataset directory contains ten task files under \texttt{data/libero\_spatial\_v5/}. Each file corresponds to a variant of the same manipulation template: pick up a black bowl from a particular spatial arrangement and place it on a plate. The ten task descriptions cover \texttt{between}, \texttt{next\_to}, \texttt{on\_top\_of}, \texttt{from\_table\_center}, and \texttt{in\_the\_top\_drawer} variants.
+
+\begin{table}[t]
+    \caption{Task variants currently included in the dataset. All tasks share the same high-level goal but differ in the bowl's initial spatial context, making the benchmark suitable for controlled relational evaluation.}
+    \label{tab:tasks}
+    \centering
+    \begin{tabularx}{\linewidth}{lX}
+        \toprule
+        Task family & Representative task description \\
+        \midrule
+        Between & Pick up the black bowl between the plate and the ramekin and place it on the plate \\
+        Table center & Pick up the black bowl from table center and place it on the plate \\
+        Drawer / containment & Pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate \\
+        Next to cookie box & Pick up the black bowl next to the cookie box and place it on the plate \\
+        Next to plate & Pick up the black bowl next to the plate and place it on the plate \\
+        Next to ramekin & Pick up the black bowl next to the ramekin and place it on the plate \\
+        On cookie box & Pick up the black bowl on the cookie box and place it on the plate \\
+        On ramekin & Pick up the black bowl on the ramekin and place it on the plate \\
+        On stove & Pick up the black bowl on the stove and place it on the plate \\
+        On cabinet & Pick up the black bowl on the wooden cabinet and place it on the plate \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+Across the repository snapshot used for this draft, the dataset contains 500 demonstrations in total, with 50 demonstrations per task. All RGB observations are stored at $128 \times 128$ resolution. Demonstration lengths vary between 75 and 197 frames, with a mean of 124.5 frames, for a total of 62,250 paired time steps across the full dataset.
+
+\begin{table}[t]
+    \caption{Dataset summary from the current repository snapshot. The agent-view graph is dense over the full object vocabulary, while the wrist-view graph is visibility-filtered.}
+    \label{tab:dataset-stats}
+    \centering
+    \begin{tabular}{lr}
+        \toprule
+        Dataset attribute & Value \\
+        \midrule
+        Tasks & 10 \\
+        Demonstrations & 500 \\
+        Total frame pairs & 62,250 \\
+        Frames per demo & 75--197 \\
+        Mean frames per demo & 124.5 \\
+        Cameras & 2 \\
+        RGB resolution & $128 \times 128$ \\
+        Canonical objects & 7 \\
+        Directed relations & 8 \\
+        Mean triplets / frame (agentview) & 42.0 \\
+        Mean triplets / frame (eye-in-hand) & 16.73 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Graph-Generation and Validation}
+Ground-truth graph generation is implemented in \texttt{LIBERO\_Semantic\_Generation.ipynb} as a two-stage augmentation pipeline. The first stage reconstructs per-frame geometry from simulator states and writes object-level bounding boxes and world coordinates into the HDF5 files. The second stage converts those geometric signals into scene-graph triplets and stores them under camera-specific graph keys. The implementation is deterministic and function-driven rather than manually authored per task, which is important for reproducibility.
+
+\subsection{World coordinates and bounding boxes}
+The geometry stage replays each demonstration from the stored simulator states in \texttt{data/<demo>/states} using \texttt{OffScreenRenderEnv}. For each camera in \texttt{TARGET\_CAMERAS = [agentview, robot0\_eye\_in\_hand]}, the notebook computes the camera intrinsic matrix via \texttt{CU.get\_camera\_intrinsic\_matrix} and the inverse extrinsic matrix via \texttt{np.linalg.inv(CU.get\_camera\_extrinsic\_matrix(...))}. Object discovery is handled by \texttt{discover\_objects}, which traverses MuJoCo bodies and keeps only task-relevant bodies ending in \texttt{\_main} while excluding robot and gripper prefixes.
+
+Bounding-box extraction is implemented by the functions \texttt{get\_all\_geoms\_for\_body}, \texttt{world\_to\_pixel}, and \texttt{get\_bbox}. For a given object body, \texttt{get\_all\_geoms\_for\_body} first collects every descendant geom attached to that body subtree. The box for the full object is then formed by projecting the oriented corner set of every collected geom and taking a single image-space envelope over all valid projected corners.
+
+For one geom with world-space center $p \in \mathbb{R}^3$, orientation matrix $R \in \mathbb{R}^{3 \times 3}$, and half-sizes $s=(s_x,s_y,s_z)$ from \texttt{geom\_size}, the code enumerates the eight local cuboid corners
+\begin{equation}
+c(\sigma_x,\sigma_y,\sigma_z) =
+\begin{bmatrix}
+\sigma_x s_x \\
+\sigma_y s_y \\
+\sigma_z s_z
+\end{bmatrix},
+\qquad \sigma_x,\sigma_y,\sigma_z \in \{-1,+1\},
+\end{equation}
+and maps them into world coordinates as
+\begin{equation}
+x_w = p + R c.
+\end{equation}
+This matches the implementation in \texttt{get\_bbox}, which multiplies each signed size vector by the current geom rotation \texttt{xmat} and adds the geom position \texttt{xpos}.
+
+Each world point is then projected into the active camera by \texttt{world\_to\_pixel}. If $E^{-1}$ denotes the inverse extrinsic matrix returned by \texttt{np.linalg.inv(CU.get\_camera\_extrinsic\_matrix(...))} and $K$ is the intrinsic matrix, the code computes
+\begin{equation}
+\tilde{x}_c = E^{-1}
+\begin{bmatrix}
+x_w \\
+1
+\end{bmatrix}
+=
+\begin{bmatrix}
+x_c \\
+y_c \\
+z_c \\
+1
+\end{bmatrix},
+\end{equation}
+keeps the point only when $z_c > 0.01$, and applies pinhole projection
+\begin{equation}
+u = f_x \frac{x_c}{z_c} + c_x,
+\qquad
+v = f_y \frac{y_c}{z_c} + c_y,
+\end{equation}
+where $(f_x,f_y,c_x,c_y)$ come from $K$. Because image coordinates in the stored RGB arrays have the origin at the top left, the final vertical pixel is flipped as
+\begin{equation}
+v_{\mathrm{img}} = H - v.
+\end{equation}
+
+Given the full set of valid projected pixels $\mathcal{P} = \{(u_i,v_i)\}$ from all geom corners, the object box is the padded min-max envelope
+\begin{equation}
+\begin{aligned}
+x_1 &= \max\!\bigl(0,\ \lfloor \min_i u_i \rfloor - p_b \bigr), \\
+y_1 &= \max\!\bigl(0,\ \lfloor \min_i v_i \rfloor - p_b \bigr), \\
+x_2 &= \min\!\bigl(W,\ \lceil \max_i u_i \rceil + p_b \bigr), \\
+y_2 &= \min\!\bigl(H,\ \lceil \max_i v_i \rceil + p_b \bigr),
+\end{aligned}
+\end{equation}
+with padding $p_b = 5$ pixels in the current release. The implementation discards degenerate boxes with $x_1 \ge x_2$ or $y_1 \ge y_2$, and also rejects extreme outliers whose raw width or height exceeds three times the image dimensions. In parallel, the code stores each object's world-space position and $3\times3$ orientation matrix from \texttt{body\_xpos} and \texttt{body\_xmat}.
+
+For each demonstration and camera, the augmentation step serializes two frame-aligned datasets into the observation group:
+\begin{itemize}
+    \item \texttt{<camera>\_bboxes}: JSON-encoded per-frame dictionaries of visible object boxes;
+    \item \texttt{<camera>\_world\_coords}: JSON-encoded per-frame dictionaries of object positions and orientations.
+\end{itemize}
+In the current dataset, this yields \texttt{agentview\_bboxes}, \texttt{agentview\_world\_coords}, \texttt{robot0\_eye\_in\_hand\_bboxes}, and \texttt{robot0\_eye\_in\_hand\_world\_coords}.
+
+\subsection{Scene-graph generation}
+Scene-graph construction is implemented by \texttt{generate\_frame\_graph}. The function takes per-frame bounding boxes and world coordinates and emits a list of ordered triplets. The generation logic is pairwise and deterministic:
+\begin{enumerate}
+    \item select the active object set;
+    \item test whether a pair is in a stacking or containment configuration;
+    \item if not stacked, assign a horizontal relation from world-coordinate offsets.
+\end{enumerate}
+
+Let $\mathcal{O}$ denote the active object set for a frame. In the default case, \texttt{generate\_frame\_graph} uses the keys of the current bbox dictionary,
+\begin{equation}
+\mathcal{O} = \mathrm{sort}\bigl(\mathrm{keys}(\mathrm{bboxes})\bigr),
+\end{equation}
+while the optional \texttt{object\_filter} argument restricts the set to
+\begin{equation}
+\mathcal{O} = \mathrm{sort}\bigl(\{o \in \mathrm{keys}(\mathrm{bboxes}) : o \in \mathcal{F}\}\bigr).
+\end{equation}
+The function then iterates over all ordered pairs $(A,B)$ with $A \neq B$, skipping any pair whose world coordinates are missing. This means the output graph is directed by construction: if both directions are valid, the code evaluates $(A,B)$ and $(B,A)$ separately.
+
+For each ordered pair, the code first tests whether a vertical relation should override the horizontal one. If both objects have 2D boxes,
+\begin{equation}
+B_A = (x_1^A,y_1^A,x_2^A,y_2^A), \qquad
+B_B = (x_1^B,y_1^B,x_2^B,y_2^B),
+\end{equation}
+it computes the intersection rectangle
+\begin{equation}
+\begin{aligned}
+\hat{x}_1 &= \max(x_1^A,x_1^B), & \hat{y}_1 &= \max(y_1^A,y_1^B), \\
+\hat{x}_2 &= \min(x_2^A,x_2^B), & \hat{y}_2 &= \min(y_2^A,y_2^B),
+\end{aligned}
+\end{equation}
+and proceeds only when $\hat{x}_2 > \hat{x}_1$ and $\hat{y}_2 > \hat{y}_1$. The overlap score used by the implementation is
+\begin{equation}
+\mathrm{io}_{\min}(A,B) =
+\frac{(\hat{x}_2-\hat{x}_1)(\hat{y}_2-\hat{y}_1)}
+{\min\!\bigl((x_2^A-x_1^A)(y_2^A-y_1^A),\ (x_2^B-x_1^B)(y_2^B-y_1^B)\bigr)}.
+\end{equation}
+If $\mathrm{io}_{\min}(A,B) > 0.8$ and at least one object name contains the substring ``bowl'', the pair is marked as vertically related.
+
+The relation label is then chosen from the world $z$ coordinates. Writing $p_A=(x_A,y_A,z_A)$ and $p_B=(x_B,y_B,z_B)$ for the stored object positions, the default rule is
+\begin{equation}
+r(A,B)=
+\begin{cases}
+\texttt{is\_on\_top\_of}, & z_A \ge z_B, \\
+\texttt{is\_below\_of}, & z_A < z_B.
+\end{cases}
+\end{equation}
+One task-specific override changes this logic for drawer scenes. When \texttt{is\_drawer\_task} is true and the unordered pair is exactly
+\begin{equation}
+\{A,B\} = \{\texttt{akita\_black\_bowl\_1},\ \texttt{wooden\_cabinet\_1}\},
+\end{equation}
+the same $z$ comparison emits
+\begin{equation}
+r(A,B)=
+\begin{cases}
+\texttt{is\_inside}, & z_A \ge z_B, \\
+\texttt{contains}, & z_A < z_B.
+\end{cases}
+\end{equation}
+This is not a cosmetic detail: it is the only place where the generator substitutes semantic containment labels for the generic vertical pair.
+
+If the pair is not marked as stacked, the code falls back to horizontal ordering in world coordinates. Defining
+\begin{equation}
+\Delta x = x_A - x_B,
+\qquad
+\Delta y = y_A - y_B,
+\end{equation}
+the dominant-axis decision rule is
+\begin{equation}
+r(A,B)=
+\begin{cases}
+\texttt{is\_in\_front\_of}, & |\Delta x| \ge |\Delta y| \text{ and } \Delta x > 0, \\
+\texttt{is\_behind}, & |\Delta x| \ge |\Delta y| \text{ and } \Delta x \le 0, \\
+\texttt{is\_left\_of}, & |\Delta x| < |\Delta y| \text{ and } \Delta y > 0, \\
+\texttt{is\_right\_of}, & |\Delta x| < |\Delta y| \text{ and } \Delta y \le 0.
+\end{cases}
+\end{equation}
+The tie-break toward front/behind follows directly from the condition $|\Delta x| \ge |\Delta y|$ in the code.
+
+The two camera graphs differ only in how $\mathcal{O}$ is chosen. For \texttt{agentview}, the generator uses the full overhead bbox set and therefore produces a dense graph over all visible overhead objects. For the wrist view, the implementation calls \texttt{generate\_frame\_graph(agent\_bboxes, agent\_world, object\_filter=set(wrist\_bboxes.keys()))}. In other words, the wrist graph keeps the same world geometry as the overhead view but restricts the active objects to those whose boxes are visible in the wrist image. This yields an egocentric visibility-filtered target without recomputing the underlying spatial state.
+
+\subsection{Stored graph targets and implementation map}
+After graph construction, the notebook writes the two target datasets \texttt{agentview\_scene\_graph} and \texttt{robot0\_eye\_in\_hand\_scene\_graph} into each demonstration's observation group. Validation in the current repository is procedural: \texttt{check\_coords\_complete}, \texttt{check\_bboxes\_complete}, and \texttt{check\_graphs\_complete} verify that the expected augmentation keys exist for every demonstration and camera before downstream benchmarking proceeds.
+
+\begin{table}[t]
+    \caption{Implementation map for the augmentation pipeline. These functions are the main technical units behind geometry extraction and graph generation.}
+    \label{tab:impl-augmentation}
+    \centering
+    \begin{tabularx}{\linewidth}{lX}
+        \toprule
+        Function / component & Role in the pipeline \\
+        \midrule
+        \texttt{discover\_objects} & Enumerates task-relevant MuJoCo bodies while excluding robot/gripper parts \\
+        \texttt{get\_all\_geoms\_for\_body} & Collects all geoms attached to a body subtree \\
+        \texttt{world\_to\_pixel} & Projects 3D points into image coordinates using camera geometry \\
+        \texttt{get\_bbox} & Builds padded 2D boxes from projected oriented geom corners \\
+        \texttt{check\_coords\_complete} & Verifies bbox/world-coordinate augmentation completeness \\
+        \texttt{generate\_frame\_graph} & Converts bboxes and world coordinates into ordered relation triplets \\
+        \texttt{check\_bboxes\_complete}, \texttt{check\_graphs\_complete} & Sanity checks HDF5 completeness before graph generation / overwrite \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+At present, validation is procedural rather than fully human-annotated. The repository guarantees that graphs are generated from stored geometry and visibility metadata with explicit task-specific handling for containment, but the final submission should add a manual audit on a random frame subset. In the final paper, this section should report annotation verification for representative agent-view and wrist-view frames, with special attention to containment and heavy-overlap cases. That validation is important because reviewers will reasonably ask whether errors in the benchmark are due to model failures or graph-construction artifacts.
+
+The dataset is designed to probe relational perception rather than object discovery. Object names are supplied in the prompt, and the model's job is to recover the correct relation for each relevant pair. This isolates several evaluation axes:
+\begin{itemize}
+    \item viewpoint sensitivity between overhead and wrist cameras;
+    \item robustness to partial visibility in the wrist view;
+    \item consistency over time within a demonstration;
+    \item discrimination among horizontal, vertical, and containment relations; and
+    \item alignment between task-language hints and frame-level geometry.
+\end{itemize}
+
+\section{Experimental Protocol}
+\subsection{Prompted extraction task}
+The VLM benchmark is implemented in \texttt{run.py}, \texttt{vlm\_bench/runner.py}, \texttt{vlm\_bench/prompts.py}, and \texttt{vlm\_bench/eval.py}. For each task file, the runner derives a human-readable task hint using \texttt{task\_name\_from\_path}, then builds a prompt that includes the task description, the fixed object list, the allowed predicates, and explicit extraction rules. Prompt construction is handled by \texttt{\_rules\_block}, \texttt{build\_agentview\_prompt}, and \texttt{build\_wrist\_prompt}. The prompt requires comma-separated triplets and forbids free-form explanations. Two camera-specific templates are implemented: one for the overhead camera after a $180^\circ$ rotation into a canonical human-readable orientation, and one for the wrist camera in the robot's egocentric frame.
+
+The prompt rules enforce an exhaustive pairwise decision process. For every ordered pair of visible objects, the model must emit exactly one relation. Stacking and containment are checked first; if they do not apply, the model must select between front/behind and left/right based on the dominant visual separation. Ties are broken toward front/behind. The prompt also explicitly instructs the model to output both directions for inverse pairs.
+
+The inclusion of the natural-language task description is deliberate and implemented directly in the prompt builder. Many tasks encode relational priors directly in their names, such as ``between the plate and the ramekin'' or ``in the top drawer.'' The benchmark therefore measures a combined ability: grounding spatial relations in the image while using task context to disambiguate the relevant arrangement.
+
+\subsection{Inference pipeline}
+Inference is orchestrated by \texttt{run\_experiment}. The runner first resolves active frame indices from \texttt{config.yaml}: either a stride-based list built from \texttt{frame\_step} and \texttt{frame\_max}, or an explicit list of frame indices. It then enumerates HDF5 tasks through \texttt{list\_hdf5\_files}, maps each camera to its RGB dataset via \texttt{image\_key\_for\_camera}, and converts raw RGB arrays to PIL images with \texttt{frame\_to\_pil}. For \texttt{agentview}, the code can optionally rotate frames by $180^\circ$ before inference so that prompt semantics and image orientation remain aligned.
+
+For each selected task, demonstration, camera, and frame index, the runner:
+\begin{table}[t]
+    \caption{End-to-end benchmark pipeline. The pipeline is fully implemented in the repository and supports resumable multi-model evaluation.}
+    \label{tab:pipeline}
+    \centering
+    \begin{tabularx}{\linewidth}{clX}
+        \toprule
+        Stage & Input/output & Operation \\
+        \midrule
+        1 & HDF5 $\rightarrow$ RGB frame & Load frame for a chosen task, demonstration, camera, and timestep \\
+        2 & Frame + metadata & Build the camera-specific prompt using task hint and fixed object vocabulary \\
+        3 & Prompted query & Send the image-prompt pair to the selected VLM backend \\
+        4 & Raw text $\rightarrow$ triplets & Parse valid comma-separated lines into $(A,\mathrm{rel},B)$ predictions \\
+        5 & JSONL log & Store raw responses, metadata, hashes, and latency for reproducibility \\
+        6 & CSV predictions & Aggregate parsed triplets into inspection artifacts \\
+        7 & JSONL + HDF5 & Re-parse raw responses and score triplets against GT using exact-match evaluation \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+The implementation supports local and API-based models through a shared model registry in \texttt{models.yaml}. All adapters inherit from \texttt{BaseVLM}. Local batched inference is implemented by \texttt{VllmVLM}, which constructs chat-template inputs and submits multi-image batches through \texttt{llm.generate}; if vLLM loading fails, it falls back to a HuggingFace backend. API execution is implemented by adapters such as \texttt{OpenAIVLM}, which serialize the image to base64 JPEG, attach the text prompt, and retry on rate limits. The common contract is \texttt{query} / \texttt{query\_batch}, which allows \texttt{run\_experiment} to treat all model types uniformly.
+
+The runner is resumable by design. The helper \texttt{\_load\_completed} scans existing JSONL files and skips already processed $(\texttt{demo}, \texttt{frame})$ pairs. For each new prediction, the code stores both a raw JSONL record and parsed CSV rows. JSONL logging includes task, demo, frame, camera, model name, latency, and an MD5-based input hash over the image bytes. CSV output stores only canonical triplets in the schema \texttt{task, demo, frame, camera, objectA, relation, objectB}. Triplet parsing is handled by \texttt{parse\_triplets}, which filters to the approved relation set and deduplicates repeated lines.
+
+\subsection{Evaluation protocol}
+Evaluation is exact-match at the triplet level and is implemented by \texttt{evaluate\_jsonl} and \texttt{aggregate}. Ground truth is loaded from the HDF5 graph datasets, with \texttt{agentview} mapped to \texttt{agentview\_scene\_graph} and \texttt{eye\_in\_hand} mapped to \texttt{robot0\_eye\_in\_hand\_scene\_graph}. Predictions are re-parsed from raw JSONL responses rather than read from CSV artifacts, so empty parsed outputs and missing records are scored as empty prediction sets for the expected HDF5/config frames. Both GT and predictions are converted to sets of triplets before scoring, so the evaluator is insensitive to ordering and duplicate lines. Because the two black bowls in LIBERO are visually identical simulator instances, frame-level scoring is permutation-invariant over \texttt{akita\_black\_bowl\_1} and \texttt{akita\_black\_bowl\_2}: the predicted graph is scored once as emitted and once with those two predicted bowl IDs swapped, and the higher-F1 assignment is used.
+
+For a frame result $r$, let $G_r$ denote the set of ground-truth triplets and $\tilde{P}_r$ the duplicate-bowl-invariant predicted triplet set selected as above. Then
+\begin{align}
+\mathrm{TP}_r &= |G_r \cap \tilde{P}_r|, \\
+\mathrm{FP}_r &= |\tilde{P}_r \setminus G_r|, \\
+\mathrm{FN}_r &= |G_r \setminus \tilde{P}_r|.
+\end{align}
+Frame-level precision, recall, and F1 are computed in the standard way. The evaluator then reports the metrics summarized in Table~\ref{tab:metrics}.
+
+\begin{table}[t]
+    \caption{Metrics reported by the benchmark. The design emphasizes not just exact correctness, but also relation coverage, directional consistency, and interpretable failure modes.}
+    \label{tab:metrics}
+    \centering
+    \begin{tabularx}{\linewidth}{lX}
+        \toprule
+        Metric & Meaning \\
+        \midrule
+        Macro F1 & Mean of frame-level F1, weighting each evaluated frame equally \\
+        Micro F1 & Pooled triplet-level precision/recall/F1 over all evaluated frames \\
+        Per-relation F1 & Relation-specific pooled performance for each predicate family \\
+        Relation-type coverage & Fraction of GT triplets whose relation type appears anywhere in the prediction \\
+        Hallucination rate & $\mathrm{FP}/(\mathrm{TP}+\mathrm{FP})$, measuring over-prediction \\
+        Direction consistency & Fraction of inverse relation pairs predicted in both directions \\
+        Reversal rate & Fraction of missed GT triplets whose reverse direction was predicted instead \\
+        Per-object recall & Recall aggregated over triplets involving each object \\
+        Per-task summaries & Demo-level and task-level aggregation for coarse failure localization \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+This metric suite is important for E\&D evaluation because raw F1 alone does not separate distinct failure modes. For example, a model may have high relation-type coverage but poor exact directionality, or good recall on salient objects while failing on smaller distractors.
+
+\begin{table}[t]
+    \caption{Implementation map for the VLM benchmark stack. These functions define the main benchmark mechanics from prompting through scoring.}
+    \label{tab:impl-benchmark}
+    \centering
+    \begin{tabularx}{\linewidth}{lX}
+        \toprule
+        Function / component & Role in the benchmark \\
+        \midrule
+        \texttt{\_rules\_block}, \texttt{build\_agentview\_prompt}, \texttt{build\_wrist\_prompt} & Construct constrained scene-graph prompts with camera-aware semantics \\
+        \texttt{run\_experiment} & Executes per-task, per-demo, per-frame inference and logging \\
+        \texttt{image\_key\_for\_camera}, \texttt{frame\_to\_pil} & Resolve RGB sources and image preprocessing \\
+        \texttt{BaseVLM}, \texttt{VllmVLM}, \texttt{OpenAIVLM} & Unify local and API model execution under one interface \\
+        \texttt{parse\_triplets} & Filters model text into valid benchmark triplets \\
+        \texttt{evaluate\_jsonl} & Align JSONL responses with HDF5 ground truth and produce frame-level results \\
+        \texttt{aggregate} & Computes macro/micro metrics, per-relation scores, coverage, reversals, and task summaries \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\subsection{Current experimental scope}
+The codebase supports evaluation over both cameras and arbitrary frame-selection policies. However, the stored outputs currently reflect multiple stages of experimentation rather than one finalized benchmark release. In particular, the complete local-model runs present in the repository correspond to the \texttt{agentview} camera sampled every 10 frames across all 500 demonstrations. The currently stored API-model outputs are exploratory and incomplete, so they should not yet be compared directly against the full local subset.
+
+\section{Current Results}
+Table~\ref{tab:prelim-results} summarizes the current complete results that can be reproduced directly from the repository outputs without additional assumptions. These runs cover 6,448 overhead-view frames, which corresponds to all tasks and all demonstrations under stride-10 temporal subsampling.
+
+\begin{table}[t]
+    \caption{Preliminary results on the complete released \texttt{agentview} subset currently stored in \texttt{output/}. Higher is better for F1 and coverage; lower is better for hallucination.}
+    \label{tab:prelim-results}
+    \centering
+    \begin{tabular}{lrrrrr}
+        \toprule
+        Model & Frames & Macro F1 & Micro F1 & Coverage & Hallucination \\
+        \midrule
+        \texttt{gemma-4-E4B-vllm} & 6,448 & \textbf{0.194} & \textbf{0.199} & \textbf{0.969} & 0.758 \\
+        \texttt{molmo2-8b-vllm} & 6,448 & 0.165 & 0.170 & 0.818 & \textbf{0.753} \\
+        \texttt{qwen2.5-vl-7b-vllm} & 6,448 & 0.127 & 0.132 & 0.906 & 0.834 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Several patterns are already visible. First, relation-type coverage is much higher than exact F1 for all three models, which indicates that the models often predict the right family of relation while missing the exact ordered triplet. Second, hallucination rates are high across the board, suggesting that exhaustive pairwise prompting encourages over-generation when the visual evidence is weak or ambiguous. Third, even on the simpler overhead view, dense ordered-pair extraction remains non-trivial for current open models.
+
+The repository also contains partial exploratory outputs for API models, including Gemini, GPT, and Claude variants, but those runs do not yet cover a harmonized subset of tasks, cameras, and frame counts. For this reason, they are omitted from the main quantitative table in this draft.
+
+\section{Prompt Confound and Grounding Ablations}
+A core threat to validity in this benchmark is prompt confounding. Because the task description itself contains spatial information, a model may appear strong without actually grounding those relations in the image. The final paper should therefore treat grounding ablations as central rather than optional.
+
+The key ablations are summarized in Table~\ref{tab:ablations}.
+
+\begin{table}[t]
+    \caption{Grounding ablations needed to separate visual grounding from prompt shortcutting. These are specified here as part of the intended final protocol.}
+    \label{tab:ablations}
+    \centering
+    \begin{tabularx}{\linewidth}{lX}
+        \toprule
+        Ablation & What it tests \\
+        \midrule
+        \textbf{Image + task + objects} & Full benchmark prompt; combined visual and task-context grounding \\
+        \textbf{Image + objects} & Visual grounding without task-language priors \\
+        \textbf{Task + objects} & Language-only shortcutting with no visual evidence \\
+        \textbf{Wrong-task + image + objects} & Sensitivity to misleading task priors under correct visual input \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+These experiments are the cleanest way to determine whether benchmark performance reflects visual grounding, task prior exploitation, or an interaction between the two. In the current draft, they are specified as required analyses for the next revision, but their results are not yet complete enough to support quantitative claims.
+
+\section{Viewpoint and Relation-Specific Failure Analysis}
+The benchmark is especially useful when the analysis is broken down by camera and relation family rather than only by aggregate F1. Agent-view and wrist-view failures are qualitatively different: the overhead view tests dense global ordering, while the wrist view introduces egocentric geometry, truncation, and partial visibility. Likewise, the horizontal relations (\texttt{left/right}, \texttt{front/behind}) present different challenges from vertical and containment relations (\texttt{on/below}, \texttt{inside/contains}).
+
+The final paper should therefore include the analysis slices shown in Table~\ref{tab:analysis-slices}.
+
+\begin{table}[t]
+    \caption{Recommended analysis slices for the final paper. Together they turn the benchmark from a leaderboard into a diagnostic evaluation.}
+    \label{tab:analysis-slices}
+    \centering
+    \begin{tabularx}{\linewidth}{lX}
+        \toprule
+        Slice & Diagnostic value \\
+        \midrule
+        Per-camera breakdown & Separates overhead relational ordering from egocentric partial-visibility failures \\
+        Per-relation breakdown & Identifies whether models fail more on horizontal, vertical, or containment relations \\
+        Per-task breakdown & Reveals whether task-specific language cues or scene layouts dominate difficulty \\
+        Qualitative failure examples & Makes hallucinations, reversals, and containment errors interpretable to reviewers \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+Even in the current overhead-only snapshot, the headline pattern is already informative: coverage is substantially higher than exact F1, implying that models often guess the right relation family but miss the correct ordered triplet. The full benchmark becomes much stronger once that observation is localized by view, task, and relation.
+
+\section{Limitations and Next Steps}
+The current benchmark is intentionally narrow. It covers one task family, one small object vocabulary, and one manually specified relation ontology. That narrowness is useful for controlled analysis, but it limits claims about broad embodied perception. The existing repository outputs are also uneven: the local-model snapshot is consistent for a stride-10 overhead-view subset, while the wrist-view and API-model runs are incomplete.
+
+The next revision should prioritize the following additions:
+\begin{itemize}
+    \item a finalized benchmark split or a clearly declared evaluation-only release;
+    \item human validation of a sampled subset of generated scene graphs;
+    \item a harmonized leaderboard over both cameras and a single frame-sampling policy;
+    \item the grounding ablations described above; and
+    \item qualitative failure analysis with representative examples.
+\end{itemize}
+
+\section{Conclusion}
+This repository already contains the core of an E\&D contribution: a robot-centric spatial dataset augmentation pipeline, a deterministic graph-construction procedure, and an executable benchmark for evaluating VLM scene-graph extraction under exact triplet matching. The current paper draft documents what is implemented today and separates it from the planned VLA extension. The benchmark is still incomplete as a final release, but it is already mature enough to support methodological discussion, preliminary quantitative analysis, and the next round of experimental expansion.
+
+\begin{ack}
+This section is intentionally left blank for anonymized submission and can be completed in the camera-ready version.
+\end{ack}
+
+\section*{References}
+\small
+\begin{thebibliography}{}
+
+\bibitem[Brohan et~al.(2022)Brohan, Brown, Carbajal, Chebotar, Dabis, Finn, Gopalakrishnan, Hausman, Herzog, Hsu, et~al.]{brohan2022rt1}
+Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn, Keerthana Gopalakrishnan, Karol Hausman, Alex Herzog, Jasmine Hsu, et~al.
+\newblock RT-1: Robotics transformer for real-world control at scale.
+\newblock \emph{arXiv preprint arXiv:2212.06817}, 2022.
+
+\bibitem[Brohan et~al.(2023)Brohan, Brown, Carbajal, Chebotar, Chen, Choromanski, Ding, Driess, Dubey, Finn, et~al.]{brohan2023rt2}
+Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Xi Chen, Krzysztof Choromanski, Tianli Ding, Danny Driess, Avinava Dubey, Chelsea Finn, et~al.
+\newblock RT-2: Vision-language-action models transfer web knowledge to robotic control.
+\newblock \emph{arXiv preprint arXiv:2307.15818}, 2023.
+
+\bibitem[Chen et~al.(2024)Chen, Xu, Kirmani, Ichter, Driess, Florence, Sadigh, Guibas, and Xia]{chen2024spatialvlm}
+Boyuan Chen, Zhuo Xu, Sean Kirmani, Brian Ichter, Danny Driess, Pete Florence, Dorsa Sadigh, Leonidas Guibas, and Fei Xia.
+\newblock SpatialVLM: Endowing vision-language models with spatial reasoning capabilities.
+\newblock In \emph{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}, 2024.
+
+\bibitem[Kim et~al.(2024)Kim, Pertsch, Karamcheti, Xiao, Balakrishna, Nair, Rafailov, Foster, Lam, Sanketi, et~al.]{kim2024openvla}
+Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam, Pannag Sanketi, et~al.
+\newblock OpenVLA: An open-source vision-language-action model.
+\newblock \emph{arXiv preprint arXiv:2406.09246}, 2024.
+
+\bibitem[Krishna et~al.(2017)Krishna, Zhu, Groth, Johnson, Hata, Kravitz, Chen, Kalantidis, Li, Shamma, et~al.]{krishna2017visualgenome}
+Ranjay Krishna, Yuke Zhu, Oliver Groth, Justin Johnson, Kenji Hata, Joshua Kravitz, Stephanie Chen, Yannis Kalantidis, Li-Jia Li, David~A. Shamma, et~al.
+\newblock Visual Genome: Connecting language and vision using crowdsourced dense image annotations.
+\newblock \emph{International Journal of Computer Vision}, 123:32--73, 2017.
+
+\bibitem[Liu et~al.(2022)Liu, Emerson, and Collier]{liu2022vsr}
+Fangyu Liu, Guy Emerson, and Nigel Collier.
+\newblock Visual spatial reasoning.
+\newblock \emph{Transactions of the Association for Computational Linguistics}, 10:635--651, 2022.
+
+\bibitem[Liu et~al.(2023)Liu, Zhu, Gao, Feng, Liu, Zhu, and Stone]{liu2023libero}
+Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone.
+\newblock LIBERO: Benchmarking knowledge transfer for lifelong robot learning.
+\newblock \emph{arXiv preprint arXiv:2306.03310}, 2023.
+
+\bibitem[Open X-Embodiment Collaboration et~al.(2023)]{openx2023}
+Open X-Embodiment Collaboration et~al.
+\newblock Open X-Embodiment: Robotic learning datasets and RT-X models.
+\newblock \emph{arXiv preprint arXiv:2310.08864}, 2023.
+
+\bibitem[Thrush et~al.(2022)Thrush, Jiang, Bartolo, Singh, Williams, and Kiela]{thrush2022winoground}
+Tristan Thrush, Ryan Jiang, Max Bartolo, Amanpreet Singh, Adina Williams, and Douwe Kiela.
+\newblock Winoground: Probing vision and language models for visio-linguistic compositionality.
+\newblock In \emph{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}, 2022.
+
+\bibitem[Wang et~al.(2024)Wang, Ming, Shi, Vineet, Wang, Li, and Joshi]{wang2024spatialeval}
+Jiayu Wang, Yifei Ming, Zhenmei Shi, Vibhav Vineet, Xin Wang, Yixuan Li, and Neel Joshi.
+\newblock Is a picture worth a thousand words? Delving into spatial reasoning for vision language models.
+\newblock \emph{arXiv preprint arXiv:2406.14852}, 2024.
+
+\bibitem[Yang et~al.(2019)Yang, Russakovsky, and Deng]{yang2019spatialsense}
+Kaiyu Yang, Olga Russakovsky, and Jia Deng.
+\newblock SpatialSense: An adversarially crowdsourced benchmark for spatial relation recognition.
+\newblock In \emph{Proceedings of the IEEE/CVF International Conference on Computer Vision}, 2019.
+
+\end{thebibliography}
+
+\newpage
+\input{checklist.tex}
+
+\end{document}

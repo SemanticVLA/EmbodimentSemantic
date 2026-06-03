@@ -1,0 +1,3 @@
+objectA,relation,objectB,label
+akita_black_bowl_1,is_on_top_of,plate_1,FN
+plate_1,is_below_of,akita_black_bowl_1,FN
