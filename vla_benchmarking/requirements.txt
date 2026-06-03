@@ -1,0 +1,25 @@
+# ── Core robotics stack ───────────────────────────────────────────────────────
+# robosuite 1.4.x bundles its own mujoco DLL (mujoco 2.3.x).
+# Do NOT install the standalone `mujoco` package alongside it — they conflict.
+robosuite==1.4.0
+bddl==1.0.1
+hydra-core==1.2.0
+easydict==1.9
+future==0.18.2
+# cloudpickle pinned to match robosuite; lerobot installs a newer version first
+# so we pin here to downgrade back after lerobot is installed
+cloudpickle==2.1.0
+pyyaml>=6.0
+# numpy must be >=2.0 for lerobot but <2.3 for compatibility
+numpy>=2.0.0,<2.3.0
+matplotlib>=3.7
+h5py
+gym==0.25.2
+num2words
+
+# ── lerobot ───────────────────────────────────────────────────────────────────
+# Requires Python >=3.12. Install BEFORE this file:
+#   pip install "lerobot[pi]" --extra-index-url https://download.pytorch.org/whl/cpu
+# (omit --extra-index-url if you have a CUDA GPU)
+# lerobot pulls in: torch, torchvision, gymnasium, huggingface-hub, safetensors,
+#   transformers, einops, opencv-python-headless, draccus, tqdm, termcolor, etc.
