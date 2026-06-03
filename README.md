@@ -1,12 +1,21 @@
+<div align="center">
+
 # EmbodimentSemantic
 
-**A Spatial Scene-Graph Dataset and Benchmark for Vision-Language Models on Embodied Manipulation Trajectories**
+### A Spatial Scene-Graph Dataset and Benchmark for Vision-Language Models on Embodied Manipulation Trajectories
 
-> Hassan Jaber¹, Refinath S N², Luca Cagliero¹, Christopher E. Mower², Haitham Bou-Ammar²³  
-> ¹Politecnico di Torino · ²Huawei Noah's Ark Lab · ³University College London  
-> *2026*
+**Hassan Jaber¹ · Refinath S N² · Luca Cagliero¹ · Christopher E. Mower² · Haitham Bou-Ammar²³**
+
+¹Politecnico di Torino &nbsp;·&nbsp; ²Huawei Noah's Ark Lab &nbsp;·&nbsp; ³University College London
+
+[![Paper](https://img.shields.io/badge/Paper-arXiv-red?style=flat-square&logo=arxiv)](.)
+[![Dataset](https://img.shields.io/badge/Dataset-HuggingFace-yellow?style=flat-square&logo=huggingface)](.)
+[![Code](https://img.shields.io/badge/Code-GitHub-black?style=flat-square&logo=github)](.)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](vla_benchmarking/LICENSE)
 
 ![LIBERO scene-graph comparison: ground-truth (top) vs. Gemini predictions (bottom). Green edges are correct triplets, red edges are errors.](assets/banner.png)
+
+</div>
 
 ---
 
@@ -76,8 +85,16 @@ The dataset has two components:
 EmbodimentSemantic/
 ├── LIBERO_Semantic_Generation.ipynb   # Offline scene-graph annotation pipeline
 ├── vla_benchmarking/                  # Online VLA evaluation interface
-│   ├── libero_live_semantic_context.py  # Live scene-graph generation from MuJoCo state
-│   └── run_lerobot_eval_with_context.py # LeRobot policy evaluation with scene-graph injection
+│   ├── run_lerobot_eval_with_context.py # LeRobot policy evaluation entry point
+│   ├── libero_live_semantic_context.py  # Live bounding-box and scene-graph computation
+│   ├── radomize_scenes.py               # Object pose swaps + SceneRandomizerVecEnvWrapper
+│   ├── randomize_scenes_demo.py         # Visualize scene swaps without a policy
+│   ├── config.py                        # All settings and per-task swap configs
+│   ├── bddl_utils.py                    # BDDL goal-condition helpers
+│   ├── setup_env.py                     # One-shot environment setup script
+│   ├── models.yaml                      # Catalogue of tested HuggingFace checkpoints
+│   ├── requirements.txt                 # pip dependencies
+│   └── swap_outputs/                    # Demo images written by randomize_scenes_demo.py
 └── vlm_benchmarking/                  # Offline VLM benchmark
     ├── run.py                         # Inference entry point
     ├── evaluate.py                    # Standalone evaluation
@@ -197,28 +214,73 @@ A key finding: models achieve high relation-type coverage (up to 0.98) but low e
 
 ## VLA Benchmark
 
-Tests whether live scene graphs improve downstream robot control. The interface wraps the LeRobot evaluation environment for Pi0 and Pi05 policies fine-tuned on LIBERO-Spatial. At each timestep, object geometry and world-frame relations are extracted from MuJoCo state, serialized as text, and appended to the task prompt — no policy retraining required.
+Tests whether live scene graphs improve downstream robot control. The interface wraps the LeRobot evaluation environment for Pi0 and Pi05 policies fine-tuned on LIBERO-Spatial. At each timestep, object geometry and world-frame relations are extracted from MuJoCo state, serialized as text, and appended to the task prompt — no policy retraining required. Optional scene randomization perturbs object poses before each episode to test robustness beyond memorized LIBERO layouts.
 
 ### Setup
 
-Requires a working LIBERO + LeRobot + robosuite environment.
+Requires Python 3.12+, a CUDA GPU, and Git.
 
 ```bash
 cd vla_benchmarking
-pip install -e .   # or follow your existing LIBERO/LeRobot install
+conda create -n vla_bench python=3.12 -y
+conda activate vla_bench
+python setup_env.py   # clones LIBERO, installs lerobot[pi] + robosuite, runs smoke test
+```
+
+> **Windows:** Enable Developer Mode (Settings → System → For Developers) for HuggingFace symlinks, or run as Administrator.
+
+Set a HuggingFace token to avoid rate limits:
+
+```powershell
+# PowerShell
+$env:HF_TOKEN="hf_your_token_here"
+```
+
+```bash
+# bash/zsh
+export HF_TOKEN="hf_your_token_here"
 ```
 
 ### Running
 
+Evaluation is controlled via environment variables. All commands are run from inside `vla_benchmarking/`.
+
+**PowerShell:**
+
+```powershell
+$env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[4]"; python run_lerobot_eval_with_context.py
+```
+
+**bash/zsh:**
+
 ```bash
-# Standard evaluation (no scene graphs)
-python run_lerobot_eval_with_context.py --prompt-mode standard --task-id 4
+CONTEXT_MODE=scene_graph TASK_IDS=[4] python run_lerobot_eval_with_context.py
+```
 
-# With live scene-graph injection (subject-filtered to manipulated bowl)
-python run_lerobot_eval_with_context.py --prompt-mode scene_graph --task-id 4
+**Key environment variables:**
 
-# Full dense graph (no subject filter)
-python run_lerobot_eval_with_context.py --prompt-mode scene_graph --no-subject-filter --task-id 4
+| Variable | Default | Description |
+|---|---|---|
+| `CONTEXT_MODE` | *(required)* | `standard`, `scene_graph`, `bounding_boxes`, `scene_graph_bounding_boxes` |
+| `TASK_IDS` | `[0]` | Task indices, e.g. `[3]` or `[0,1,2]` |
+| `MODELS` | `lerobot/pi0_libero_base` | HuggingFace policy checkpoint |
+| `DEVICE` | `cuda` | `cuda` or `cpu` |
+| `N_EPISODES` | `1` | Episodes per task |
+| `BATCH_SIZE` | `1` | Parallel episodes |
+| `SEED` | `1000` | Random seed |
+
+**Configuration** (`config.py`):
+
+```python
+RANDOMIZE_SCENES = True                            # False for fixed standard LIBERO layouts
+SCENE_GRAPH_SUBJECT_FILTER = "akita_black_bowl_1"  # None to inject the full dense graph
+```
+
+**Visualize scene swaps without running a policy:**
+
+```bash
+python randomize_scenes_demo.py        # all tasks → swap_outputs/
+python randomize_scenes_demo.py 3 7    # specific tasks only
 ```
 
 ### Results
