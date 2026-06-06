@@ -91,7 +91,7 @@ def _has_cli_option(*names: str) -> bool:
 
 
 def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "True"}
+    return os.environ.get(name, "").strip().lower() in {"1", "true"}
 
 
 def _append_default_lerobot_args() -> None:
@@ -103,7 +103,7 @@ def _append_default_lerobot_args() -> None:
     policy_path = os.environ.get("MODELS", "lerobot/pi0_libero_base")
     policy_tag = policy_path.split('/')[-1]
     seed = os.environ.get("SEED", "1000")
-    out_put_dir = mode = os.environ.get("OUTPUT_DIR", "lerobot_eval_outputs").strip().lower()
+    out_put_dir = os.environ.get("OUTPUT_DIR", "lerobot_eval_outputs").strip()
 
     defaults = [
         (("--policy.path",), policy_path),
@@ -319,9 +319,9 @@ def _wrap_task_vec_envs(result, live_generator, context_mode, debug_semantic_con
 def main() -> None:
     _append_default_lerobot_args()
 
-    context_mode = os.environ.get("CONTEXT_MODE").strip().lower()
+    context_mode = os.environ.get("CONTEXT_MODE", "standard").strip().lower()
     use_live_context = _is_augmented_mode()
-    debug_semantic_context = 1  # _env_flag("DEBUG_SEMANTIC_CONTEXT")
+    debug_semantic_context = _env_flag("DEBUG_SEMANTIC_CONTEXT")
     debug_max_chars = int(os.environ.get("DEBUG_SEMANTIC_MAX_CHARS", "4000"))
 
     live_generator = None

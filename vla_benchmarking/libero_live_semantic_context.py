@@ -273,11 +273,7 @@ class LiveSemanticContextGenerator:
             return ""
         include_scene_graph = mode in {"scene_graph", "scene_graph_bounding_boxes"}
         include_bboxes = mode in {"bounding_boxes", "scene_graph_bounding_boxes"}
-        context = self.observe_env(
-            env,
-            include_scene_graph=include_scene_graph,
-            include_bboxes=include_bboxes,
-        )
+        context = self.observe_env(env)
         sections: list[str] = []
         if include_scene_graph:
             sections.append(
