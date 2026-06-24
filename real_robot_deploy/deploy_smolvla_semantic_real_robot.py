@@ -15,13 +15,17 @@ Usage:
     python deploy_smolvla_semantic_real_robot.py \\
         --policy-path /home/r84368868/lerobot-so101-data/outputs/train/smolvla_so101_multitask/checkpoints/last/pretrained_model \\
         --task "Pick up the black cube on top of the blue box and place it inside the drawer" \\
+        --urdf /home/r84368868/lerobot-so101-data/SO101/so101_new_calib.urdf \\
         --context-mode scene_graph \\
         --scene-graph-format triplet \\
         --duration 60
 
     # No scene graph (plain SmolVLA, same behaviour as deploy_ee_real_robot.py):
     python deploy_smolvla_semantic_real_robot.py \\
-        --policy-path .../pretrained_model --task "..." --context-mode standard
+        --policy-path .../pretrained_model --task "..." --urdf .../so101_new_calib.urdf --context-mode standard
+
+Note: --urdf has no default -- it must point at the same so101_new_calib.urdf
+your data-collection scripts use, and that path is inherently machine-specific.
 """
 
 from __future__ import annotations
@@ -66,9 +70,10 @@ def parse_args():
     parser.add_argument("--cam-height", type=int, default=480)
     parser.add_argument(
         "--urdf",
-        default="/home/r84368868/lerobot-so101-data/SO101/so101_new_calib.urdf",
-        help="Path to SO101 URDF for kinematics. EmbodimentSemantic has no copy of its own, so this "
-        "defaults to the one in lerobot-so101-data; override if running on a different machine.",
+        required=True,
+        help="Path to SO101 URDF for kinematics (e.g. the so101_new_calib.urdf used by your "
+        "lerobot-so101-data data-collection scripts). EmbodimentSemantic has no copy of its own and "
+        "this path is inherently machine-specific, so there is no safe default -- always pass it explicitly.",
     )
 
     # Semantic-context options.
