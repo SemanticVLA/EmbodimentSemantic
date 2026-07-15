@@ -46,6 +46,9 @@ def test_unified_demo_serves_selector_apps_and_both_api_namespaces(tmp_path):
         base = f"http://127.0.0.1:{server.server_address[1]}"
         with urlopen(base + "/") as response:
             portal = response.read().decode("utf-8")
+        with urlopen(base + "/index.html") as response:
+            legacy_portal = response.read().decode("utf-8")
+            legacy_portal_url = response.geturl()
         with urlopen(base + "/libero/") as response:
             libero = response.read().decode("utf-8")
         with urlopen(base + "/so101/") as response:
@@ -62,6 +65,8 @@ def test_unified_demo_serves_selector_apps_and_both_api_namespaces(tmp_path):
         thread.join(timeout=2)
 
     assert "liberoTab" in portal and "so101Tab" in portal
+    assert legacy_portal == portal
+    assert legacy_portal_url == base + "/"
     assert "Static" not in portal and "sample" not in portal.lower()
     assert "LIBERO Demo" in libero
     assert "SO101 Demo" in so101

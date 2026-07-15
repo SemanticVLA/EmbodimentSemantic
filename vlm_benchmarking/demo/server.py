@@ -38,6 +38,9 @@ class UnifiedDemoRequestHandler(LiberoRequestHandler, So101RequestHandler):
         if parsed.path == "/":
             self._serve_demo_file(DEMO_ROOT / "index.html", cache=False)
             return
+        if parsed.path == "/index.html":
+            self._redirect("/")
+            return
         if parsed.path in {"/libero", "/so101"}:
             self._redirect(parsed.path + "/")
             return
