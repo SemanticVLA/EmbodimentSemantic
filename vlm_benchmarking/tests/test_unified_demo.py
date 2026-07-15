@@ -95,11 +95,21 @@ def test_deployment_cache_contains_no_libero_images():
 
 def test_docker_image_installs_importable_libero_namespace():
     dockerfile = (Path(__file__).parents[2] / "Dockerfile").read_text(encoding="utf-8")
+    requirements = (Path(__file__).parents[1] / "requirements-demo.txt").read_text(encoding="utf-8")
+    assert dockerfile.startswith("FROM python:3.12-slim-trixie")
     assert "libglib2.0-0t64" in dockerfile
+    assert "libgomp1" in dockerfile
+    assert "libice6" in dockerfile
+    assert "libsm6" in dockerfile
     assert "PYTHONPATH=/opt/LIBERO" in dockerfile
     assert "pip install --no-cache-dir --editable /opt/LIBERO" in dockerfile
+    assert "python -m pip check" in dockerfile
     assert "from libero.libero import get_libero_path" in dockerfile
     assert "from libero.libero.envs import OffScreenRenderEnv" in dockerfile
+    assert "RUN python -m demo.deployment_smoke" in dockerfile
+    assert "termcolor==3.3.0" in requirements
+    assert "opencv-python==4.13.0.92" in requirements
+    assert "opencv-python-headless" not in requirements
 
 
 def test_deployment_caches_keep_predictions_and_so101_metrics():

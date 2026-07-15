@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-trixie
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LIBERO_CONFIG_PATH=/opt/libero-config \
@@ -15,7 +15,10 @@ RUN apt-get update \
         libglib2.0-0t64 \
         libglew2.2 \
         libglfw3 \
+        libgomp1 \
+        libice6 \
         libosmesa6 \
+        libsm6 \
         libx11-6 \
         libxext6 \
         libxrender1 \
@@ -29,6 +32,7 @@ RUN git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO 
     && cd /opt/LIBERO \
     && git checkout 8f1084e3132a39270c3a13ebe37270a43ece2a01 \
     && python -m pip install --no-cache-dir --editable /opt/LIBERO \
+    && python -m pip check \
     && mkdir -p /opt/libero-config \
     && printf '%s\n' \
         'assets: /opt/LIBERO/libero/libero/assets' \
@@ -42,6 +46,7 @@ RUN git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO 
 WORKDIR /app/vlm_benchmarking
 COPY vlm_benchmarking/demo ./demo
 COPY vlm_benchmarking/vlm_bench ./vlm_bench
+RUN python -m demo.deployment_smoke
 
 EXPOSE 7860
 
