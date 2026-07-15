@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 .env
 *.hdf5
+!demo/libero_demo_cache/*.hdf5
 data/
 !demo/data/
 !demo/data/**
@@ -17,5 +18,7 @@ data/
 .DS_Store
 Thumbs.db
 *.jpg
+!demo/so101_demo_cache/
+!demo/so101_demo_cache/**
 logs/
 CLAUDE.md

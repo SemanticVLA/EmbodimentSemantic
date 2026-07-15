@@ -490,7 +490,6 @@
         updateFrameLabel(data.overlay.frame_count);
         drawPayload(data, id);
         setStatus(statusForOverlay(data.overlay));
-        scheduleBackgroundWarm();
         return true;
       } catch (err) {
         if (id !== requestId) return;
@@ -559,14 +558,6 @@
     }
     function cancelBackgroundWarm() {
       warmToken += 1;
-    }
-    function scheduleBackgroundWarm() {
-      const token = ++warmToken;
-      const start = Number(els.frame.value);
-      const max = Number(els.frame.max);
-      window.setTimeout(() => {
-        preloadFrameRange(start, max, () => token === warmToken && !isPlaying && !isRecording, true).catch(() => {});
-      }, 80);
     }
     async function preloadFrameRange(start, max, shouldContinue, background=false) {
       const chunkSize = 12;

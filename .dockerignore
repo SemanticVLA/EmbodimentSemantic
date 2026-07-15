@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!vlm_benchmarking/
+!vlm_benchmarking/requirements-demo.txt
+!vlm_benchmarking/vlm_bench/
+!vlm_benchmarking/vlm_bench/__init__.py
+!vlm_benchmarking/vlm_bench/io_utils.py
+!vlm_benchmarking/vlm_bench/prompts.py
+!vlm_benchmarking/demo/
+!vlm_benchmarking/demo/**
+vlm_benchmarking/demo/**/__pycache__/**
+vlm_benchmarking/demo/**/tests/**
+vlm_benchmarking/demo/so101_proxy_demo/artifacts/**

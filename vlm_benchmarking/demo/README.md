@@ -1,83 +1,43 @@
 # Unified LIBERO/SO101 Demo
 
-This directory contains the presentation layer for both datasets:
+The deployed demo is the same backend-driven application used locally:
 
-- `libero/`: the full simulator-backed LIBERO explorer.
-- `so101/`: the full SO101 2D Proxy GT explorer.
-- `so101_proxy_demo/`: the SO101 bbox/proxy pipeline, artifacts, CLI, and tests.
-- `index.html`: the shared LIBERO/SO101 selector.
-- `libero_backend.py`: LIBERO HDF5, prediction, rendering, and API logic.
-- `so101_backend.py`: SO101 artifact, frame, and API logic.
-- `server.py`: one local server composing both API namespaces.
-- `common/`: shared browser design tokens, layout primitives, and UI helpers.
-- `data/`: the generated, compressed mini dataset used by GitHub Pages.
+- `server.py` serves both the LIBERO and SO101 API namespaces.
+- `libero/` and `so101/` contain the two full browser applications.
+- `common/` contains their shared design and rendering helpers.
+- `libero_demo_cache/` contains `demo_0` MuJoCo states and semantic records for
+  all ten LIBERO tasks. It contains no RGB frames; LIBERO renders frames live.
+- `libero_prediction_cache/` contains compact `demo_0` model predictions.
+- `so101_demo_cache/` contains real `episode_0` source frames, proxy artifacts,
+  metadata, and Gemini predictions for the five SO101 tasks.
 
-All LIBERO/SO101 demo code now lives under this directory. No compatibility
-copy remains at `vlm_benchmarking/so101_proxy_demo/` or in `vlm_bench/`.
+The old static mini demo and GitHub Pages deployment have been removed.
 
-## Static Mini Demo
+## Local
 
-The checked-in bundle contains:
-
-- LIBERO: `demo_0` for every task and both cameras.
-- SO101: `episode_0` for every task and both cameras.
-- Up to 12 uniformly sampled frames per sequence, stored as WebP.
-- Compact bbox and ground-truth relation metadata in `libero.json` and
-  `so101.json`.
-
-Viewing this version does not require LIBERO, MuJoCo, HDF5, or the SO101 source
-dataset. Run from `vlm_benchmarking` with any Python installation:
+Run from `vlm_benchmarking` with the configured LIBERO environment:
 
 ```powershell
-C:\Users\hassa\anaconda3\python.exe -u -m demo.static_server --port 7860 --no-open-browser
+C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo --port 7860 --no-disk-cache --no-open-browser
 ```
 
-Open `http://127.0.0.1:7860/`.
-
-## Full Local Explorer
-
-Run from `vlm_benchmarking`:
+For the same one-demo dataset used by Fly.io:
 
 ```powershell
-C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo --port 7860 --no-open-browser
+C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo `
+  --input-dir demo/libero_demo_cache `
+  --output-dir demo/libero_prediction_cache `
+  --so101-config demo/so101_demo_cache/config.yaml `
+  --host 127.0.0.1 --port 7860 --no-disk-cache --no-open-browser
 ```
 
-The selector embeds the full local explorers when this backend is running.
-LIBERO uses `/api/*` and renders frames through the LIBERO simulator instead
-of the compressed static bundle. SO101 uses `/so101/api/*` and reads the local
-SO101 artifacts/videos. The static mini dataset is only the GitHub Pages
-fallback when no Python backend is available.
+## Fly.io
 
-## GitHub Pages
-
-GitHub Pages cannot execute Python, MuJoCo, or read local HDF5 files. The hosted
-selector therefore reads the checked-in mini dataset while preserving the
-dataset, task, camera, demo/episode, frame, bbox, arrow, and triplet controls.
-
-Regenerate those samples after changing graphs or bboxes:
+`Dockerfile` installs the pinned LIBERO commit and simulator dependencies.
+`fly.toml` starts the unified backend on `0.0.0.0:7860`.
 
 ```powershell
-cd C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vlm_benchmarking
-C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo.so101_proxy_demo detect --sampled --camera wrist --episode episode_0
-C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo.so101_proxy_demo generate-proxy
-C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo.build_static_bundle
+fly deploy
 ```
 
-Use `--sample-count 0` only when a full-frame export is intentionally required;
-the default cap keeps the repository and Pages download small. SO101 wrist
-sequences are exported only when `wrist.jsonl` covers every sampled frame in
-that episode.
-
-The repository-root `index.html` redirects to this directory. The workflow at
-`.github/workflows/pages.yml` publishes only that redirect and this `demo/`
-tree. In repository **Settings > Pages**, select **GitHub Actions** as the source
-once; pushes to `main` then deploy the hosted demo automatically.
-
-## Tests
-
-Run from the repository root:
-
-```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
-C:\Users\hassa\anaconda3\python.exe -m pytest vlm_benchmarking/tests vlm_benchmarking/demo/so101_proxy_demo/tests -q
-```
+The public application is <https://embodimentsemantic.fly.dev/>.

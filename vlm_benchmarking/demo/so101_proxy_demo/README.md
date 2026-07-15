@@ -266,7 +266,6 @@ vlm_benchmarking/demo/
 |-- server.py
 |-- libero_backend.py
 |-- so101_backend.py
-|-- build_static_bundle.py
 |-- common/
 |-- so101_proxy_demo/
 |-- data/

@@ -1,0 +1,12 @@
+schema_version: so101-proxy-v1
+paths:
+  so101_dataset: dataset
+  libero_dataset: ../libero_demo_cache
+  gemini_predictions: predictions
+  artifacts: artifacts
+demo:
+  host: 0.0.0.0
+  port: 7860
+  default_camera: agent_view
+  default_mode: gt
+  default_subject: black_bowl

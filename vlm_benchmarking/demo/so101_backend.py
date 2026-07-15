@@ -307,7 +307,10 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
                     int(self._required(query, "frame")),
                     self._required(query, "camera"),
                 )
-                path = Path(sample.image_path).resolve()
+                path = Path(sample.image_path)
+                if not path.is_absolute():
+                    path = self.server.repository.dataset_root / path
+                path = path.resolve()
                 path.relative_to(self.server.repository.dataset_root)
                 self._send_file(path, "image/jpeg", cache=True)
             elif parsed.path == "/api/video":
