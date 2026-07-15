@@ -3,6 +3,7 @@ FROM python:3.12-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     LIBERO_CONFIG_PATH=/opt/libero-config \
     MUJOCO_GL=egl \
+    PYTHONPATH=/opt/LIBERO \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -26,7 +27,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
 RUN git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO \
     && cd /opt/LIBERO \
     && git checkout 8f1084e3132a39270c3a13ebe37270a43ece2a01 \
-    && python -m pip install --no-cache-dir . \
+    && python -m pip install --no-cache-dir --editable /opt/LIBERO \
     && mkdir -p /opt/libero-config \
     && printf '%s\n' \
         'assets: /opt/LIBERO/libero/libero/assets' \
@@ -34,7 +35,8 @@ RUN git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO 
         'benchmark_root: /opt/LIBERO/libero/libero' \
         'datasets: /opt/LIBERO/libero/datasets' \
         'init_states: /opt/LIBERO/libero/libero/init_files' \
-        > /opt/libero-config/config.yaml
+        > /opt/libero-config/config.yaml \
+    && python -c "from libero.libero import get_libero_path; from libero.libero.envs import OffScreenRenderEnv; assert get_libero_path('bddl_files')"
 
 WORKDIR /app/vlm_benchmarking
 COPY vlm_benchmarking/demo ./demo

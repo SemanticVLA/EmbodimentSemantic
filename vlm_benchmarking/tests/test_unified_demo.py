@@ -93,6 +93,14 @@ def test_deployment_cache_contains_no_libero_images():
             assert handle["data/demo_0/obs/eye_in_hand_rgb"].id.get_storage_size() == 0
 
 
+def test_docker_image_installs_importable_libero_namespace():
+    dockerfile = (Path(__file__).parents[2] / "Dockerfile").read_text(encoding="utf-8")
+    assert "PYTHONPATH=/opt/LIBERO" in dockerfile
+    assert "pip install --no-cache-dir --editable /opt/LIBERO" in dockerfile
+    assert "from libero.libero import get_libero_path" in dockerfile
+    assert "from libero.libero.envs import OffScreenRenderEnv" in dockerfile
+
+
 def test_deployment_caches_keep_predictions_and_so101_metrics():
     root = Path(__file__).parents[1] / "demo"
     task = "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate"
