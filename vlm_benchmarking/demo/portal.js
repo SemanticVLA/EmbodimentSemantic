@@ -3,12 +3,14 @@
 const DEMOS = {
   libero: {
     label: "LIBERO",
+    title: "LIBERO Demo",
     appUrl: "libero/",
     healthUrl: "api/health",
     bundleUrl: "data/libero.json",
   },
   so101: {
     label: "SO101",
+    title: "SO101 Demo",
     appUrl: "so101/",
     healthUrl: "so101/api/health",
     bundleUrl: "data/so101.json",
@@ -18,11 +20,12 @@ const QUERY = new URLSearchParams(window.location.search);
 const HASH_PARTS = window.location.hash.replace("#", "").split("/");
 
 const elements = Object.fromEntries([
-  "liberoTab", "so101Tab", "liveView",
+  "portalTitle", "liberoTab", "so101Tab", "liveView",
   "demoFrame", "staticView", "sampleMode", "sampleCamera", "sampleTask",
   "sampleSequence", "sampleFrame", "sampleFrameValue", "sampleArrows", "sampleLabels",
   "sampleBboxes", "sampleSceneStatus", "sampleCanvas", "sampleLoading",
-  "sampleGraphType", "sampleTripletCount", "sampleTripletList",
+  "sampleGraphType", "sampleTripletCount", "sampleMetricsScope", "sampleMetrics",
+  "sampleMetadataSummary", "sampleTripletList",
 ].map((id) => [id, document.getElementById(id)]));
 
 const context = elements.sampleCanvas.getContext("2d");
@@ -67,6 +70,8 @@ async function selectDemo(name, updateHash = true) {
   state.sequenceId = null;
   state.frameIndex = 0;
   const config = DEMOS[name];
+  document.title = config.title;
+  elements.portalTitle.textContent = config.title;
   for (const [key, value] of Object.entries(DEMOS)) {
     const tab = elements[`${key}Tab`];
     const active = key === name;
@@ -378,27 +383,16 @@ function placeStaticLabel(x, y, width, height, occupied, scale) {
 
 function renderTriplets(relations) {
   elements.sampleTripletCount.textContent = String(relations.length);
-  elements.sampleTripletList.replaceChildren();
-  if (!relations.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-triplets";
-    empty.textContent = "No visible relations";
-    elements.sampleTripletList.appendChild(empty);
-    return;
-  }
-  for (const relation of relations) {
-    const row = document.createElement("div");
-    row.className = "triplet-row";
-    const subject = document.createElement("span");
-    subject.textContent = prettyName(relation.subject);
-    const predicate = document.createElement("span");
-    predicate.className = "relation-chip";
-    predicate.textContent = relation.label;
-    const object = document.createElement("span");
-    object.textContent = prettyName(relation.object);
-    row.append(subject, predicate, object);
-    elements.sampleTripletList.appendChild(row);
-  }
+  DemoCommon.renderMetrics(elements.sampleMetrics, null);
+  DemoCommon.renderMetadataSummary(
+    elements.sampleMetadataSummary,
+    null,
+    "Static GitHub Pages sample | prediction metrics unavailable",
+  );
+  DemoCommon.renderGroupedTriplets(elements.sampleTripletList, relations, {
+    pretty: prettyName,
+    emptyText: "No visible relations",
+  });
 }
 
 function prettyName(value) {

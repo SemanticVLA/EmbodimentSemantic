@@ -45,16 +45,10 @@ input {
   gap: 12px;
 }
 
-.brand-block h1 {
-  margin: 0;
-  font-size: 17px;
-  line-height: 1.2;
-  letter-spacing: 0;
-}
+.brand-block h1 { margin: 0; font-size: 20px; line-height: 1.2; letter-spacing: 0; }
 
 .brand-block span,
-.section-heading span,
-.triplet-heading span {
+.section-heading span {
   color: #66717f;
   font-size: 12px;
 }
@@ -274,60 +268,7 @@ input:focus-visible {
   border: 1px solid #f0c84b;
 }
 
-.sample-triplets {
-  border-left: 1px solid #d7dde4;
-  padding: 18px;
-}
-
-.triplet-heading {
-  padding-bottom: 14px;
-  border-bottom: 1px solid #dfe4e9;
-}
-
-.triplet-heading h2 {
-  margin-bottom: 4px;
-}
-
-.triplet-heading strong {
-  font-size: 13px;
-}
-
-.sample-triplet-list {
-  padding-top: 10px;
-}
-
-.triplet-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 7px 0;
-  border-bottom: 1px solid #e5e9ed;
-  color: #28323c;
-  font-size: 11px;
-}
-
-.triplet-row span:first-child,
-.triplet-row span:last-child {
-  overflow-wrap: anywhere;
-}
-
-.relation-chip {
-  max-width: 92px;
-  padding: 3px 6px;
-  border: 1px solid #17a879;
-  border-radius: 8px;
-  color: #087a55;
-  text-align: center;
-  overflow-wrap: anywhere;
-}
-
-.empty-triplets {
-  padding: 20px 0;
-  color: #737e89;
-  font-size: 12px;
-}
+.sample-triplets { border-left: 1px solid #d7dde4; }
 
 @media (max-width: 900px) {
   body {

@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Interactive LIBERO and SO101 semantic scene-graph demos.">
   <title>LIBERO Demo</title>
+  <link rel="stylesheet" href="common/demo.css">
   <link rel="stylesheet" href="portal.css">
 </head>
 <body>
   <header class="portal-header">
     <div class="brand-block">
-      <h1>EmbodimentSemantic</h1>
+      <h1 id="portalTitle">LIBERO Demo</h1>
       <span>Scene graph explorer</span>
     </div>
 
@@ -22,7 +23,7 @@
 
   <main class="portal-main">
     <section id="liveView" class="live-view" aria-label="Full local explorer" hidden>
-      <iframe id="demoFrame" title="EmbodimentSemantic dataset explorer"></iframe>
+      <iframe id="demoFrame" title="Dataset explorer"></iframe>
     </section>
 
     <section id="staticView" class="static-view" aria-label="Hosted scene graph sample" hidden>
@@ -69,19 +70,23 @@
         </div>
       </section>
 
-      <aside class="sample-triplets" aria-label="Ground-truth triplets">
-        <div class="triplet-heading">
+      <aside class="sample-triplets triplet-panel scroll-panel" aria-label="Ground-truth triplets">
+        <div class="triplet-header">
           <div>
             <h2>Triplets</h2>
             <span id="sampleGraphType">Ground truth</span>
           </div>
-          <strong id="sampleTripletCount">0</strong>
+          <strong id="sampleTripletCount" class="triplet-count">0</strong>
         </div>
-        <div id="sampleTripletList" class="sample-triplet-list"></div>
+        <div id="sampleMetricsScope" class="triplet-scope">Static sample metrics unavailable</div>
+        <div id="sampleMetrics" class="metrics"></div>
+        <div id="sampleMetadataSummary" class="metadata-summary"></div>
+        <div id="sampleTripletList" class="sample-triplet-list triplets"></div>
       </aside>
     </section>
   </main>
 
+  <script src="common/demo_common.js"></script>
   <script src="portal.js"></script>
 </body>
 </html>
