@@ -12,6 +12,7 @@ RUN apt-get update \
         git \
         libegl1 \
         libgl1 \
+        libglib2.0-0t64 \
         libglew2.2 \
         libglfw3 \
         libosmesa6 \

@@ -95,6 +95,7 @@ def test_deployment_cache_contains_no_libero_images():
 
 def test_docker_image_installs_importable_libero_namespace():
     dockerfile = (Path(__file__).parents[2] / "Dockerfile").read_text(encoding="utf-8")
+    assert "libglib2.0-0t64" in dockerfile
     assert "PYTHONPATH=/opt/LIBERO" in dockerfile
     assert "pip install --no-cache-dir --editable /opt/LIBERO" in dockerfile
     assert "from libero.libero import get_libero_path" in dockerfile
