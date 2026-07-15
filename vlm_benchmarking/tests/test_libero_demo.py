@@ -1,5 +1,8 @@
+import hashlib
 import json
 import threading
+import zipfile
+from io import BytesIO
 from urllib.parse import quote
 from urllib.request import urlopen
 
@@ -477,6 +480,52 @@ def test_api_image_endpoint_returns_png_and_cache_headers(tmp_path):
     assert "immutable" in cache_control
 
 
+def test_cached_only_api_serves_bundled_1024_frame_without_renderer(tmp_path):
+    data_dir = _write_tiny_hdf5(tmp_path)
+    cache_dir = _write_bundled_frame_cache(tmp_path)
+    server = SceneGraphDemoServer(
+        ("127.0.0.1", 0),
+        Hdf5SceneGraphStore(data_dir, "agentview", rotate_agentview=True),
+        {},
+        "akita_black_bowl_1",
+        default_res=1024,
+        resolutions=[512, 768, 1024],
+        bundled_cache_dir=cache_dir,
+        cached_only=True,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        port = server.server_address[1]
+        with urlopen(
+            f"http://127.0.0.1:{port}/api/frame?task=task&demo=demo_0&frame=0&res=512"
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(f"http://127.0.0.1:{port}{payload['image_url']}") as response:
+            image_bytes = response.read()
+            content_type = response.headers.get("Content-Type")
+        with urlopen(f"http://127.0.0.1:{port}/api/health") as response:
+            health = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    with Image.open(BytesIO(image_bytes)) as image:
+        assert image.size == (1024, 1024)
+    assert image_bytes.startswith(b"\xff\xd8")
+    assert content_type == "image/jpeg"
+    assert payload["image_cached"] is True
+    assert payload["overlay"]["target_size"] == {"width": 512, "height": 512}
+    assert health["bundled_cache"] is True
+    assert health["bundled_cache_complete"] is True
+    assert health["bundled_cache_frames"] == 1
+    assert health["bundled_cache_resolution"] == 1024
+    assert health["cached_only"] is True
+    assert health["simulator_started"] is False
+
+
 def test_overlay_changes_reuse_same_image_url_without_rerender(tmp_path):
     data_dir = _write_tiny_hdf5(tmp_path)
     renderer = _MockRenderers()
@@ -694,6 +743,38 @@ class _FakeSim:
 
     def render(self, camera_name, height, width, depth=False):
         return np.full((height, width, 3), self.current, dtype=np.uint8)
+
+
+def _write_bundled_frame_cache(tmp_path):
+    cache_dir = tmp_path / "bundled"
+    relative = "agentview/task/demo_0.zip"
+    archive_path = cache_dir / relative
+    archive_path.parent.mkdir(parents=True)
+    image = Image.fromarray(np.full((1024, 1024, 3), [40, 80, 120], dtype=np.uint8))
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=88)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("000000.jpg", buffer.getvalue())
+    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    manifest = {
+        "version": 1,
+        "resolution": 1024,
+        "content_type": "image/jpeg",
+        "extension": ".jpg",
+        "complete": True,
+        "cached_frames": 1,
+        "expected_frames": 1,
+        "archives": {
+            "agentview/task/demo_0": {
+                "path": relative,
+                "frame_count": 1,
+                "bytes": archive_path.stat().st_size,
+                "sha256": digest,
+            }
+        },
+    }
+    (cache_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return cache_dir
 
 
 def _write_tiny_hdf5(tmp_path, frame_count=1, include_second_bowl=False):

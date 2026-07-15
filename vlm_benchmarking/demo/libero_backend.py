@@ -11,6 +11,7 @@ import queue
 import sys
 import threading
 import webbrowser
+import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -55,7 +56,7 @@ RELATION_LABELS = {
 }
 
 DEFAULT_SUBJECT = "akita_black_bowl_1"
-DEMO_BUILD = "scene-graph-demo-2026-07-13-default-1024-v27"
+DEMO_BUILD = "scene-graph-demo-2026-07-15-bundled-1024-v28"
 RESOLUTION_OPTIONS = [512, 768, 1024]
 PREDICTION_FRAME_STRIDE = 5
 DEMO_ROOT = Path(__file__).resolve().parent
@@ -1012,6 +1013,93 @@ class DiskFrameCache:
         image.save(path, format="PNG", compress_level=1)
 
 
+class BundledFrameCache:
+    def __init__(self, cache_dir: str | Path | None):
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.resolution = 1024
+        self.content_type = "image/jpeg"
+        self.extension = ".jpg"
+        self.complete = False
+        self.cached_frames = 0
+        self.expected_frames = 0
+        self.archives: dict[str, dict[str, Any]] = {}
+        if self.cache_dir is None:
+            return
+        manifest_path = self.cache_dir / "manifest.json"
+        if not manifest_path.is_file():
+            return
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.resolution = int(manifest.get("resolution", 1024))
+        self.content_type = str(manifest.get("content_type", "image/jpeg"))
+        self.extension = str(manifest.get("extension", ".jpg"))
+        self.complete = bool(manifest.get("complete", False))
+        self.cached_frames = int(manifest.get("cached_frames", 0))
+        self.expected_frames = int(manifest.get("expected_frames", 0))
+        self.archives = {
+            str(key): dict(value)
+            for key, value in manifest.get("archives", {}).items()
+        }
+
+    @property
+    def enabled(self) -> bool:
+        return self.cache_dir is not None and bool(self.archives)
+
+    @staticmethod
+    def key(camera: str, task: str, demo: str) -> str:
+        return f"{camera}/{task}/{demo}"
+
+    @staticmethod
+    def entry_name(frame: int, extension: str = ".jpg") -> str:
+        return f"{frame:06d}{extension}"
+
+    def record(self, camera: str, task: str, demo: str) -> dict[str, Any] | None:
+        return self.archives.get(self.key(camera, task, demo))
+
+    def archive_path(self, camera: str, task: str, demo: str) -> Path | None:
+        if self.cache_dir is None:
+            return None
+        record = self.record(camera, task, demo)
+        if record is None:
+            return None
+        path = (self.cache_dir / str(record["path"])).resolve()
+        try:
+            path.relative_to(self.cache_dir.resolve())
+        except ValueError as exc:
+            raise ValueError(f"Bundled frame archive escapes cache root: {path}") from exc
+        return path
+
+    def exists(self, camera: str, task: str, demo: str, frame: int) -> bool:
+        record = self.record(camera, task, demo)
+        path = self.archive_path(camera, task, demo)
+        return bool(
+            record is not None
+            and 0 <= frame < int(record.get("frame_count", 0))
+            and path is not None
+            and path.is_file()
+        )
+
+    def image_token(self, camera: str, task: str, demo: str, frame: int) -> str:
+        record = self.record(camera, task, demo)
+        if record is None:
+            raise KeyError(f"No bundled frame archive for {self.key(camera, task, demo)}")
+        digest = str(record.get("sha256", ""))
+        key = f"{digest}:{camera}:{task}:{demo}:{frame}:{self.resolution}"
+        return hashlib.sha1(key.encode("utf-8")).hexdigest()
+
+    def read(self, camera: str, task: str, demo: str, frame: int) -> bytes | None:
+        if not self.exists(camera, task, demo, frame):
+            return None
+        path = self.archive_path(camera, task, demo)
+        assert path is not None
+        try:
+            with zipfile.ZipFile(path) as archive:
+                return archive.read(self.entry_name(frame, self.extension))
+        except KeyError as exc:
+            raise FileNotFoundError(
+                f"Bundled frame entry is missing: {self.key(camera, task, demo)} frame {frame}"
+            ) from exc
+
+
 class BoundedOverlayCache(OrderedDict):
     def __init__(self, max_items: int = 4096):
         super().__init__()
@@ -1075,6 +1163,11 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
                         "overlay_cache_size": len(self.server.overlay_cache),
                         "simulator_started": self.server.simulator_started(),
                         "disk_cache": self.server.disk_cache.enabled,
+                        "bundled_cache": self.server.bundled_cache.enabled,
+                        "bundled_cache_complete": self.server.bundled_cache.complete,
+                        "bundled_cache_frames": self.server.bundled_cache.cached_frames,
+                        "bundled_cache_resolution": self.server.bundled_cache.resolution,
+                        "cached_only": self.server.cached_only,
                     }
                 )
             elif parsed.path == "/api/frame":
@@ -1201,8 +1294,8 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
         task = _required_query(query, "task")
         demo = _required_query(query, "demo")
         frame = int(query.get("frame", ["0"])[0])
-        image_bytes = self.server._ensure_image_bytes(camera, res, task, demo, frame)
-        send_bytes(self, image_bytes, "image/png", cache=True)
+        image_bytes, content_type = self.server._ensure_image_response(camera, res, task, demo, frame)
+        send_bytes(self, image_bytes, content_type, cache=True)
 
     def _camera_from_query(self, query: dict[str, list[str]]) -> str:
         camera = query.get("camera", [self.server.default_camera])[0] or self.server.default_camera
@@ -1244,6 +1337,8 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
         resolutions: list[int] | None = None,
         predictions: PredictionStore | None = None,
         cache_dir: str | Path | None = ".cache/scene_graph_demo",
+        bundled_cache_dir: str | Path | None = None,
+        cached_only: bool = False,
     ):
         super().__init__(server_address, DemoRequestHandler)
         self.stores = store if isinstance(store, dict) else {store.camera: store}
@@ -1274,6 +1369,15 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
         self._memory_image_cache: OrderedDict[tuple[str, int, str, str, int], bytes] = OrderedDict()
         self._memory_image_cache_max = 256
         self.disk_cache = DiskFrameCache(cache_dir)
+        self.bundled_cache = BundledFrameCache(bundled_cache_dir)
+        self.cached_only = cached_only
+        if self.cached_only and (
+            not self.bundled_cache.enabled or not self.bundled_cache.complete
+        ):
+            raise FileNotFoundError(
+                "Cached-only mode requires a complete bundled frame manifest under "
+                f"{bundled_cache_dir}"
+            )
 
     @property
     def default_store(self) -> Hdf5SceneGraphStore:
@@ -1317,6 +1421,10 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
         cached = self.disk_cache.get(hdf5_path, camera, res, frame)
         if cached is not None:
             return cached
+        if self.cached_only:
+            raise FileNotFoundError(
+                f"Bundled LIBERO frame is missing for {camera}/{hdf5_path.stem}/{frame}"
+            )
         renderer = self.renderers_for(camera, res)
         try:
             image = renderer.render(hdf5_path, state, fixed_body_transforms, camera=camera, res=res, priority=priority)
@@ -1335,15 +1443,9 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
     ) -> tuple[str, bool]:
         store = self.store_for(camera)
         hdf5_path = store.task_path(task)
-        was_cached = self.disk_cache.exists(hdf5_path, camera, res, frame) or (
-            camera,
-            res,
-            task,
-            demo,
-            frame,
-        ) in self._memory_image_cache
+        was_cached = self._image_is_cached(camera, res, task, demo, frame, hdf5_path)
         self._ensure_image_rendered(camera, res, task, demo, frame)
-        token = self.disk_cache.image_token(hdf5_path, camera, res, frame)
+        token = self._image_token(camera, res, task, demo, frame, hdf5_path)
         params = urlencode(
             {"camera": camera, "res": res, "task": task, "demo": demo, "frame": frame, "token": token}
         )
@@ -1363,18 +1465,20 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
         missing: list[int] = []
         cached = 0
         for frame in frames:
-            path = self.disk_cache.path_for(hdf5_path, camera, res, frame)
-            memory_key = (camera, res, task, demo, frame)
-            if (path is not None and path.exists()) or memory_key in self._memory_image_cache:
+            if self._image_is_cached(camera, res, task, demo, frame, hdf5_path):
                 cached += 1
             else:
                 missing.append(frame)
-            token = self.disk_cache.image_token(hdf5_path, camera, res, frame)
+            token = self._image_token(camera, res, task, demo, frame, hdf5_path)
             params = urlencode(
                 {"camera": camera, "res": res, "task": task, "demo": demo, "frame": frame, "token": token}
             )
             urls[frame] = f"/api/image?{params}"
 
+        if missing and self.cached_only:
+            raise FileNotFoundError(
+                f"Bundled LIBERO frames are missing: {camera}/{task}/{demo} frames {missing[:5]}"
+            )
         if missing:
             render_inputs = [
                 (
@@ -1394,13 +1498,47 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
                     self._memory_image_cache.popitem(last=False)
         return urls, cached, len(missing)
 
+    def _image_is_cached(
+        self,
+        camera: str,
+        res: int,
+        task: str,
+        demo: str,
+        frame: int,
+        hdf5_path: Path,
+    ) -> bool:
+        if self.bundled_cache.exists(camera, task, demo, frame):
+            return True
+        path = self.disk_cache.path_for(hdf5_path, camera, res, frame)
+        memory_key = (camera, res, task, demo, frame)
+        return bool((path is not None and path.exists()) or memory_key in self._memory_image_cache)
+
+    def _image_token(
+        self,
+        camera: str,
+        res: int,
+        task: str,
+        demo: str,
+        frame: int,
+        hdf5_path: Path,
+    ) -> str:
+        if self.bundled_cache.exists(camera, task, demo, frame):
+            return self.bundled_cache.image_token(camera, task, demo, frame)
+        return self.disk_cache.image_token(hdf5_path, camera, res, frame)
+
     def _ensure_image_rendered(self, camera: str, res: int, task: str, demo: str, frame: int) -> None:
+        if self.bundled_cache.exists(camera, task, demo, frame):
+            return
         store = self.store_for(camera)
         hdf5_path = store.task_path(task)
         path = self.disk_cache.path_for(hdf5_path, camera, res, frame)
         memory_key = (camera, res, task, demo, frame)
         if (path is not None and path.exists()) or memory_key in self._memory_image_cache:
             return
+        if self.cached_only:
+            raise FileNotFoundError(
+                f"Bundled LIBERO frame is missing: {camera}/{task}/{demo} frame {frame}"
+            )
         image = self.render_image(
             camera,
             res,
@@ -1418,18 +1556,33 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
         while len(self._memory_image_cache) > self._memory_image_cache_max:
             self._memory_image_cache.popitem(last=False)
 
-    def _ensure_image_bytes(self, camera: str, res: int, task: str, demo: str, frame: int) -> bytes:
+    def _ensure_image_response(
+        self,
+        camera: str,
+        res: int,
+        task: str,
+        demo: str,
+        frame: int,
+    ) -> tuple[bytes, str]:
+        bundled = self.bundled_cache.read(camera, task, demo, frame)
+        if bundled is not None:
+            return bundled, self.bundled_cache.content_type
         store = self.store_for(camera)
         hdf5_path = store.task_path(task)
         path = self.disk_cache.path_for(hdf5_path, camera, res, frame)
         if path is not None and path.exists():
-            return path.read_bytes()
+            return path.read_bytes(), "image/png"
 
         memory_key = (camera, res, task, demo, frame)
         cached = self._memory_image_cache.get(memory_key)
         if cached is not None:
             self._memory_image_cache.move_to_end(memory_key)
-            return cached
+            return cached, "image/png"
+
+        if self.cached_only:
+            raise FileNotFoundError(
+                f"Bundled LIBERO frame is missing: {camera}/{task}/{demo} frame {frame}"
+            )
 
         image = self.render_image(
             camera,
@@ -1441,14 +1594,14 @@ class SceneGraphDemoServer(ThreadingHTTPServer):
             priority=0,
         )
         if path is not None and path.exists():
-            return path.read_bytes()
+            return path.read_bytes(), "image/png"
         buf = BytesIO()
         image.save(buf, format="PNG", compress_level=1)
         data = buf.getvalue()
         self._memory_image_cache[memory_key] = data
         while len(self._memory_image_cache) > self._memory_image_cache_max:
             self._memory_image_cache.popitem(last=False)
-        return data
+        return data, "image/png"
 
     def render_images(
         self,
@@ -1566,12 +1719,14 @@ def serve(args: argparse.Namespace) -> None:
         for camera in CAMERA_INFO
     }
     resolutions = sorted(set([*RESOLUTION_OPTIONS, args.res]))
-    shared_renderer = RendererManager(args.camera, max(resolutions), rotate_agentview=rotate_agentview)
-    renderers = {
-        (camera, res): shared_renderer
-        for camera in CAMERA_INFO
-        for res in resolutions
-    }
+    renderers = {}
+    if not args.cached_only:
+        shared_renderer = RendererManager(args.camera, max(resolutions), rotate_agentview=rotate_agentview)
+        renderers = {
+            (camera, res): shared_renderer
+            for camera in CAMERA_INFO
+            for res in resolutions
+        }
     server = SceneGraphDemoServer(
         (args.host, args.port),
         stores,
@@ -1582,10 +1737,15 @@ def serve(args: argparse.Namespace) -> None:
         resolutions=resolutions,
         predictions=PredictionStore(args.output_dir),
         cache_dir=None if args.no_disk_cache else args.cache_dir,
+        bundled_cache_dir=args.bundled_cache_dir,
+        cached_only=args.cached_only,
     )
     url = f"http://{args.host}:{args.port}/"
     print(f"Scene graph scrubber: {url}")
-    print("Fresh rendering uses LIBERO OffScreenRenderEnv. If rendering fails, fix the simulator env and reload.")
+    if args.cached_only:
+        print(f"Cached-only LIBERO frames: {args.bundled_cache_dir}")
+    else:
+        print("Fresh rendering uses LIBERO OffScreenRenderEnv. If rendering fails, fix the simulator env and reload.")
     if not args.no_disk_cache:
         print(f"Persistent rendered-frame cache: {args.cache_dir}")
     if not args.no_open_browser:
@@ -1605,6 +1765,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subject", default=DEFAULT_SUBJECT)
     parser.add_argument("--cache-dir", default=".cache/scene_graph_demo")
     parser.add_argument("--no-disk-cache", action="store_true", help="Disable persistent PNG cache for rendered frames.")
+    parser.add_argument("--bundled-cache-dir", default=None)
+    parser.add_argument("--cached-only", action="store_true")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--no-open-browser", action="store_true")

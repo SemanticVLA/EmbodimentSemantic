@@ -1,0 +1,133 @@
+{
+  "archives": {
+    "agentview/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate/demo_0": {
+      "bytes": 10620912,
+      "frame_count": 98,
+      "path": "agentview/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "ebebb1d1c9e39e299f5483684472408863465846160fbb28f12c9e69400aa3c8"
+    },
+    "agentview/pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate/demo_0": {
+      "bytes": 11251317,
+      "frame_count": 103,
+      "path": "agentview/pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "49f5b993c893b14f102cc6570127bb0c419b7ce3ce1b913366b52bdc2b5ad05b"
+    },
+    "agentview/pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate/demo_0": {
+      "bytes": 16323458,
+      "frame_count": 153,
+      "path": "agentview/pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "f5fd9f1cb0095b25042ade685263637796ada8e48902634d3ffa5402032dcef6"
+    },
+    "agentview/pick_up_the_black_bowl_next_to_the_cookie_box_and_place_it_on_the_plate/demo_0": {
+      "bytes": 13382264,
+      "frame_count": 123,
+      "path": "agentview/pick_up_the_black_bowl_next_to_the_cookie_box_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "a19aceddbe2465094e882ca0de764d6e7c3281c5982d68040504600f3d95309b"
+    },
+    "agentview/pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate/demo_0": {
+      "bytes": 12385607,
+      "frame_count": 115,
+      "path": "agentview/pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "05244e7a353ff1c5722d4a66daa36f1a79cb7ea7db3e187309087b6c61c00bf9"
+    },
+    "agentview/pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate/demo_0": {
+      "bytes": 17113317,
+      "frame_count": 152,
+      "path": "agentview/pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "d91810cac15b0dff88593afd4e9eaa9b06cbbe69e9a84a1062388875265c97ec"
+    },
+    "agentview/pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate/demo_0": {
+      "bytes": 11164171,
+      "frame_count": 99,
+      "path": "agentview/pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "a3a30bea628dd746e101fa8c3a0dd3a0482f2d08abe71e367512ba33149c5498"
+    },
+    "agentview/pick_up_the_black_bowl_on_the_ramekin_and_place_it_on_the_plate/demo_0": {
+      "bytes": 14916923,
+      "frame_count": 137,
+      "path": "agentview/pick_up_the_black_bowl_on_the_ramekin_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "17af05e717fe00773199ae6e506026faa60e1bad74c9059c8d1c4bcb2bbf0d20"
+    },
+    "agentview/pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate/demo_0": {
+      "bytes": 16454464,
+      "frame_count": 155,
+      "path": "agentview/pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "e9f53ecc462520a253e8b92c92e4790e273c308faff5ddfbf5bed3d4870f0432"
+    },
+    "agentview/pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate/demo_0": {
+      "bytes": 14232500,
+      "frame_count": 136,
+      "path": "agentview/pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "608059b078bc2aa53ce585c101759ea0cb937f8c2468a069d7a651a45ff4eaec"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate/demo_0": {
+      "bytes": 11302713,
+      "frame_count": 98,
+      "path": "eye_in_hand/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "cd68b9a2ad94afa7c369b3214192addfeee9712c8d0a8ac35c6f8b6342315764"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate/demo_0": {
+      "bytes": 13008487,
+      "frame_count": 103,
+      "path": "eye_in_hand/pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "7a939c5cac1bbc1de0f399935980bf47ab2d4436fa8c2548f4f2b294a6b993e8"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate/demo_0": {
+      "bytes": 17029825,
+      "frame_count": 153,
+      "path": "eye_in_hand/pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "3e188e97fba751717809ff7bb18a7768a63449d1eb499e23b1409e1d75398df4"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_next_to_the_cookie_box_and_place_it_on_the_plate/demo_0": {
+      "bytes": 12240086,
+      "frame_count": 123,
+      "path": "eye_in_hand/pick_up_the_black_bowl_next_to_the_cookie_box_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "a5aef63c54932839def5637576766cf9a1441538fe83fee13333249c4ff3cdcd"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate/demo_0": {
+      "bytes": 11777865,
+      "frame_count": 115,
+      "path": "eye_in_hand/pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "62afe09f1a334941c26ab1e0fab273666961336d552513d0cc1a971ad95b4363"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate/demo_0": {
+      "bytes": 15872042,
+      "frame_count": 152,
+      "path": "eye_in_hand/pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "c0b83f489d45fba7a801a025c8b5bd54e755900ab992f1bf721dc3c66b755c17"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate/demo_0": {
+      "bytes": 9884018,
+      "frame_count": 99,
+      "path": "eye_in_hand/pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "062127c0bd72d26e9dbfed01374bb17db7f84ba07762006d3d916e8416d49e93"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_on_the_ramekin_and_place_it_on_the_plate/demo_0": {
+      "bytes": 14933132,
+      "frame_count": 137,
+      "path": "eye_in_hand/pick_up_the_black_bowl_on_the_ramekin_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "2a9eba26a246bf39f8d4b1e64eacaf21864c09a6114ae071c74ef7b92dd1900a"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate/demo_0": {
+      "bytes": 18257128,
+      "frame_count": 155,
+      "path": "eye_in_hand/pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "574d76de12883ee05b6d33e5f4adb62e8ff0de09d0106a7de5d2b2911dd20688"
+    },
+    "eye_in_hand/pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate/demo_0": {
+      "bytes": 15332784,
+      "frame_count": 136,
+      "path": "eye_in_hand/pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate/demo_0.zip",
+      "sha256": "d5a9830fe0a4ed315729225318678bca26df8d67b07dd2a8ff057444387c8944"
+    }
+  },
+  "cached_frames": 2542,
+  "complete": true,
+  "content_type": "image/jpeg",
+  "expected_frames": 2542,
+  "extension": ".jpg",
+  "input": "/src/demo/libero_demo_cache",
+  "quality": 88,
+  "resolution": 1024,
+  "version": 1
+}

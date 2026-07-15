@@ -130,16 +130,18 @@ def serve(args: argparse.Namespace) -> None:
         for camera in CAMERA_INFO
     }
     resolutions = sorted(set([*RESOLUTION_OPTIONS, args.res]))
-    shared_renderer = RendererManager(
-        args.camera,
-        max(resolutions),
-        rotate_agentview=rotate_agentview,
-    )
-    renderers = {
-        (camera, resolution): shared_renderer
-        for camera in CAMERA_INFO
-        for resolution in resolutions
-    }
+    renderers = {}
+    if not args.cached_only:
+        shared_renderer = RendererManager(
+            args.camera,
+            max(resolutions),
+            rotate_agentview=rotate_agentview,
+        )
+        renderers = {
+            (camera, resolution): shared_renderer
+            for camera in CAMERA_INFO
+            for resolution in resolutions
+        }
 
     so101_config = load_config(args.so101_config)
     artifact_root = Path(args.so101_artifacts).resolve() if args.so101_artifacts else Path(
@@ -160,6 +162,8 @@ def serve(args: argparse.Namespace) -> None:
         resolutions=resolutions,
         predictions=PredictionStore(args.output_dir),
         cache_dir=None if args.no_disk_cache else args.cache_dir,
+        bundled_cache_dir=args.bundled_cache_dir,
+        cached_only=args.cached_only,
         so101_repository=so101_repository,
     )
     url = f"http://{args.host}:{args.port}/"
@@ -189,6 +193,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subject", default=DEFAULT_SUBJECT)
     parser.add_argument("--cache-dir", default=".cache/scene_graph_demo")
     parser.add_argument("--no-disk-cache", action="store_true")
+    parser.add_argument("--bundled-cache-dir", default=None)
+    parser.add_argument("--cached-only", action="store_true")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--no-open-browser", action="store_true")

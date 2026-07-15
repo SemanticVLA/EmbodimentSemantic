@@ -3,10 +3,8 @@ primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
-
-[env]
-  LIBERO_CONFIG_PATH = "/opt/libero-config"
-  MUJOCO_GL = "egl"
+  # Change this to "libero-runtime" to restore live simulator rendering.
+  target = "production"
 
 [http_service]
   internal_port = 7860
@@ -29,6 +27,6 @@ primary_region = "fra"
     path = "/api/health"
 
 [[vm]]
-  memory = "4gb"
+  memory = "1gb"
   cpu_kind = "shared"
   cpus = 1

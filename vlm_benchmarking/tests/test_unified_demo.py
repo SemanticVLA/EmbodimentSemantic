@@ -1,5 +1,6 @@
 import json
 import threading
+import tomllib
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -93,10 +94,33 @@ def test_deployment_cache_contains_no_libero_images():
             assert handle["data/demo_0/obs/eye_in_hand_rgb"].id.get_storage_size() == 0
 
 
-def test_docker_image_installs_importable_libero_namespace():
+def test_bundled_libero_cache_is_complete():
+    cache_dir = Path(__file__).parents[1] / "demo" / "libero_frame_cache"
+    manifest = json.loads((cache_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["complete"] is True
+    assert manifest["resolution"] == 1024
+    assert manifest["cached_frames"] == manifest["expected_frames"] == 2542
+    assert len(manifest["archives"]) == 20
+    assert sum(record["frame_count"] for record in manifest["archives"].values()) == 2542
+    assert all((cache_dir / record["path"]).is_file() for record in manifest["archives"].values())
+    assert sum(key.startswith("agentview/") for key in manifest["archives"]) == 10
+    assert sum(key.startswith("eye_in_hand/") for key in manifest["archives"]) == 10
+
+
+def test_docker_defaults_to_cached_production_and_keeps_optional_libero_runtime():
     dockerfile = (Path(__file__).parents[2] / "Dockerfile").read_text(encoding="utf-8")
     requirements = (Path(__file__).parents[1] / "requirements-demo.txt").read_text(encoding="utf-8")
-    assert dockerfile.startswith("FROM python:3.12-slim-trixie")
+    cached_requirements = (Path(__file__).parents[1] / "requirements-demo-cached.txt").read_text(
+        encoding="utf-8"
+    )
+    assert any(
+        line.startswith("FROM python:3.12-slim-trixie")
+        for line in dockerfile.splitlines()[:2]
+    )
+    assert "FROM cached-deps AS app-base" in dockerfile
+    assert "FROM libero-deps AS libero-runtime" in dockerfile
+    assert "FROM app-base AS production" in dockerfile
     assert "libglib2.0-0t64" in dockerfile
     assert "libgomp1" in dockerfile
     assert "libice6" in dockerfile
@@ -109,11 +133,27 @@ def test_docker_image_installs_importable_libero_namespace():
     assert "from libero.libero import get_libero_path" in dockerfile
     assert "from libero.libero.envs import OffScreenRenderEnv" in dockerfile
     assert "RUN python -m demo.deployment_smoke" in dockerfile
+    assert "python -m demo.deployment_smoke --cached-only" in dockerfile
+    assert '"--bundled-cache-dir", "demo/libero_frame_cache", "--cached-only"' in dockerfile
     assert "termcolor==3.3.0" in requirements
     assert "future==0.18.2" in requirements
     assert "hydra-core==1.3.2" in requirements
     assert "opencv-python==4.13.0.92" in requirements
     assert "opencv-python-headless" not in requirements
+    assert "h5py==3.16.0" in cached_requirements
+    assert "mujoco" not in cached_requirements.lower()
+    assert "robosuite" not in cached_requirements.lower()
+
+
+def test_fly_uses_lightweight_cached_production_target():
+    with (Path(__file__).parents[2] / "fly.toml").open("rb") as handle:
+        config = tomllib.load(handle)
+
+    assert config["build"]["target"] == "production"
+    vm = config["vm"][0]
+    assert vm["cpu_kind"] == "shared"
+    assert vm["cpus"] == 1
+    assert vm["memory"] == "1gb"
 
 
 def test_deployment_caches_keep_predictions_and_so101_metrics():
