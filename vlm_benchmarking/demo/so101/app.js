@@ -14,6 +14,7 @@ const state = {
   payloadCache: new Map(),
   payloadRequests: new Map(),
   requestToken: 0,
+  workToken: 0,
   recording: false,
 };
 
@@ -49,6 +50,37 @@ function query(params) {
 function setLoading(active, text) {
   els.loadingOverlay.hidden = !active;
   els.loadingText.textContent = text || "Loading";
+}
+
+function cancellationError() {
+  const error = new Error("Playback canceled");
+  error.name = "AbortError";
+  return error;
+}
+
+function isCancellation(error) {
+  return error?.name === "AbortError";
+}
+
+function selectionContext() {
+  return [
+    els.task.value,
+    els.episode.value,
+    els.camera.value,
+    els.evidenceMode.value,
+  ].join("|");
+}
+
+function isWorkCurrent(token) {
+  return token === state.workToken;
+}
+
+function cancelActiveWork() {
+  state.workToken += 1;
+  state.requestToken += 1;
+  stopPlayback();
+  state.recording = false;
+  setLoading(false);
 }
 
 function setOptions(select, items, valueKey = "id", labelKey = "name") {
@@ -138,6 +170,7 @@ async function initialize() {
 }
 
 async function loadEpisodes() {
+  state.workToken += 1;
   stopPlayback();
   const data = await fetchJson(apiUrl(`episodes?${query({task: els.task.value})}`));
   setOptions(els.episode, data.episodes);
@@ -150,6 +183,7 @@ async function loadEpisodes() {
 }
 
 async function loadFrames() {
+  state.workToken += 1;
   stopPlayback();
   const data = await fetchJson(apiUrl(`frames?${query({task: els.task.value, episode: els.episode.value, camera: els.camera.value})}`));
   state.frames = data.frames;
@@ -182,6 +216,7 @@ async function loadFrame(drawImage) {
       drawScene(state.image);
     }
   } catch (error) {
+    if (isCancellation(error) || token !== state.requestToken) return;
     drawEmpty(error.message);
   } finally {
     if (token === state.requestToken) setLoading(false);
@@ -325,9 +360,11 @@ async function downloadVideo() {
     });
     recorder.start();
     for (let index = 0; index < state.frames.length; index += 1) {
+      if (!state.recording) break;
       state.frameIndex = index;
       syncFrameControls(index);
       await loadFrame(true);
+      if (!state.recording) break;
       els.sceneStatus.textContent = `Recording video ${Math.round(((index + 1) / state.frames.length) * 100)}%`;
       await wait(frameMs);
     }
@@ -453,9 +490,11 @@ async function togglePlayback() {
     stopPlayback();
     return;
   }
+  const token = state.workToken;
   if (state.frameIndex >= state.frames.length - 1) {
     state.frameIndex = 0;
     await loadFrame(true);
+    if (!state.frames.length || !isWorkCurrent(token)) return;
   }
   state.playing = true;
   els.playButton.textContent = "Pause";
@@ -478,11 +517,12 @@ function playSamples() {
       state.frameIndex += 1;
     }
     await loadFrame(true);
+    if (!state.playing) return;
     playSamples();
   }, delay);
 }
 
-async function prepareVideo() {
+async function prepareVideo(token = state.workToken) {
   if (!state.payload || !state.payload.video_url) throw new Error("Source video is unavailable");
   const key = `${state.payload.task}|${state.payload.episode}|${state.payload.camera}`;
   if (state.videoReadyKey !== key) {
@@ -492,44 +532,46 @@ async function prepareVideo() {
       els.sourceVideo.onloadedmetadata = resolve;
       els.sourceVideo.onerror = () => reject(new Error("Browser could not decode the source video"));
     });
+    if (!isWorkCurrent(token)) throw cancellationError();
     state.videoReadyKey = key;
   }
+  if (!isWorkCurrent(token)) throw cancellationError();
   els.sourceVideo.currentTime = state.payload.video_start + currentFrame() / state.payload.fps;
 }
 
 async function prepareContinuousPayloads() {
-  const context = [
-    els.task.value,
-    els.episode.value,
-    els.camera.value,
-    els.evidenceMode.value,
-  ].join("|");
-  const entries = await Promise.all(
-    state.frames.map(async (frame) => [frame, await fetchFramePayload(frame)])
-  );
-  if (context !== [
-    els.task.value,
-    els.episode.value,
-    els.camera.value,
-    els.evidenceMode.value,
-  ].join("|")) {
-    throw new Error("Sequence changed while preparing synchronized overlays");
+  const token = state.workToken;
+  const context = selectionContext();
+  const entries = [];
+  for (const frame of state.frames) {
+    if (!state.playing || !isWorkCurrent(token) || context !== selectionContext()) {
+      throw cancellationError();
+    }
+    const payload = await fetchFramePayload(frame);
+    if (!state.playing || !isWorkCurrent(token) || context !== selectionContext()) {
+      throw cancellationError();
+    }
+    entries.push([frame, payload]);
+    await wait(0);
   }
   state.continuousPayloads = new Map(entries);
 }
 
 async function playContinuous() {
+  const token = state.workToken;
   try {
     setLoading(true, "Preparing synchronized overlays");
-    await Promise.all([prepareVideo(), prepareContinuousPayloads()]);
+    await Promise.all([prepareVideo(token), prepareContinuousPayloads()]);
+    if (!state.playing || !isWorkCurrent(token)) throw cancellationError();
     els.sourceVideo.playbackRate = Math.min(2, Math.max(.25, selectedSpeed() / 30));
     await els.sourceVideo.play();
+    if (!state.playing || !isWorkCurrent(token)) throw cancellationError();
     setLoading(false);
     continuousLoop();
   } catch (error) {
     setLoading(false);
     stopPlayback();
-    els.sceneStatus.textContent = error.message;
+    if (!isCancellation(error)) els.sceneStatus.textContent = error.message;
   }
 }
 
@@ -640,6 +682,13 @@ els.playButton.addEventListener("click", togglePlayback);
 els.stillButton.addEventListener("click", exportStill);
 els.videoButton.addEventListener("click", downloadVideo);
 els.continuousVideo.addEventListener("change", stopPlayback);
+window.addEventListener("message", (event) => {
+  if (event.origin === window.location.origin && event.data?.type === "demo:stop") cancelActiveWork();
+});
+window.addEventListener("pagehide", cancelActiveWork);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) cancelActiveWork();
+});
 
 initialize().catch((error) => {
   setLoading(false);

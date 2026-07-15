@@ -197,6 +197,7 @@
     let decodedImagePixels = 0;
     const decodedImagePixelBudget = 90 * 1024 * 1024;
     let warmToken = 0;
+    let workToken = 0;
     let simulatorStarted = false;
     let requestId = 0;
     let isPlaying = false;
@@ -267,6 +268,16 @@
     function setStatus(text, isError=false, isLoading=false) {
       els.status.textContent = text;
       els.status.className = isError ? "status error" : (isLoading ? "status loading" : "status");
+    }
+    function isWorkCurrent(token) {
+      return token === workToken;
+    }
+    function cancelActiveWork() {
+      workToken += 1;
+      requestId += 1;
+      cancelBackgroundWarm();
+      stopPlayback();
+      if (isRecording) setRecording(false);
     }
     function setButtonBusy(button, value) {
       return DemoCommon.setButtonBusy(button, value);
@@ -464,6 +475,7 @@
       const cached = frameCache.get(cacheKey);
       if (cached) {
         await attachImage(cached);
+        if (id !== requestId) return false;
         lastPayload = cached;
         syncSubjectOptions(cached.overlay.objects);
         updateFrameLabel(cached.overlay.frame_count);
@@ -484,6 +496,7 @@
         if (id !== requestId) return;
         if (!data.image_cached) simulatorStarted = true;
         await attachImage(data);
+        if (id !== requestId) return;
         frameCache.set(cacheKey, data);
         lastPayload = data;
         syncSubjectOptions(data.overlay.objects);
@@ -560,6 +573,8 @@
       warmToken += 1;
     }
     async function preloadFrameRange(start, max, shouldContinue, background=false) {
+      const token = workToken;
+      const drawId = requestId;
       const chunkSize = 12;
       const targetFrames = frameSequence(start, max);
       let cachedCount = 0;
@@ -570,7 +585,7 @@
         setStatus(`Preparing playback ${percent}%`, false, true);
       }
       for (let index = 0; index < targetFrames.length; index += chunkSize) {
-        if (!shouldContinue()) return false;
+        if (!isWorkCurrent(token) || !shouldContinue()) return false;
         const chunkFrames = targetFrames.slice(index, index + chunkSize);
         const missing = [];
         for (const frame of chunkFrames) {
@@ -586,7 +601,7 @@
         }
         const missingRanges = contiguousRanges(missing);
         for (const [rangeStart, rangeEnd] of missingRanges) {
-          if (!shouldContinue()) return false;
+          if (!isWorkCurrent(token) || !shouldContinue()) return false;
           const params = new URLSearchParams({
             camera: els.camera.value,
             res: els.resolution.value,
@@ -599,16 +614,18 @@
             ...overlayParams(),
           });
           const data = await api(`/api/preload?${params.toString()}`);
+          if (!isWorkCurrent(token) || !shouldContinue()) return false;
           for (const frameData of data.frames) {
             const frame = frameData.overlay.frame;
             await attachImage(frameData);
+            if (!isWorkCurrent(token) || !shouldContinue()) return false;
             frameCache.set(currentFrameCacheKey(frame), frameData);
             cachedCount += 1;
             setLoadingProgress();
             if (frame === start) {
               lastPayload = frameData;
               syncSubjectOptions(frameData.overlay.objects);
-              drawPayload(frameData, requestId);
+              drawPayload(frameData, drawId);
             }
           }
         }
@@ -991,6 +1008,13 @@
       }
     });
     window.addEventListener("resize", fitCanvasToStage);
+    window.addEventListener("message", event => {
+      if (event.origin === window.location.origin && event.data?.type === "demo:stop") cancelActiveWork();
+    });
+    window.addEventListener("pagehide", cancelActiveWork);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) cancelActiveWork();
+    });
     loadTasks().catch(err => setStatus(err.message, true));
   </script>
 </body>

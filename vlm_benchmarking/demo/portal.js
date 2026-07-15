@@ -16,7 +16,10 @@ function selectDemo(name, updateHash = true) {
   const demo = demos[name];
   document.title = demo.title;
   frame.title = demo.title;
-  if (frame.getAttribute("src") !== demo.url) frame.src = demo.url;
+  if (frame.getAttribute("src") !== demo.url) {
+    frame.contentWindow?.postMessage({type: "demo:stop"}, window.location.origin);
+    frame.src = demo.url;
+  }
   for (const [key, tab] of Object.entries(tabs)) {
     tab.setAttribute("aria-selected", String(key === name));
     tab.tabIndex = key === name ? 0 : -1;
