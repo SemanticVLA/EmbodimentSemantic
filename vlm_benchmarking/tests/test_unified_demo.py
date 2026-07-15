@@ -108,6 +108,7 @@ def test_docker_image_installs_importable_libero_namespace():
     assert "from libero.libero.envs import OffScreenRenderEnv" in dockerfile
     assert "RUN python -m demo.deployment_smoke" in dockerfile
     assert "termcolor==3.3.0" in requirements
+    assert "future==0.18.2" in requirements
     assert "opencv-python==4.13.0.92" in requirements
     assert "opencv-python-headless" not in requirements
 
