@@ -29,6 +29,6 @@ primary_region = "fra"
     path = "/api/health"
 
 [[vm]]
-  memory = "1gb"
+  memory = "4gb"
   cpu_kind = "shared"
   cpus = 1

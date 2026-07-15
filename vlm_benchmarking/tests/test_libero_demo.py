@@ -611,6 +611,27 @@ def test_sim_frame_renderer_sets_state_without_reset_for_out_of_order_cameras(tm
     assert np.asarray(second)[0, 0, 0] == 1
 
 
+def test_sim_frame_renderer_rebuilds_environment_when_task_changes(tmp_path):
+    first_env = _FakeRenderEnv()
+    second_env = _FakeRenderEnv()
+    environments = iter((first_env, second_env))
+    renderer = SimFrameRenderer(None, 8, rotate_agentview=True)
+    renderer._create_env = lambda hdf5_path: next(environments)
+    first_path = tmp_path / "first_task_demo.hdf5"
+    second_path = tmp_path / "second_task_demo.hdf5"
+
+    assert renderer._get_env(first_path) is first_env
+    renderer._fixed_body_ids["object"] = 1
+    assert renderer._get_env(first_path) is first_env
+    assert renderer._get_env(second_path) is second_env
+
+    assert first_env.close_calls == 1
+    assert renderer.hdf5_path == second_path
+    assert renderer._fixed_body_ids == {}
+    renderer.close()
+    assert second_env.close_calls == 1
+
+
 class _MockRenderers:
     def __init__(self):
         self.res = 8
@@ -649,10 +670,14 @@ class _BlockingRenderer:
 class _FakeRenderEnv:
     def __init__(self):
         self.reset_calls = 0
+        self.close_calls = 0
         self.sim = _FakeSim()
 
     def reset(self):
         self.reset_calls += 1
+
+    def close(self):
+        self.close_calls += 1
 
 
 class _FakeSim:

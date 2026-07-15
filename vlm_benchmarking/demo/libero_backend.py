@@ -821,11 +821,20 @@ class SimFrameRenderer:
         if self._env is not None:
             self._env.close()
             self._env = None
+        self.hdf5_path = None
+        self._fixed_body_ids.clear()
 
     def _get_env(self, hdf5_path: Path):
-        if self._env is not None:
+        requested_path = Path(hdf5_path)
+        if self._env is not None and self.hdf5_path == requested_path:
             return self._env
-        self.hdf5_path = Path(hdf5_path)
+        if self._env is not None:
+            self.close()
+        self.hdf5_path = requested_path
+        self._env = self._create_env(requested_path)
+        return self._env
+
+    def _create_env(self, hdf5_path: Path):
         if os.name == "nt":
             os.environ.setdefault("MUJOCO_GL", "wgl")
         try:
@@ -837,14 +846,14 @@ class SimFrameRenderer:
                 "Install/configure LIBERO, then rerun this demo."
             ) from exc
 
-        bddl_file = resolve_bddl_file(self.hdf5_path, get_libero_path)
-        self._env = OffScreenRenderEnv(
+        bddl_file = resolve_bddl_file(hdf5_path, get_libero_path)
+        env = OffScreenRenderEnv(
             bddl_file_name=str(bddl_file),
             camera_heights=self.max_res,
             camera_widths=self.max_res,
         )
-        self._env.reset()
-        return self._env
+        env.reset()
+        return env
 
 
 def resolve_bddl_file(hdf5_path: Path, get_libero_path) -> Path:

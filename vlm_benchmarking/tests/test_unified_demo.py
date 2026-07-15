@@ -102,13 +102,16 @@ def test_docker_image_installs_importable_libero_namespace():
     assert "libice6" in dockerfile
     assert "libsm6" in dockerfile
     assert "PYTHONPATH=/opt/LIBERO" in dockerfile
-    assert "pip install --no-cache-dir --editable /opt/LIBERO" in dockerfile
+    assert "pip install --no-deps --editable /opt/LIBERO" in dockerfile
+    assert "--mount=type=cache,target=/root/.cache/pip" in dockerfile
+    assert "--constraint /tmp/constraints-demo.txt" in dockerfile
     assert "python -m pip check" in dockerfile
     assert "from libero.libero import get_libero_path" in dockerfile
     assert "from libero.libero.envs import OffScreenRenderEnv" in dockerfile
     assert "RUN python -m demo.deployment_smoke" in dockerfile
     assert "termcolor==3.3.0" in requirements
     assert "future==0.18.2" in requirements
+    assert "hydra-core==1.3.2" in requirements
     assert "opencv-python==4.13.0.92" in requirements
     assert "opencv-python-headless" not in requirements
 

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim-trixie
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -24,16 +25,25 @@ RUN apt-get update \
         libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY vlm_benchmarking/requirements-demo.txt /tmp/requirements-demo.txt
-RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && python -m pip install --no-cache-dir -r /tmp/requirements-demo.txt
-
-RUN git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO \
+ARG LIBERO_COMMIT=8f1084e3132a39270c3a13ebe37270a43ece2a01
+RUN git init /opt/LIBERO \
     && cd /opt/LIBERO \
-    && git checkout 8f1084e3132a39270c3a13ebe37270a43ece2a01 \
-    && python -m pip install --no-cache-dir --editable /opt/LIBERO \
+    && git remote add origin https://github.com/Lifelong-Robot-Learning/LIBERO.git \
+    && git fetch --depth 1 origin "${LIBERO_COMMIT}" \
+    && git checkout --detach FETCH_HEAD \
+    && rm -rf /opt/LIBERO/.git
+
+COPY vlm_benchmarking/requirements-demo.txt /tmp/requirements-demo.txt
+COPY vlm_benchmarking/constraints-demo.txt /tmp/constraints-demo.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip==26.1.2 setuptools==83.0.0 wheel==0.47.0 \
+    && python -m pip install --constraint /tmp/constraints-demo.txt \
+        --requirement /tmp/requirements-demo.txt
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --no-deps --editable /opt/LIBERO \
     && python -m pip check \
-    && mkdir -p /opt/libero-config \
+    && mkdir -p /opt/libero-config /opt/LIBERO/libero/datasets \
     && printf '%s\n' \
         'assets: /opt/LIBERO/libero/libero/assets' \
         'bddl_files: /opt/LIBERO/libero/libero/bddl_files' \

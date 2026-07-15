@@ -1,6 +1,7 @@
 **
 !Dockerfile
 !vlm_benchmarking/
+!vlm_benchmarking/constraints-demo.txt
 !vlm_benchmarking/requirements-demo.txt
 !vlm_benchmarking/vlm_bench/
 !vlm_benchmarking/vlm_bench/__init__.py

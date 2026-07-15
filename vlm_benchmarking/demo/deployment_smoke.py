@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 from .libero_backend import Hdf5SceneGraphStore, PredictionStore, SimFrameRenderer, resolve_bddl_file
@@ -9,6 +10,32 @@ from .so101_proxy_demo.proxy.config import load_config
 
 
 DEMO_ROOT = Path(__file__).resolve().parent
+
+
+def validate_runtime_imports() -> None:
+    modules = (
+        "bddl",
+        "cloudpickle",
+        "easydict",
+        "future",
+        "gym",
+        "h5py",
+        "hydra",
+        "matplotlib",
+        "mujoco",
+        "num2words",
+        "numpy",
+        "cv2",
+        "PIL",
+        "yaml",
+        "robosuite",
+        "termcolor",
+    )
+    for module in modules:
+        try:
+            importlib.import_module(module)
+        except Exception as exc:
+            raise RuntimeError(f"Runtime dependency import failed: {module}") from exc
 
 
 def validate_libero() -> None:
@@ -26,24 +53,28 @@ def validate_libero() -> None:
             raise RuntimeError(f"{task['id']} must contain only demo_0")
         resolve_bddl_file(store.task_path(task["id"]), get_libero_path)
 
-    task_id = tasks[0]["id"]
-    hdf5_path = store.task_path(task_id)
-    state = store.state_for_frame(task_id, "demo_0", 0)
-    transforms = store.fixed_body_transforms_for_frame(task_id, "demo_0", 0)
     renderer = SimFrameRenderer(None, max_res=64, rotate_agentview=True)
     try:
-        image = renderer.render_state("agentview", 64, hdf5_path, state, transforms)
+        for task in tasks:
+            task_id = task["id"]
+            hdf5_path = store.task_path(task_id)
+            state = store.state_for_frame(task_id, "demo_0", 0)
+            transforms = store.fixed_body_transforms_for_frame(task_id, "demo_0", 0)
+            try:
+                image = renderer.render_state("agentview", 64, hdf5_path, state, transforms)
+            except Exception as exc:
+                raise RuntimeError(f"LIBERO render failed for task: {task_id}") from exc
+            if image.size != (64, 64):
+                raise RuntimeError(f"Unexpected LIBERO smoke-frame size for {task_id}: {image.size}")
+            if not any(low != high for low, high in image.getextrema()):
+                raise RuntimeError(f"LIBERO smoke frame is blank for task: {task_id}")
     finally:
         renderer.close()
 
-    if image.size != (64, 64):
-        raise RuntimeError(f"Unexpected LIBERO smoke-frame size: {image.size}")
-    if not any(low != high for low, high in image.getextrema()):
-        raise RuntimeError("LIBERO smoke frame is blank")
-
     predictions = PredictionStore(DEMO_ROOT / "libero_prediction_cache")
-    if not predictions.list_runs(task_id, "agentview"):
-        raise RuntimeError("LIBERO prediction cache is empty")
+    for task in tasks:
+        if not predictions.list_runs(task["id"], "agentview"):
+            raise RuntimeError(f"LIBERO prediction cache is empty for task: {task['id']}")
 
 
 def validate_so101() -> None:
@@ -69,9 +100,10 @@ def validate_so101() -> None:
 
 
 def main() -> None:
+    validate_runtime_imports()
     validate_libero()
     validate_so101()
-    print("Deployment smoke test passed: LIBERO rendered and SO101 assets loaded")
+    print("Deployment smoke test passed: all LIBERO tasks rendered and SO101 assets loaded")
 
 
 if __name__ == "__main__":
