@@ -1,0 +1,7 @@
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+pytest.ini
+*.err.log
+*.out.log

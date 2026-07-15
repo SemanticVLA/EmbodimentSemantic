@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Interactive LIBERO and SO101 semantic scene-graph demos.">
+  <title>LIBERO Demo</title>
+  <link rel="stylesheet" href="portal.css">
+</head>
+<body>
+  <header class="portal-header">
+    <div class="brand-block">
+      <h1>EmbodimentSemantic</h1>
+      <span>Scene graph explorer</span>
+    </div>
+
+    <nav class="dataset-tabs" role="tablist" aria-label="Dataset">
+      <button id="liberoTab" type="button" role="tab" data-demo="libero">LIBERO</button>
+      <button id="so101Tab" type="button" role="tab" data-demo="so101">SO101</button>
+    </nav>
+  </header>
+
+  <main class="portal-main">
+    <section id="liveView" class="live-view" aria-label="Full local explorer" hidden>
+      <iframe id="demoFrame" title="EmbodimentSemantic dataset explorer"></iframe>
+    </section>
+
+    <section id="staticView" class="static-view" aria-label="Hosted scene graph sample" hidden>
+      <aside class="sample-controls" aria-label="Sample controls">
+        <section>
+          <div class="section-heading">
+            <h2>View</h2>
+            <span id="sampleMode">Static sample</span>
+          </div>
+          <label for="sampleCamera">Camera</label>
+          <select id="sampleCamera"></select>
+        </section>
+
+        <section>
+          <h2>Sequence</h2>
+          <label for="sampleTask">Task</label>
+          <select id="sampleTask"></select>
+          <label for="sampleSequence">Demo / episode</label>
+          <select id="sampleSequence"></select>
+          <div class="label-row">
+            <label for="sampleFrame">Frame</label>
+            <span id="sampleFrameValue">0 / 0</span>
+          </div>
+          <input id="sampleFrame" type="range" min="0" max="0" value="0">
+        </section>
+
+        <section>
+          <h2>Overlay</h2>
+          <label class="check-row"><input id="sampleArrows" type="checkbox" checked> Arrows</label>
+          <label class="check-row"><input id="sampleLabels" type="checkbox" checked> Labels</label>
+          <label class="check-row"><input id="sampleBboxes" type="checkbox"> Bboxes</label>
+        </section>
+      </aside>
+
+      <section class="sample-viewer" aria-label="Scene visualization">
+        <div id="sampleSceneStatus" class="scene-status">Loading sample</div>
+        <div class="canvas-stage">
+          <canvas id="sampleCanvas" width="640" height="480"></canvas>
+          <div id="sampleLoading" class="sample-loading">Loading</div>
+        </div>
+        <div class="legend" aria-label="Overlay legend">
+          <span><i class="legend-line relation"></i> Ground truth relation</span>
+          <span><i class="legend-box"></i> Object bbox</span>
+        </div>
+      </section>
+
+      <aside class="sample-triplets" aria-label="Ground-truth triplets">
+        <div class="triplet-heading">
+          <div>
+            <h2>Triplets</h2>
+            <span id="sampleGraphType">Ground truth</span>
+          </div>
+          <strong id="sampleTripletCount">0</strong>
+        </div>
+        <div id="sampleTripletList" class="sample-triplet-list"></div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="portal.js"></script>
+</body>
+</html>

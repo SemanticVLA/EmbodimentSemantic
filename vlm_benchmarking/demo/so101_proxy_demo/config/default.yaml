@@ -1,0 +1,79 @@
+schema_version: so101-proxy-v1
+
+paths:
+  so101_dataset: ../../../data/SO1001_dataset
+  libero_dataset: ../../../data/libero_spatial_v5
+  gemini_predictions: ../../../data/SO1001_dataset/gemini-generated graphs
+  artifacts: ../artifacts
+
+dataset:
+  fps: 30
+  sampled_frame_step: 30
+  cameras:
+    - agent_view
+    - wrist
+  canonical_objects:
+    - black_bowl
+    - red_drawer
+    - black_stove
+    - cookie
+    - white_plate
+
+geometry:
+  center_median_window: 5
+  relation_persistence_frames: 3
+  support_iomin_threshold: 0.8
+  support_soft_iomin_threshold: 0.7
+  support_center_distance_threshold: 0.08
+
+metadata:
+  smoothing_window: 5
+  minimum_transition_dwell: 5
+  minimum_gripper_cluster_separation: 5.0
+  minimum_transitions: 2
+  maximum_transitions: 6
+  lift_delta_m: 0.02
+  action_confirmation_max_lag_frames: 6
+
+vision:
+  grounding_dino_model: IDEA-Research/grounding-dino-tiny
+  grounding_dino_revision: a2bb814dd30d776dcf7e30523b00659f4f141c71
+  processor_use_fast: true
+  batch_size: 8
+  box_threshold: 0.30
+  wrist_box_threshold: 0.50
+  wrist_candidate_box_threshold: 0.15
+  wrist_text_threshold: 0.20
+  text_threshold: 0.25
+  maximum_box_area_fraction: 0.65
+  maximum_bowl_area_fraction: 0.15
+  wrist_minimum_box_area_fraction: 0.001
+  wrist_maximum_box_area_fraction: 0.90
+  wrist_maximum_bowl_area_fraction: 0.80
+  wrist_minimum_bowl_aspect_ratio: 0.70
+  wrist_maximum_plate_aspect_ratio: 2.00
+  wrist_minimum_cookie_orange_fraction: 0.008
+  wrist_flow_minimum_bidirectional_iou: 0.25
+  wrist_maximum_flow_angular_speed: 0.08
+  wrist_held_anchor_minimum_iou: 0.50
+  recovery_box_threshold: 0.18
+  targeted_recovery_box_threshold: 0.12
+  agent_static_objects: true
+  metadata_guided_bowl: true
+  dynamic_bowl_dino_stride: 2
+  optical_flow_missing_bowl: true
+  optical_flow_minimum_bidirectional_iou: 0.15
+  bowl_candidate_box_threshold: 0.05
+  minimum_bowl_area_fraction: 0.002
+  maximum_bowl_candidate_area_fraction: 0.04
+  ideal_bowl_area_fraction: 0.018
+  device: auto
+  sam2_config: ""
+  sam2_checkpoint: ""
+
+demo:
+  host: 127.0.0.1
+  port: 7870
+  default_camera: agent_view
+  default_mode: gt
+  default_subject: black_bowl

@@ -11,6 +11,7 @@
 [![Paper](https://img.shields.io/badge/Paper-PDF-red?style=flat-square&logo=adobeacrobatreader&logoColor=white)](https://github.com/SemanticVLA/EmbodimentSemantic/blob/main/EmbodimentSemantic.pdf)
 [![Dataset](https://img.shields.io/badge/Dataset-HuggingFace-yellow?style=flat-square&logo=huggingface)](https://huggingface.co/datasets/SemVLA/EmbodimentSemantic)
 [![Code](https://img.shields.io/badge/Code-GitHub-black?style=flat-square&logo=github)](https://github.com/SemanticVLA/EmbodimentSemantic)
+[![Demo](https://img.shields.io/badge/Demo-LIBERO%20%7C%20SO101-087a55?style=flat-square)](https://semanticvla.github.io/EmbodimentSemantic/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](vla_benchmarking/LICENSE)
 
 ![LIBERO scene-graph comparison: ground-truth (top) vs. Gemini predictions (bottom). Green edges are correct triplets, red edges are errors.](assets/banner.png)

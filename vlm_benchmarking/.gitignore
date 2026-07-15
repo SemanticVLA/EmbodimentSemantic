@@ -6,6 +6,8 @@ __pycache__/
 .env
 *.hdf5
 data/
+!demo/data/
+!demo/data/**
 .cache/
 *.safetensors
 *.pt

@@ -17,6 +17,7 @@ TASK_NAMES = {
     8: "pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate",
     9: "pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate",
 }
+
 SCENE_GRAPH_SUBJECT_FILTER = "akita_black_bowl_1"  # set to None to include all subjects
 
 # Default cameras lerobot passes to every LIBERO env (LiberoEnvConfig.camera_name default).

@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LIBERO Demo</title>
+  <link rel="stylesheet" href="../common/demo.css">
+  <style>
+    :root { color-scheme:light; --bg:#f3f5f7; --panel:#fff; --text:#17202a; --muted:#5d6875; --line:#d4dae1; --soft:#eef2f6; --accent:#087f5b; --accent-soft:#ecfdf5; --danger:#b42318; --danger-soft:#fff1f0; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); font-synthesis:none; }
+    header { height:66px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 22px; border-bottom:1px solid var(--line); background:var(--panel); }
+    h1 { font-size:20px; line-height:1.2; margin:0; font-weight:700; letter-spacing:0; }
+    .build { color:var(--muted); font-size:12px; white-space:nowrap; max-width:420px; overflow:hidden; text-overflow:ellipsis; text-align:right; }
+    main { display:grid; grid-template-columns:minmax(270px,320px) minmax(560px,1fr) minmax(340px,420px); height:calc(100vh - 66px); min-height:0; overflow:hidden; }
+    aside { background:var(--panel); padding:16px 18px; display:flex; flex-direction:column; min-height:0; height:calc(100vh - 66px); overflow-y:auto; }
+    .controls { border-right:1px solid var(--line); }
+    label { display:block; margin:11px 0 6px; font-size:13px; font-weight:600; color:#46515e; }
+    select, input[type="range"] { width:100%; }
+    select { min-height:40px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--text); padding:0 10px; }
+    select:focus, button:focus, input:focus { outline:2px solid #89b8a6; outline-offset:1px; }
+    input[type="range"] { accent-color:var(--accent); }
+    input[type="checkbox"], input[type="radio"] { accent-color:var(--accent); }
+    button { min-height:40px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--text); cursor:pointer; font-weight:700; display:inline-flex; align-items:center; justify-content:center; gap:8px; }
+    button:hover { background:#f2f7f5; border-color:#a7b8b1; }
+    button:disabled { cursor:not-allowed; color:#8b949e; background:#f5f6f7; }
+    button.is-loading::after { content:""; width:13px; height:13px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .75s linear infinite; flex:0 0 auto; }
+    button[aria-pressed="true"] { border-color:#2d7d62; background:#075f43; color:#fff; }
+    #play { border-color:#2d7d62; color:#075f43; }
+    #play[aria-pressed="true"] { border-color:#2d7d62; background:#075f43; color:#fff; }
+    #download { background:#fff; }
+    .panel-main { flex:1 1 auto; display:grid; align-content:start; gap:14px; }
+    .control-section { border-top:1px solid var(--line); padding-top:12px; }
+    .control-section:first-child { border-top:0; padding-top:0; }
+    .section-title { color:#17202a; font-size:13px; line-height:1.2; font-weight:800; text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px; }
+    .panel-actions { border-top:1px solid var(--line); margin-top:16px; padding-top:14px; display:grid; gap:10px; }
+    .panel-actions button { width:100%; }
+    .checks, .speed-options { display:grid; gap:8px; margin-top:10px; font-size:13px; }
+    .speed-options { grid-template-columns:1fr 1fr; }
+    .checks label, .speed-options label { margin:0; display:flex; align-items:center; gap:8px; color:var(--text); font-weight:500; }
+    .preset-grid { display:grid; gap:8px; }
+    .preset-grid button { text-align:left; justify-content:flex-start; padding:8px 10px; font-size:12px; line-height:1.2; }
+    .preset-grid button span { display:block; color:var(--muted); font-weight:500; margin-top:3px; }
+    .stage-wrap { min-width:0; min-height:0; height:calc(100vh - 66px); padding:18px 22px 14px; display:grid; grid-template-rows:44px auto minmax(0,1fr); gap:12px; overflow:hidden; }
+    .status { min-height:42px; border:1px solid var(--line); border-radius:7px; background:#fff; color:#36414d; font-size:13px; display:flex; align-items:center; padding:0 14px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .status.error { color:var(--danger); font-weight:700; }
+    .status.loading::after { content:""; width:18px; margin-left:4px; animation:dots 1.1s steps(4,end) infinite; }
+    .legend { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:12px; flex-wrap:wrap; }
+    .legend-item { display:inline-flex; align-items:center; gap:5px; }
+    .swatch { width:18px; height:3px; border-radius:999px; display:inline-block; }
+    .swatch.good { background:#00a66b; }
+    .swatch.bad { background:#d43c2f; }
+    .swatch.box { height:10px; border:2px solid #f9c74f; background:transparent; }
+    .stage { min-height:0; overflow:hidden; border-radius:7px; background:#111418; display:grid; place-items:center; padding:14px; }
+    canvas { display:block; width:auto; height:auto; max-width:100%; max-height:100%; background:#090b0d; }
+    .row { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+    .triplet-panel { border-left:1px solid var(--line); gap:12px; overflow:auto; background:#fff; padding:18px 18px 32px; }
+    .triplet-head { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .triplet-head h2 { margin:0; font-size:16px; }
+    .triplet-count, .triplet-scope { color:var(--muted); font-size:12px; }
+    .triplets { display:grid; gap:10px; }
+    details.triplet-group { border:1px solid var(--line); background:#fff; border-radius:7px; overflow:hidden; }
+    details.triplet-group summary { cursor:pointer; padding:10px 12px; font-size:12px; font-weight:700; color:var(--text); list-style:none; display:flex; justify-content:space-between; gap:8px; }
+    details.triplet-group summary::-webkit-details-marker { display:none; }
+    .group-count { color:var(--muted); font-weight:500; }
+    .triplet-list { display:grid; border-top:1px solid var(--line); }
+    .triplet-row { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); gap:8px; align-items:center; padding:8px 12px; border-top:1px solid #eef1f5; font-size:12px; }
+    .triplet-row:first-child { border-top:0; }
+    .triplet-row.is-muted { color:var(--muted); }
+    .triplet-row.is-wrong { color:#bd291e; }
+    .triplet-entity { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .relation-chip { justify-self:center; border:1px solid #22a777; color:#007b50; border-radius:999px; padding:2px 8px; font-weight:700; background:var(--accent-soft); }
+    .triplet-row.is-muted .relation-chip { border-color:#c7ced8; color:#616b77; background:#f7f8fa; }
+    .triplet-row.is-wrong .relation-chip { border-color:#df4b40; color:#bd291e; background:#fff1f0; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @keyframes dots { 0% { content:""; } 25% { content:"."; } 50% { content:".."; } 75%, 100% { content:"..."; } }
+    @media (max-width:1180px) { main { grid-template-columns:300px minmax(440px,1fr); height:auto; overflow:visible; } aside { height:auto; } .triplet-panel { grid-column:1 / -1; border-left:0; border-top:1px solid var(--line); min-height:auto; } .stage-wrap { height:auto; overflow:visible; } }
+    @media (max-width:820px) { main { grid-template-columns:1fr; } aside { min-height:auto; } .controls { border-right:0; border-bottom:1px solid var(--line); } .stage-wrap { padding:14px; } canvas { max-width:calc(100vw - 32px); } }
+  </style>
+</head>
+<body>
+  <header><h1>LIBERO Demo</h1><div id="build" class="build"></div></header>
+  <main>
+    <aside class="controls">
+      <div class="panel-main">
+        <div class="control-section">
+          <div class="section-title">View</div>
+          <label for="camera">Camera</label><select id="camera"></select>
+          <label for="resolution">Resolution</label><select id="resolution"></select>
+          <label for="overlayMode">Mode</label><select id="overlayMode">
+            <option value="gt">Ground truth</option>
+            <option value="prediction">Predictions</option>
+            <option value="compare">GT vs Prediction</option>
+          </select>
+          <label id="predictionLabel" for="predictionRun">Prediction</label><select id="predictionRun"></select>
+        </div>
+        <div class="control-section">
+          <div class="section-title">Examples</div>
+          <div id="presets" class="preset-grid"></div>
+        </div>
+        <div class="control-section">
+          <div class="section-title">Sequence</div>
+          <label for="task">Task</label><select id="task"></select>
+          <label for="demo">Demo</label><select id="demo"></select>
+          <div class="row"><label for="frame">Frame</label><span id="frameLabel">0 / 0</span></div>
+          <input id="frame" type="range" min="0" max="0" value="0">
+          <label for="subject">Subject</label><select id="subject"></select>
+        </div>
+        <div class="control-section">
+          <div class="section-title">Display</div>
+          <div class="checks">
+            <label><input id="showArrows" type="checkbox" checked> Arrows</label>
+            <label><input id="showLabels" type="checkbox" checked> Labels</label>
+            <label><input id="showBboxes" type="checkbox"> Bboxes</label>
+          </div>
+        </div>
+      </div>
+      <div class="panel-actions">
+        <div class="section-title">Playback</div>
+        <label>Speed</label>
+        <div class="speed-options" role="radiogroup" aria-label="Playback speed">
+          <label><input type="radio" name="speed" value="5"> 5 FPS</label>
+          <label><input type="radio" name="speed" value="20"> 20 FPS</label>
+          <label><input type="radio" name="speed" value="30" checked> 30 FPS</label>
+          <label><input type="radio" name="speed" value="60"> 60 FPS</label>
+        </div>
+        <div class="checks">
+          <label><input id="loopPlayback" type="checkbox"> Loop</label>
+        </div>
+        <button id="play" type="button" aria-pressed="false">Play</button>
+        <button id="screenshot" type="button">Export Still</button>
+        <button id="download" type="button">Download Video</button>
+      </div>
+    </aside>
+    <section class="stage-wrap">
+      <div id="status" class="status">Loading...</div>
+      <div class="legend" aria-label="Overlay legend">
+        <span class="legend-item"><span class="swatch good"></span>Correct / GT</span>
+        <span class="legend-item"><span class="swatch bad"></span>Prediction error</span>
+        <span class="legend-item"><span class="swatch box"></span>Debug bbox</span>
+      </div>
+      <div class="stage"><canvas id="canvas"></canvas></div>
+    </section>
+    <aside class="triplet-panel">
+      <div class="triplet-head">
+        <h2>Triplets</h2>
+        <span id="tripletCount" class="triplet-count">0</span>
+      </div>
+      <div id="tripletScope" class="triplet-scope"></div>
+      <div class="triplet-scope">Green rows/arrows match GT; red rows/arrows are prediction errors.</div>
+      <div id="metricsScope" class="triplet-scope"></div>
+      <div id="metrics" class="metrics"></div>
+      <div id="metadataSummary" class="metadata-summary"></div>
+      <div id="triplets" class="triplets"></div>
+    </aside>
+  </main>
+  <script src="../common/demo_common.js"></script>
+  <script>
+    const els = {
+      camera: document.getElementById("camera"),
+      resolution: document.getElementById("resolution"),
+      presets: document.getElementById("presets"),
+      overlayMode: document.getElementById("overlayMode"),
+      predictionRun: document.getElementById("predictionRun"),
+      predictionLabel: document.getElementById("predictionLabel"),
+      task: document.getElementById("task"),
+      demo: document.getElementById("demo"),
+      frame: document.getElementById("frame"),
+      frameLabel: document.getElementById("frameLabel"),
+      subject: document.getElementById("subject"),
+      play: document.getElementById("play"),
+      screenshot: document.getElementById("screenshot"),
+      download: document.getElementById("download"),
+      loopPlayback: document.getElementById("loopPlayback"),
+      speeds: Array.from(document.querySelectorAll('input[name="speed"]')),
+      showArrows: document.getElementById("showArrows"),
+      showLabels: document.getElementById("showLabels"),
+      showBboxes: document.getElementById("showBboxes"),
+      status: document.getElementById("status"),
+      canvas: document.getElementById("canvas"),
+      build: document.getElementById("build"),
+      tripletCount: document.getElementById("tripletCount"),
+      tripletScope: document.getElementById("tripletScope"),
+      metricsScope: document.getElementById("metricsScope"),
+      metrics: document.getElementById("metrics"),
+      metadataSummary: document.getElementById("metadataSummary"),
+      triplets: document.getElementById("triplets"),
+      stage: document.querySelector(".stage"),
+    };
+    const ctx = els.canvas.getContext("2d");
+    let currentDemos = [];
+    let presets = [];
+    let predictionFrameStride = 5;
+    let lastPayload = null;
+    let frameCache = new Map();
+    let decodedImageCache = new Map();
+    let decodedImagePixels = 0;
+    const decodedImagePixelBudget = 90 * 1024 * 1024;
+    let warmToken = 0;
+    let simulatorStarted = false;
+    let requestId = 0;
+    let isPlaying = false;
+    let isRecording = false;
+    let playTimer = null;
+    const preferredPredictionModel = "gemini 3 1 pro";
+    function selectedPlaybackFps() {
+      const selected = els.speeds.find(x => x.checked);
+      return selected ? Number(selected.value) : 30;
+    }
+    function setPlaybackFps(value) {
+      const target = String(value);
+      const match = els.speeds.find(x => x.value === target);
+      if (match) match.checked = true;
+    }
+    function isPredictionMode(mode = els.overlayMode.value) {
+      return mode === "prediction" || mode === "compare";
+    }
+    function normalizedPredictionText(value) {
+      return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+    }
+    function selectPreferredPredictionRun(force = false) {
+      if (!isPredictionMode()) return;
+      const options = Array.from(els.predictionRun.options);
+      if (!force && options.some(option => option.value === els.predictionRun.value)) return;
+      const match = options.find(option => {
+        const text = normalizedPredictionText(`${option.value} ${option.textContent}`);
+        return text.includes(preferredPredictionModel);
+      });
+      if (match) els.predictionRun.value = match.value;
+    }
+    function applyPredictionModeDefaults() {
+      if (!isPredictionMode()) return;
+      setPlaybackFps(5);
+      selectPreferredPredictionRun(true);
+    }
+    function frameStride() {
+      return isPredictionMode() ? predictionFrameStride : 1;
+    }
+    function setFrameStride() {
+      els.frame.step = String(frameStride());
+    }
+    function snapFrameToStride() {
+      const stride = frameStride();
+      const max = Number(els.frame.max);
+      const value = Number(els.frame.value);
+      const snapped = Math.min(max, Math.floor(value / stride) * stride);
+      els.frame.value = String(snapped);
+    }
+    function frameSequence(start, max) {
+      const stride = frameStride();
+      const frames = [];
+      const first = Math.min(max, Math.ceil(start / stride) * stride);
+      for (let frame = first; frame <= max; frame += stride) frames.push(frame);
+      return frames;
+    }
+    function playableFrames() {
+      return frameSequence(0, Number(els.frame.max));
+    }
+    function nextPlayableFrame(current) {
+      return playableFrames().find(frame => frame > current);
+    }
+    function resetToFirstPlayableFrame() {
+      const frames = playableFrames();
+      els.frame.value = String(frames.length ? frames[0] : 0);
+      updateFrameLabel();
+    }
+    function setStatus(text, isError=false, isLoading=false) {
+      els.status.textContent = text;
+      els.status.className = isError ? "status error" : (isLoading ? "status loading" : "status");
+    }
+    function setButtonBusy(button, value) {
+      return DemoCommon.setButtonBusy(button, value);
+    }
+    async function withButtonBusy(button, work) {
+      return DemoCommon.withButtonBusy(button, work);
+    }
+    function fitCanvasToStage() {
+      if (!els.canvas.width || !els.canvas.height) return;
+      const rect = els.stage.getBoundingClientRect();
+      const style = getComputedStyle(els.stage);
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const availableW = Math.max(1, rect.width - padX - 2);
+      const availableH = Math.max(1, rect.height - padY - 2);
+      const scale = Math.min(1, availableW / els.canvas.width, availableH / els.canvas.height);
+      els.canvas.style.width = `${Math.max(1, Math.floor(els.canvas.width * scale))}px`;
+      els.canvas.style.height = `${Math.max(1, Math.floor(els.canvas.height * scale))}px`;
+    }
+    async function api(path) {
+      return DemoCommon.fetchJson(path);
+    }
+    function fillSelect(select, items, getValue, getLabel) {
+      return DemoCommon.fillSelect(select, items, getValue, getLabel);
+    }
+    function hasOption(select, value) {
+      return DemoCommon.hasOption(select, value);
+    }
+    function prettyObjectName(value) {
+      return DemoCommon.prettyObjectName(value);
+    }
+    function prettyCamera(value) {
+      return value === "eye_in_hand" ? "Eye-in-hand" : "Agentview";
+    }
+    function formatPercent(value) {
+      return DemoCommon.formatPercent(value);
+    }
+    function renderPresetButtons() {
+      els.presets.innerHTML = "";
+      for (const preset of presets) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.preset = preset.id;
+        button.textContent = preset.label;
+        const desc = document.createElement("span");
+        desc.textContent = preset.description || `${prettyCamera(preset.camera)} ${preset.mode}`;
+        button.appendChild(desc);
+        button.addEventListener("click", () => withButtonBusy(button, () => applyPreset(preset)));
+        els.presets.appendChild(button);
+      }
+      if (!presets.length) {
+        const empty = document.createElement("div");
+        empty.className = "triplet-scope";
+        empty.textContent = "No local presets available";
+        els.presets.appendChild(empty);
+      }
+    }
+    function setPredictionControlsVisible() {
+      const visible = isPredictionMode();
+      els.predictionRun.style.display = visible ? "" : "none";
+      els.predictionLabel.style.display = visible ? "" : "none";
+      els.predictionRun.disabled = !visible;
+    }
+    function currentPredictionId() {
+      return isPredictionMode() ? (els.predictionRun.value || "") : "";
+    }
+    function overlayParams() {
+      return {
+        mode: els.overlayMode.value,
+        prediction: currentPredictionId(),
+      };
+    }
+    function statusForOverlay(overlay) {
+      if (overlay.mode === "prediction" || overlay.mode === "compare") {
+        if (!overlay.prediction_available) {
+          return `${prettyCamera(overlay.camera)} prediction | no prediction record at frame ${overlay.frame}; using ${frameStride()}-frame prediction stride`;
+        }
+        const metrics = overlay.metrics || {};
+        const swapped = overlay.duplicate_bowl_swap_applied ? " | bowl IDs normalized" : "";
+        const prefix = overlay.mode === "compare" ? "GT vs prediction" : "prediction";
+        return `${prettyCamera(overlay.camera)} ${prefix} | F1 ${formatPercent(metrics.f1)} | TP ${metrics.tp ?? 0} FP ${metrics.fp ?? 0} FN ${metrics.fn ?? 0} | ${overlay.correct_visible_triplet_count}/${overlay.visible_triplet_count} visible edges correct${swapped}`;
+      }
+      return `${prettyCamera(overlay.camera)} ground truth | ${overlay.visible_triplet_count} visible edges | ${overlay.triplet_count} total triplets`;
+    }
+    async function loadTasks() {
+      const health = await api("/api/health");
+      els.build.textContent = health.build;
+      simulatorStarted = Boolean(health.simulator_started);
+      predictionFrameStride = Number(health.prediction_frame_stride || 5);
+      presets = health.presets || [];
+      fillSelect(els.camera, health.cameras, x => x.id, x => x.name);
+      const defaultPreset = presets[0];
+      els.camera.value = defaultPreset?.camera || health.default_camera;
+      fillSelect(els.resolution, health.resolutions, x => x.id, x => x.name);
+      els.resolution.value = String(defaultPreset?.res || health.default_res || health.res || 1024);
+      const data = await api("/api/tasks");
+      fillSelect(els.task, data.tasks, x => x.id, x => x.name);
+      if (defaultPreset && hasOption(els.task, defaultPreset.task)) els.task.value = defaultPreset.task;
+      if (defaultPreset) els.overlayMode.value = defaultPreset.mode || "gt";
+      setPredictionControlsVisible();
+      renderPresetButtons();
+      await loadDemos();
+      if (defaultPreset) await applyPresetDetails(defaultPreset);
+    }
+    async function loadPredictionRuns() {
+      const current = els.predictionRun.value;
+      const params = new URLSearchParams({ camera: els.camera.value, task: els.task.value });
+      const data = await api(`/api/predictions?${params.toString()}`);
+      if (!data.runs.length) {
+        fillSelect(els.predictionRun, [{ id: "", name: "No predictions for task/camera" }], x => x.id, x => x.name);
+        els.predictionRun.value = "";
+      } else {
+        fillSelect(els.predictionRun, data.runs, x => x.id, x => x.name);
+        els.predictionRun.value = data.runs.some(run => run.id === current) ? current : data.runs[0].id;
+        selectPreferredPredictionRun(true);
+      }
+      setPredictionControlsVisible();
+    }
+    async function applyPreset(preset) {
+      stopPlayback();
+      cancelBackgroundWarm();
+      if (hasOption(els.camera, preset.camera)) els.camera.value = preset.camera;
+      if (hasOption(els.resolution, String(preset.res || ""))) els.resolution.value = String(preset.res);
+      if (hasOption(els.task, preset.task)) els.task.value = preset.task;
+      els.overlayMode.value = preset.mode || "gt";
+      setPredictionControlsVisible();
+      await loadDemos();
+      await applyPresetDetails(preset);
+    }
+    async function applyPresetDetails(preset) {
+      if (preset.demo && hasOption(els.demo, preset.demo)) {
+        els.demo.value = preset.demo;
+        const frameCount = selectedDemoFrameCount();
+        els.frame.max = String(Math.max(0, frameCount - 1));
+      }
+      if (preset.mode === "prediction" || preset.mode === "compare") {
+        await loadPredictionRuns();
+        const preferred = String(preset.preferred_model || "").toLowerCase();
+        const match = Array.from(els.predictionRun.options).find(option => option.value.toLowerCase().includes(preferred));
+        if (match) els.predictionRun.value = match.value;
+        applyPredictionModeDefaults();
+      }
+      const max = Number(els.frame.max);
+      els.frame.value = String(Math.min(max, Math.max(0, Number(preset.frame || 0))));
+      setFrameStride();
+      snapFrameToStride();
+      updateFrameLabel();
+      await loadFrame();
+    }
+    async function loadDemos() {
+      stopPlayback();
+      cancelBackgroundWarm();
+      const params = new URLSearchParams({ camera: els.camera.value, task: els.task.value });
+      const data = await api(`/api/demos?${params.toString()}`);
+      currentDemos = data.demos;
+      fillSelect(els.demo, data.demos, x => x.id, x => `${x.id} (${x.frame_count} frames)`);
+      const first = data.demos[0] || { frame_count: 1 };
+      els.frame.min = "0";
+      els.frame.max = String(Math.max(0, first.frame_count - 1));
+      els.frame.value = "0";
+      setFrameStride();
+      updateFrameLabel(first.frame_count);
+      await loadPredictionRuns();
+      await loadFrame();
+    }
+    function selectedDemoFrameCount() {
+      const selected = currentDemos.find(x => x.id === els.demo.value);
+      return selected ? selected.frame_count : 1;
+    }
+    async function onDemoChanged() {
+      stopPlayback();
+      cancelBackgroundWarm();
+      const frameCount = selectedDemoFrameCount();
+      els.frame.min = "0";
+      els.frame.max = String(Math.max(0, frameCount - 1));
+      els.frame.value = "0";
+      setFrameStride();
+      updateFrameLabel(frameCount);
+      await loadFrame();
+    }
+    function updateFrameLabel(frameCount) {
+      const current = Number(els.frame.value);
+      const max = frameCount ?? Number(els.frame.max) + 1;
+      els.frameLabel.textContent = `${current} / ${Math.max(0, max - 1)}`;
+    }
+    function syncSubjectOptions(objects) {
+      const current = els.subject.value || "akita_black_bowl_1";
+      const options = ["All", ...objects];
+      fillSelect(els.subject, options, x => x, x => x === "All" ? "All objects" : prettyObjectName(x));
+      els.subject.value = options.includes(current) ? current : (options.includes("akita_black_bowl_1") ? "akita_black_bowl_1" : "All");
+    }
+    async function loadFrame() {
+      const id = ++requestId;
+      const cacheKey = currentFrameCacheKey();
+      const cached = frameCache.get(cacheKey);
+      if (cached) {
+        await attachImage(cached);
+        lastPayload = cached;
+        syncSubjectOptions(cached.overlay.objects);
+        updateFrameLabel(cached.overlay.frame_count);
+        drawPayload(cached, id);
+        setStatus(statusForOverlay(cached.overlay));
+        return true;
+      }
+      setStatus(
+        simulatorStarted
+          ? `Rendering current frame ${els.frame.value}`
+          : "Starting simulator",
+        false,
+        true,
+      );
+      const params = new URLSearchParams({ camera: els.camera.value, res: els.resolution.value, task: els.task.value, demo: els.demo.value, frame: els.frame.value, subject: els.subject.value || "akita_black_bowl_1", ...overlayParams() });
+      try {
+        const data = await api(`/api/frame?${params.toString()}`);
+        if (id !== requestId) return;
+        if (!data.image_cached) simulatorStarted = true;
+        await attachImage(data);
+        frameCache.set(cacheKey, data);
+        lastPayload = data;
+        syncSubjectOptions(data.overlay.objects);
+        updateFrameLabel(data.overlay.frame_count);
+        drawPayload(data, id);
+        setStatus(statusForOverlay(data.overlay));
+        scheduleBackgroundWarm();
+        return true;
+      } catch (err) {
+        if (id !== requestId) return;
+        setStatus(`Unable to render frame: ${err.message}`, true);
+        return false;
+      }
+    }
+    function currentFrameCacheKey(frame = els.frame.value) {
+      return `${els.camera.value}|${els.resolution.value}|${els.overlayMode.value}|${currentPredictionId()}|${els.task.value}|${els.demo.value}|${frame}|${els.subject.value || "akita_black_bowl_1"}`;
+    }
+    async function fetchFrameForCache(frame) {
+      const cacheKey = currentFrameCacheKey(frame);
+      const cached = frameCache.get(cacheKey);
+      if (cached) return cached;
+      const params = new URLSearchParams({
+        camera: els.camera.value,
+        res: els.resolution.value,
+        task: els.task.value,
+        demo: els.demo.value,
+        frame: String(frame),
+        subject: els.subject.value || "akita_black_bowl_1",
+        ...overlayParams(),
+      });
+      const data = await api(`/api/frame?${params.toString()}`);
+      await attachImage(data);
+      frameCache.set(cacheKey, data);
+      return data;
+    }
+    async function attachImage(data) {
+      data._img = await loadImageCached(data.image_url);
+      return data;
+    }
+    function cacheImage(url, img) {
+      const pixels = Math.max(1, (img.naturalWidth || img.width || 1) * (img.naturalHeight || img.height || 1));
+      if (decodedImageCache.has(url)) {
+        const existing = decodedImageCache.get(url);
+        decodedImagePixels -= existing.pixels;
+        decodedImageCache.delete(url);
+      }
+      decodedImageCache.set(url, { img, pixels });
+      decodedImagePixels += pixels;
+      while (decodedImagePixels > decodedImagePixelBudget && decodedImageCache.size > 1) {
+        const [oldUrl, oldEntry] = decodedImageCache.entries().next().value;
+        decodedImageCache.delete(oldUrl);
+        decodedImagePixels -= oldEntry.pixels;
+      }
+    }
+    async function loadImageCached(src) {
+      const cached = decodedImageCache.get(src);
+      if (cached) {
+        decodedImageCache.delete(src);
+        decodedImageCache.set(src, cached);
+        return cached.img;
+      }
+      const img = await loadImage(src);
+      cacheImage(src, img);
+      return img;
+    }
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = src;
+      });
+    }
+    function cancelBackgroundWarm() {
+      warmToken += 1;
+    }
+    function scheduleBackgroundWarm() {
+      const token = ++warmToken;
+      const start = Number(els.frame.value);
+      const max = Number(els.frame.max);
+      window.setTimeout(() => {
+        preloadFrameRange(start, max, () => token === warmToken && !isPlaying && !isRecording, true).catch(() => {});
+      }, 80);
+    }
+    async function preloadFrameRange(start, max, shouldContinue, background=false) {
+      const chunkSize = 12;
+      const targetFrames = frameSequence(start, max);
+      let cachedCount = 0;
+      const totalFrames = Math.max(1, targetFrames.length);
+      function setLoadingProgress() {
+        if (background) return;
+        const percent = Math.min(100, Math.round((cachedCount / totalFrames) * 100));
+        setStatus(`Preparing playback ${percent}%`, false, true);
+      }
+      for (let index = 0; index < targetFrames.length; index += chunkSize) {
+        if (!shouldContinue()) return false;
+        const chunkFrames = targetFrames.slice(index, index + chunkSize);
+        const missing = [];
+        for (const frame of chunkFrames) {
+          if (frameCache.has(currentFrameCacheKey(frame))) {
+            cachedCount += 1;
+          } else {
+            missing.push(frame);
+          }
+        }
+        if (!missing.length) {
+          setLoadingProgress();
+          continue;
+        }
+        const missingRanges = contiguousRanges(missing);
+        for (const [rangeStart, rangeEnd] of missingRanges) {
+          if (!shouldContinue()) return false;
+          const params = new URLSearchParams({
+            camera: els.camera.value,
+            res: els.resolution.value,
+            task: els.task.value,
+            demo: els.demo.value,
+            start: String(rangeStart),
+            end: String(rangeEnd),
+            step: String(frameStride()),
+            subject: els.subject.value || "akita_black_bowl_1",
+            ...overlayParams(),
+          });
+          const data = await api(`/api/preload?${params.toString()}`);
+          for (const frameData of data.frames) {
+            const frame = frameData.overlay.frame;
+            await attachImage(frameData);
+            frameCache.set(currentFrameCacheKey(frame), frameData);
+            cachedCount += 1;
+            setLoadingProgress();
+            if (frame === start) {
+              lastPayload = frameData;
+              syncSubjectOptions(frameData.overlay.objects);
+              drawPayload(frameData, requestId);
+            }
+          }
+        }
+        setLoadingProgress();
+      }
+      return true;
+    }
+    async function preloadRemainingFrames() {
+      return preloadFrameRange(Number(els.frame.value), Number(els.frame.max), () => isPlaying);
+    }
+    function contiguousRanges(values) {
+      const ranges = [];
+      let start = null;
+      let prev = null;
+      const stride = frameStride();
+      for (const value of values) {
+        if (start === null) {
+          start = value;
+          prev = value;
+          continue;
+        }
+        if (value === prev + stride) {
+          prev = value;
+          continue;
+        }
+        ranges.push([start, prev]);
+        start = value;
+        prev = value;
+      }
+      if (start !== null) ranges.push([start, prev]);
+      return ranges;
+    }
+    function drawPayload(data, id = requestId) {
+      if (data._img) {
+        if (id !== requestId) return;
+        const img = data._img;
+        drawImageAndOverlay(img, data.overlay);
+        renderTriplets(data.overlay);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        if (id !== requestId) return;
+        drawImageAndOverlay(img, data.overlay);
+        renderTriplets(data.overlay);
+      };
+      img.src = data.image_url;
+    }
+    function drawImageAndOverlay(img, overlay) {
+      if (overlay.mode === "compare") {
+        const scale = overlayDrawScale(overlay);
+        const gap = 20 * scale;
+        els.canvas.width = img.width * 2 + gap;
+        els.canvas.height = img.height;
+        ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
+        ctx.fillStyle = "#15171c";
+        ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
+        ctx.drawImage(img, 0, 0);
+        ctx.drawImage(img, img.width + gap, 0);
+        drawOverlay(overlay, { edges: overlay.gt_edges || [], xOffset: 0 });
+        drawOverlay(overlay, { edges: overlay.edges || [], xOffset: img.width + gap });
+        drawCanvasTitle("Ground Truth", 10 * scale, 22 * scale, scale);
+        drawCanvasTitle("Prediction", img.width + gap + 10 * scale, 22 * scale, scale);
+        fitCanvasToStage();
+        return;
+      }
+      els.canvas.width = img.width;
+      els.canvas.height = img.height;
+      ctx.clearRect(0, 0, img.width, img.height);
+      ctx.drawImage(img, 0, 0);
+      drawOverlay(overlay);
+      fitCanvasToStage();
+    }
+    function overlayDrawScale(overlay) {
+      const width = Number(overlay?.target_size?.width || 512);
+      return Math.max(1, width / 512);
+    }
+    function drawCanvasTitle(text, x, y, scale = 1) {
+      ctx.save();
+      ctx.font = `bold ${11 * scale}px Arial`;
+      const width = ctx.measureText(text).width + 12 * scale;
+      ctx.fillStyle = "rgba(17, 24, 39, 0.78)";
+      ctx.fillRect(x - 3 * scale, y - 14 * scale, width, 19 * scale);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(text, x + 2 * scale, y);
+      ctx.restore();
+    }
+    function drawOverlay(overlay, options = {}) {
+      const xOffset = options.xOffset || 0;
+      const edges = options.edges || overlay.edges;
+      const scale = overlayDrawScale(overlay);
+      if (els.showBboxes.checked) drawBboxes(overlay.bboxes, xOffset, scale);
+      if (els.showArrows.checked) drawEdges(edges, els.showLabels.checked, xOffset, scale);
+    }
+    function drawBboxes(bboxes, xOffset = 0, scale = 1) {
+      ctx.save();
+      ctx.lineWidth = 1.5 * scale;
+      ctx.strokeStyle = "rgba(255, 215, 0, 0.95)";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+      ctx.font = `${10 * scale}px Arial`;
+      for (const item of bboxes) {
+        const [x1, y1, x2, y2] = item.bbox;
+        ctx.strokeRect(x1 + xOffset, y1, x2 - x1, y2 - y1);
+        ctx.fillText(prettyObjectName(item.object), x1 + xOffset + 2 * scale, Math.max(12 * scale, y1 - 3 * scale));
+      }
+      ctx.restore();
+    }
+    function drawEdges(edges, labels, xOffset = 0, scale = 1) {
+      ctx.save();
+      ctx.lineWidth = 1.5 * scale;
+      ctx.font = `bold ${10.5 * scale}px Arial`;
+      for (const edge of edges) {
+        const color = edge.correct === false ? "#d92d20" : "#00c878";
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        drawArrow(edge.start[0] + xOffset, edge.start[1], edge.end[0] + xOffset, edge.end[1], scale);
+        if (labels) {
+          const lx = edge.start[0] * 0.58 + edge.end[0] * 0.42 + xOffset;
+          const ly = edge.start[1] * 0.58 + edge.end[1] * 0.42;
+          drawEdgeLabel(edge.label, lx + 3 * scale, ly - 3 * scale, color, scale);
+        }
+      }
+      ctx.restore();
+    }
+    function drawEdgeLabel(text, x, y, color, scale = 1) {
+      DemoCommon.drawEdgeLabel(ctx, text, x, y, color, scale);
+    }
+    function drawArrow(x1, y1, x2, y2, scale = 1) {
+      DemoCommon.drawArrow(ctx, x1, y1, x2, y2, scale);
+    }
+    function renderTriplets(overlay) {
+      const triplets = overlay.triplets || [];
+      const selectedSubject = els.subject.value || "akita_black_bowl_1";
+      const selectedOnly = selectedSubject.toLowerCase() !== "all";
+      els.tripletCount.textContent = `${triplets.length} total`;
+      els.tripletScope.textContent = selectedOnly ? `${prettyObjectName(selectedSubject)} highlighted` : "All subjects";
+      if (isPredictionMode(overlay.mode)) {
+        const selectedRun = els.predictionRun.selectedOptions[0]?.textContent || els.predictionRun.value || "No prediction selected";
+        els.metricsScope.textContent = `Prediction metrics: ${selectedRun}`;
+      } else {
+        els.metricsScope.textContent = "Prediction metrics: switch to Predictions or Compare to score a selected run";
+      }
+      DemoCommon.renderMetrics(els.metrics, overlay.metrics);
+      DemoCommon.renderMetadataSummary(
+        els.metadataSummary,
+        null,
+        "Phase: Simulator | metadata not used | gates: none",
+      );
+      DemoCommon.renderGroupedTriplets(els.triplets, triplets, {
+        selectedSubject,
+        pretty: prettyObjectName,
+      });
+    }
+    function wait(ms) {
+      return DemoCommon.wait(ms);
+    }
+    function videoMimeType() {
+      return DemoCommon.mediaRecorderType();
+    }
+    function downloadBlob(blob, filename) {
+      DemoCommon.downloadBlob(blob, filename);
+    }
+    function videoFilename() {
+      const safeTask = DemoCommon.safeFilename(els.task.value);
+      const safeDemo = DemoCommon.safeFilename(els.demo.value);
+      const safeCamera = DemoCommon.safeFilename(els.camera.value);
+      const safeRes = els.resolution.value.replace(/[^0-9]+/g, "");
+      return `${safeTask}_${safeDemo}_${safeCamera}_${safeRes}px_${selectedPlaybackFps()}fps.webm`;
+    }
+    function stillFilename() {
+      const safeTask = DemoCommon.safeFilename(els.task.value);
+      const safeDemo = DemoCommon.safeFilename(els.demo.value);
+      const safeCamera = DemoCommon.safeFilename(els.camera.value);
+      return `${safeTask}_${safeDemo}_${safeCamera}_frame_${els.frame.value}.png`;
+    }
+    function exportStill() {
+      if (!lastPayload) {
+        setStatus("No rendered frame is ready to export.", true);
+        return Promise.resolve();
+      }
+      setStatus("Exporting still frame", false, true);
+      return new Promise(resolve => {
+        els.canvas.toBlob(blob => {
+          if (!blob) {
+            setStatus("Still export failed.", true);
+            resolve();
+            return;
+          }
+          downloadBlob(blob, stillFilename());
+          setStatus(`Exported still frame ${els.frame.value}`);
+          resolve();
+        }, "image/png");
+      });
+    }
+    function setRecording(value) {
+      isRecording = value;
+      els.download.disabled = value;
+      els.play.disabled = value;
+      setButtonBusy(els.download, value);
+      els.download.textContent = value ? "Preparing Video..." : "Download Video";
+    }
+    async function downloadVideo() {
+      stopPlayback();
+      if (!window.MediaRecorder || !els.canvas.captureStream) {
+        setStatus("Video download is not supported by this browser.", true);
+        return;
+      }
+      if (isRecording) return;
+      const originalFrame = els.frame.value;
+      const max = Number(els.frame.max);
+      let recordStart = Number(els.frame.value);
+      snapFrameToStride();
+      if (nextPlayableFrame(Number(els.frame.value)) === undefined) resetToFirstPlayableFrame();
+      recordStart = Number(els.frame.value);
+      const framesToRecord = frameSequence(recordStart, max);
+      const fps = selectedPlaybackFps();
+      const frameMs = 1000 / fps;
+      const finalHoldMs = Math.max(500, frameMs * 6);
+      setRecording(true);
+      try {
+        els.frame.value = String(recordStart);
+        updateFrameLabel();
+        const ready = await preloadFrameRange(recordStart, max, () => isRecording);
+        if (!ready || !isRecording) return;
+
+        const stream = els.canvas.captureStream(fps);
+        const chunks = [];
+        const mimeType = videoMimeType();
+        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        const stopped = new Promise(resolve => {
+          recorder.ondataavailable = event => {
+            if (event.data && event.data.size > 0) chunks.push(event.data);
+          };
+          recorder.onstop = resolve;
+        });
+        recorder.start();
+        for (let index = 0; index < framesToRecord.length; index += 1) {
+          if (!isRecording) break;
+          const frame = framesToRecord[index];
+          els.frame.value = String(frame);
+          updateFrameLabel();
+          const payload = frameCache.get(currentFrameCacheKey(frame));
+          if (payload) {
+            lastPayload = payload;
+            drawPayload(payload, requestId);
+          }
+          const percent = Math.min(100, Math.round(((index + 1) / framesToRecord.length) * 100));
+          setStatus(`Recording video ${percent}%`, false, true);
+          await wait(frameMs);
+        }
+        if (isRecording && framesToRecord.length) {
+          setStatus("Recording final frame", false, true);
+          await wait(finalHoldMs);
+        }
+        recorder.stop();
+        stream.getTracks().forEach(track => track.stop());
+        await stopped;
+        downloadBlob(new Blob(chunks, { type: mimeType || "video/webm" }), videoFilename());
+        setStatus(`Downloaded video at ${fps} FPS`);
+      } catch (err) {
+        setStatus(err.message, true);
+      } finally {
+        setRecording(false);
+        els.frame.value = originalFrame;
+        updateFrameLabel();
+        loadFrame();
+      }
+    }
+    function setPlaying(value) {
+      isPlaying = value;
+      els.play.textContent = value ? "Pause" : "Play";
+      els.play.setAttribute("aria-pressed", value ? "true" : "false");
+    }
+    function stopPlayback() {
+      setPlaying(false);
+      if (playTimer !== null) {
+        clearTimeout(playTimer);
+        playTimer = null;
+      }
+    }
+    async function stepFrame(delta) {
+      stopPlayback();
+      const stride = frameStride();
+      const max = Number(els.frame.max);
+      const current = Number(els.frame.value);
+      const next = Math.min(max, Math.max(0, current + delta * stride));
+      els.frame.value = String(next);
+      snapFrameToStride();
+      updateFrameLabel();
+      await loadFrame();
+    }
+    async function playStep() {
+      if (!isPlaying) return;
+      const max = Number(els.frame.max);
+      const current = Number(els.frame.value);
+      const next = nextPlayableFrame(current);
+      if (next === undefined) {
+        if (els.loopPlayback.checked) {
+          resetToFirstPlayableFrame();
+          const ok = await loadFrame();
+          if (!isPlaying) return;
+          if (!ok) {
+            stopPlayback();
+            return;
+          }
+          playTimer = setTimeout(playStep, 1000 / selectedPlaybackFps());
+          return;
+        }
+        stopPlayback();
+        return;
+      }
+      els.frame.value = String(next);
+      updateFrameLabel();
+      const ok = await loadFrame();
+      if (!isPlaying) return;
+      if (!ok) {
+        stopPlayback();
+        return;
+      }
+      playTimer = setTimeout(playStep, 1000 / selectedPlaybackFps());
+    }
+    let frameTimer = null;
+    els.camera.addEventListener("change", loadDemos);
+    els.resolution.addEventListener("change", () => { stopPlayback(); cancelBackgroundWarm(); loadFrame(); });
+    els.overlayMode.addEventListener("change", async () => {
+      stopPlayback();
+      setPredictionControlsVisible();
+      if (isPredictionMode()) setPlaybackFps(5);
+      setFrameStride();
+      snapFrameToStride();
+      updateFrameLabel();
+      await loadPredictionRuns();
+      applyPredictionModeDefaults();
+      await loadFrame();
+    });
+    els.predictionRun.addEventListener("change", () => { stopPlayback(); loadFrame(); });
+    els.task.addEventListener("change", loadDemos);
+    els.demo.addEventListener("change", onDemoChanged);
+    els.frame.addEventListener("input", () => { stopPlayback(); snapFrameToStride(); updateFrameLabel(); clearTimeout(frameTimer); frameTimer = setTimeout(loadFrame, 80); });
+    els.subject.addEventListener("change", () => { stopPlayback(); loadFrame(); });
+    els.download.addEventListener("click", () => withButtonBusy(els.download, downloadVideo));
+    els.screenshot.addEventListener("click", () => withButtonBusy(els.screenshot, exportStill));
+    els.play.addEventListener("click", async () => {
+      if (isPlaying) {
+        stopPlayback();
+        return;
+      }
+      snapFrameToStride();
+      if (nextPlayableFrame(Number(els.frame.value)) === undefined) resetToFirstPlayableFrame();
+      setPlaying(true);
+      setButtonBusy(els.play, true);
+      try {
+        const ready = await preloadRemainingFrames();
+        if (!ready || !isPlaying) return;
+        setStatus(`Playing cached frames at ${selectedPlaybackFps()} FPS`);
+        playStep();
+      } finally {
+        setButtonBusy(els.play, false);
+      }
+    });
+    for (const el of els.speeds) {
+      el.addEventListener("change", () => {
+        if (isPlaying) setStatus(`Playing cached frames at ${selectedPlaybackFps()} FPS`);
+      });
+    }
+    for (const el of [els.showArrows, els.showLabels, els.showBboxes]) {
+      el.addEventListener("change", () => { if (lastPayload) drawPayload(lastPayload); });
+    }
+    document.addEventListener("keydown", event => {
+      if (event.target && ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(event.target.tagName)) return;
+      if (event.code === "Space") {
+        event.preventDefault();
+        els.play.click();
+      } else if (event.code === "ArrowRight") {
+        event.preventDefault();
+        stepFrame(1);
+      } else if (event.code === "ArrowLeft") {
+        event.preventDefault();
+        stepFrame(-1);
+      }
+    });
+    window.addEventListener("resize", fitCanvasToStage);
+    loadTasks().catch(err => setStatus(err.message, true));
+  </script>
+</body>
+</html>

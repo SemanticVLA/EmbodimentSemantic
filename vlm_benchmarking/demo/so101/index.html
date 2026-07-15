@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SO101 Demo</title>
+  <link rel="stylesheet" href="../common/demo.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>SO101 Demo</h1>
+      <p>Real-world 2D Proxy GT</p>
+    </div>
+    <div id="buildStatus" class="build build-status">Loading dataset</div>
+  </header>
+
+  <main class="workspace">
+    <aside class="control-panel scroll-panel" aria-label="Visualization controls">
+      <section class="control-section">
+        <h2 class="section-title">View</h2>
+        <label for="camera">Camera</label>
+        <select id="camera">
+          <option value="agent_view">Agent view</option>
+          <option value="wrist">Wrist</option>
+        </select>
+
+        <label for="evidenceMode">Proxy evidence</label>
+        <select id="evidenceMode">
+          <option value="gt">GT</option>
+        </select>
+
+        <label for="overlayMode">Presentation</label>
+        <select id="overlayMode">
+          <option value="proxy">2D Proxy GT</option>
+          <option value="prediction">Gemini prediction</option>
+          <option value="compare">Proxy GT vs prediction</option>
+        </select>
+      </section>
+
+      <section class="control-section">
+        <h2 class="section-title">Sequence</h2>
+        <label for="task">Task</label>
+        <select id="task"></select>
+
+        <label for="episode">Episode</label>
+        <select id="episode"></select>
+
+        <div class="label-row">
+          <label for="frame">Sampled frame</label>
+          <span id="frameValue">0 / 0</span>
+        </div>
+        <input id="frame" type="range" min="0" max="0" value="0">
+
+        <label for="subject">Subject</label>
+        <select id="subject"><option value="black_bowl">Black bowl</option></select>
+      </section>
+
+      <section class="control-section">
+        <h2 class="section-title">Overlay</h2>
+        <label class="check-row"><input id="showArrows" type="checkbox" checked> Arrows</label>
+        <label class="check-row"><input id="showLabels" type="checkbox" checked> Labels</label>
+        <label class="check-row"><input id="showBboxes" type="checkbox"> Bboxes</label>
+      </section>
+
+      <section class="control-section">
+        <h2 class="section-title">Playback</h2>
+        <div class="speed-grid" role="radiogroup" aria-label="Playback speed">
+          <label><input type="radio" name="speed" value="1"> 1 FPS</label>
+          <label><input type="radio" name="speed" value="5" checked> 5 FPS</label>
+          <label><input type="radio" name="speed" value="30"> 30 FPS</label>
+        </div>
+        <label class="check-row"><input id="continuousVideo" type="checkbox"> Continuous source video</label>
+        <label class="check-row"><input id="loop" type="checkbox" checked> Loop</label>
+      </section>
+
+      <div class="panel-actions">
+        <button id="playButton" type="button">Play</button>
+        <button id="stillButton" type="button">Export Still</button>
+        <button id="videoButton" type="button">Download Video</button>
+      </div>
+    </aside>
+
+    <section class="stage-wrap viewer-column" aria-label="Scene graph visualization">
+      <div id="sceneStatus" class="status scene-status">Preparing frame</div>
+      <div class="legend" aria-label="Overlay legend">
+        <span class="legend-item"><i class="swatch proxy"></i> Proxy relation</span>
+        <span class="legend-item"><i class="swatch correct"></i> Matching prediction</span>
+        <span class="legend-item"><i class="swatch incorrect"></i> Prediction error</span>
+      </div>
+      <div class="canvas-shell">
+        <canvas id="sceneCanvas" width="640" height="480"></canvas>
+        <video id="sourceVideo" muted playsinline preload="metadata"></video>
+        <div id="loadingOverlay" class="loading-overlay" hidden>
+          <span></span><span></span><span></span>
+          <strong id="loadingText">Loading</strong>
+        </div>
+      </div>
+    </section>
+
+    <aside class="triplet-panel scroll-panel" aria-label="Triplets and provenance">
+      <div class="triplet-header">
+        <div>
+          <h2>Triplets</h2>
+          <p id="tripletSubtitle">2D Proxy GT</p>
+        </div>
+        <strong id="tripletCount">0</strong>
+      </div>
+      <div id="metrics" class="metrics"></div>
+      <div id="metadataSummary" class="metadata-summary"></div>
+      <div id="tripletList" class="triplet-list"></div>
+    </aside>
+  </main>
+
+  <script src="../common/demo_common.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

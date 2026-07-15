@@ -1,0 +1,6 @@
+numpy>=1.24
+Pillow>=9.4
+PyYAML>=6.0
+pyarrow>=14.0
+h5py>=3.9
+pytest>=8.0
