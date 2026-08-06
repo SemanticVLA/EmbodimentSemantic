@@ -3,7 +3,7 @@ primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
-  # Change this to "libero-runtime" to restore live simulator rendering.
+  # Change this to "libero-runtime" to check the online dataset with live LIBERO rendering.
   target = "production"
 
 [http_service]

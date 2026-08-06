@@ -13,3 +13,5 @@
 vlm_benchmarking/demo/**/__pycache__/**
 vlm_benchmarking/demo/**/tests/**
 vlm_benchmarking/demo/so101_proxy_demo/artifacts/**
+*/hdf5_conversion_previews/
+*/lora_datasets_smoketest/

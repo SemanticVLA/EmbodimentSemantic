@@ -23,3 +23,8 @@ num2words
 # (omit --extra-index-url if you have a CUDA GPU)
 # lerobot pulls in: torch, torchvision, gymnasium, huggingface-hub, safetensors,
 #   transformers, einops, opencv-python-headless, draccus, tqdm, termcolor, etc.
+#
+# hdf5_to_lerobot_dataset.py additionally needs the [dataset] extra
+# (LeRobotDataset.create/add_frame/save_episode); train_lora.sh needs [peft]
+# (--peft.* flags, real LoRA). Neither is pulled in by [pi] alone:
+#   pip install "lerobot[dataset]" "lerobot[peft]"

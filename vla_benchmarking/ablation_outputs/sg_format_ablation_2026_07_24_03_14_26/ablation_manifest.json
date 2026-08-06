@@ -1,0 +1,36 @@
+{
+  "run_id": "sg_format_ablation_2026_07_24_03_14_26",
+  "model": "HuggingFaceVLA/smolvla_libero",
+  "tasks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "formats": [
+    "triplet_published",
+    "triplet_human",
+    "triplet_human_bar",
+    "triplet_human_shared_subject",
+    "natural_separate",
+    "natural_compact",
+    "natural_compact_current",
+    "natural_compact_no_label",
+    "natural_compact_context_first"
+  ],
+  "episodes": 1,
+  "batch_size": 1,
+  "seed": 1000,
+  "device": "cpu",
+  "prompt_audit": true,
+  "token_audit": true,
+  "videos": true,
+  "max_videos": 1,
+  "repo_commit": "643fb4059a5bf06f66b8a9b007d4e2b06cd5ceb6"
+}

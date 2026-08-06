@@ -1,0 +1,255 @@
+[2026-07-24 10:49:21] COMMAND: C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\run_lerobot_eval_with_context.py --eval.use_async_envs=false --output_dir=C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human_bar
+[stderr] [robosuite WARNING] No private macro file found! (__init__.py:7)
+[stderr] WARNING:robosuite_logs:No private macro file found!
+[stderr] [robosuite WARNING] It is recommended to use a private macro file (__init__.py:8)
+[stderr] WARNING:robosuite_logs:It is recommended to use a private macro file
+[stderr] [robosuite WARNING] To setup, run: python C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\robosuite/scripts/setup_macros.py (__init__.py:9)
+[stderr] WARNING:robosuite_logs:To setup, run: python C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\robosuite/scripts/setup_macros.py
+[stderr] Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+[stderr] Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+[stderr] See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+[stderr] WARNING 2026-07-24 10:50:12 ice_utils.py:34 No accelerated backend detected. Using default cpu, this will be slow.
+[stderr] WARNING 2026-07-24 10:50:12 \policies.py:86 Device 'cuda' is not available. Switching to 'cpu'.
+[stderr] WARNING 2026-07-24 10:50:13 figs\eval.py:69 No job name provided, using 'libero_smolvla' as job name.
+[stderr] INFO 2026-07-24 10:50:13 bot_eval.py:522 {'env': {'camera_name': 'agentview_image,robot0_eye_in_hand_image',
+[stderr]          'camera_name_mapping': None,
+[stderr]          'control_mode': 'relative',
+[stderr]          'disable_env_checker': True,
+[stderr]          'episode_length': None,
+[stderr]          'features': {'action': {'shape': (7,),
+[stderr]                                  'type': <FeatureType.ACTION: 'ACTION'>},
+[stderr]                       'pixels/agentview_image': {'shape': (360, 360, 3),
+[stderr]                                                  'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                       'pixels/robot0_eye_in_hand_image': {'shape': (360,
+[stderr]                                                                     360,
+[stderr]                                                                     3),
+[stderr]                                                           'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                       'robot_state/eef/mat': {'shape': (3, 3),
+[stderr]                                               'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/eef/pos': {'shape': (3,),
+[stderr]                                               'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/eef/quat': {'shape': (4,),
+[stderr]                                                'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/gripper/qpos': {'shape': (2,),
+[stderr]                                                    'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/gripper/qvel': {'shape': (2,),
+[stderr]                                                    'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/joints/pos': {'shape': (7,),
+[stderr]                                                  'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/joints/vel': {'shape': (7,),
+[stderr]                                                  'type': <FeatureType.STATE: 'STATE'>}},
+[stderr]          'features_map': {'action': 'action',
+[stderr]                           'pixels/agentview_image': 'observation.images.image',
+[stderr]                           'pixels/robot0_eye_in_hand_image': 'observation.images.image2',
+[stderr]                           'robot_state/eef/mat': 'observation.state.eef_mat',
+[stderr]                           'robot_state/eef/pos': 'observation.state.eef_pos',
+[stderr]                           'robot_state/eef/quat': 'observation.state.eef_quat',
+[stderr]                           'robot_state/gripper/qpos': 'observation.state.gripper_qpos',
+[stderr]                           'robot_state/gripper/qvel': 'observation.state.gripper_qvel',
+[stderr]                           'robot_state/joints/pos': 'observation.state.joint_pos',
+[stderr]                           'robot_state/joints/vel': 'observation.state.joint_vel'},
+[stderr]          'fps': 30,
+[stderr]          'init_states': True,
+[stderr]          'is_libero_plus': False,
+[stderr]          'max_parallel_tasks': 1,
+[stderr]          'obs_type': 'pixels_agent_pos',
+[stderr]          'observation_height': 360,
+[stderr]          'observation_width': 360,
+[stderr]          'render_mode': 'rgb_array',
+[stderr]          'task': 'libero_spatial',
+[stderr]          'task_ids': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+[stderr]  'eval': {'batch_size': 1, 'n_episodes': 1, 'use_async_envs': False},
+[stderr]  'job_name': 'libero_smolvla',
+[stderr]  'output_dir': WindowsPath('C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human_bar'),
+[stderr]  'policy': {'adapt_to_pi_aloha': False,
+[stderr]             'add_image_special_tokens': False,
+[stderr]             'attention_mode': 'cross_attn',
+[stderr]             'chunk_size': 50,
+[stdout] Creating LIBERO envs | suites=['libero_spatial'] | n_envs(per task)=1 | init_states=True
+[stderr]             'compile_mode': 'max-autotune',
+[stderr]             'compile_model': False,
+[stderr]             'device': 'cpu',
+[stderr]             'empty_cameras': 0,
+[stderr]             'expert_width_multiplier': 0.5,
+[stderr]             'freeze_vision_encoder': True,
+[stdout] Restricting to task_ids=[0, 1, 3, 4, 5, 7, 8, 9]
+[stderr]             'input_features': {'observation.images.image': {'shape': (3,
+[stdout] [info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[stderr]                                                                       256,
+[stderr]                                                                       256),
+[stderr]                                                             'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                                'observation.images.image2': {'shape': (3,
+[stderr]                                                                        256,
+[stderr]                                                                        256),
+[stderr]                                                              'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                                'observation.state': {'shape': (8,),
+[stderr]                                                      'type': <FeatureType.STATE: 'STATE'>}},
+[stderr]             'license': None,
+[stderr]             'load_vlm_weights': True,
+[stderr]             'max_action_dim': 32,
+[stderr]             'max_period': 4.0,
+[stderr]             'max_state_dim': 32,
+[stderr]             'min_period': 0.004,
+[stderr]             'n_action_steps': 10,
+[stderr]             'n_obs_steps': 1,
+[stderr]             'normalization_mapping': {'ACTION': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+[stderr]                                       'STATE': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+[stderr]                                       'VISUAL': <NormalizationMode.IDENTITY: 'IDENTITY'>},
+[stderr]             'num_expert_layers': -1,
+[stderr]             'num_steps': 10,
+[stderr]             'num_vlm_layers': 0,
+[stderr]             'optimizer_betas': (0.9, 0.95),
+[stderr]             'optimizer_eps': 1e-08,
+[stderr]             'optimizer_grad_clip_norm': 10.0,
+[stderr]             'optimizer_lr': 0.0001,
+[stderr]             'optimizer_weight_decay': 1e-10,
+[stderr]             'output_features': {'action': {'shape': (7,),
+[stderr]                                            'type': <FeatureType.ACTION: 'ACTION'>}},
+[stderr]             'pad_language_to': 'longest',
+[stderr]             'prefix_length': 0,
+[stderr]             'pretrained_path': 'HuggingFaceVLA/smolvla_libero',
+[stderr]             'private': None,
+[stderr]             'push_to_hub': True,
+[stderr]             'repo_id': 'None',
+[stderr]             'resize_imgs_with_padding': (512, 512),
+[stderr]             'rtc_config': None,
+[stderr]             'scheduler_decay_lr': 2.5e-06,
+[stderr]             'scheduler_decay_steps': 30000,
+[stderr]             'scheduler_warmup_steps': 1000,
+[stderr]             'self_attn_every_n_layers': 2,
+[stderr]             'tags': None,
+[stderr]             'tokenizer_max_length': 48,
+[stderr]             'train_expert_only': True,
+[stderr]             'train_state_proj': True,
+[stderr]             'use_amp': False,
+[stderr]             'use_cache': True,
+[stderr]             'use_delta_joint_actions_aloha': False,
+[stderr]             'use_peft': False,
+[stderr]             'vlm_model_name': 'HuggingFaceTB/SmolVLM2-500M-Instruct'},
+[stderr]  'rename_map': {},
+[stderr]  'seed': 1000,
+[stderr]  'trust_remote_code': False}
+[stderr] WARNING 2026-07-24 10:50:13 ice_utils.py:54 Using CPU, this will be slow.
+[stderr] INFO 2026-07-24 10:50:13 bot_eval.py:531 Output dir: C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\ablation_outputs\sg_format_ablation_2026_07_24_03_14_26\triplet_human_bar
+[stderr] INFO 2026-07-24 10:50:13 bot_eval.py:533 Making environment (batch_size=1, async=False).
+[stdout] Built vec env | suite=libero_spatial | task_id=0 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=1 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=3 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=4 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=5 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=7 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=8 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=9 | n_envs=1
+[stdout] Creating LIBERO envs | suites=['libero_spatial'] | n_envs(per task)=1 | init_states=True
+[stdout] Restricting to task_ids=[2, 6]
+[stdout] [info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[stdout] Built vec env | suite=libero_spatial | task_id=2 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=6 | n_envs=1
+[stderr] INFO 2026-07-24 10:50:13 bot_eval.py:541 Making policy.
+[stdout] Loading  HuggingFaceTB/SmolVLM2-500M-Instruct weights ...
+[stderr] `torch_dtype` is deprecated! Use `dtype` instead!
+[stderr] 
+[stderr] Loading weights:   0%|          | 0/489 [00:00<?, ?it/s]
+[stderr] Loading weights:  36%|###6      | 177/489 [00:00<00:00, 1709.18it/s]
+[stderr] Loading weights:  75%|#######4  | 366/489 [00:00<00:00, 1810.80it/s]
+[stderr] Loading weights: 100%|##########| 489/489 [00:00<00:00, 1970.65it/s]
+[stderr] Traceback (most recent call last):
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_transports\default.py", line 101, in map_httpcore_exceptions
+[stderr]     yield
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_transports\default.py", line 250, in handle_request
+[stderr]     resp = self._pool.handle_request(req)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpcore\_sync\connection_pool.py", line 256, in handle_request
+[stderr]     raise exc from None
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpcore\_sync\connection_pool.py", line 236, in handle_request
+[stderr]     response = connection.handle_request(
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpcore\_sync\connection.py", line 101, in handle_request
+[stderr]     raise exc
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpcore\_sync\connection.py", line 78, in handle_request
+[stderr]     stream = self._connect(request)
+[stderr]              ^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpcore\_sync\connection.py", line 124, in _connect
+[stderr]     stream = self._network_backend.connect_tcp(**kwargs)
+[stderr]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpcore\_backends\sync.py", line 207, in connect_tcp
+[stderr]     with map_exceptions(exc_map):
+[stderr]          ^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\contextlib.py", line 158, in __exit__
+[stderr]     self.gen.throw(value)
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpcore\_exceptions.py", line 14, in map_exceptions
+[stderr]     raise to_exc(exc) from exc
+[stderr] httpcore.ConnectTimeout: [WinError 10060] A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond
+[stderr] 
+[stderr] The above exception was the direct cause of the following exception:
+[stderr] 
+[stderr] Traceback (most recent call last):
+[stderr]   File "C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\run_lerobot_eval_with_context.py", line 497, in <module>
+[stderr]     main()
+[stderr]   File "C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\run_lerobot_eval_with_context.py", line 490, in main
+[stderr]     lerobot_eval.main()
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 840, in main
+[stderr]     eval_main()
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\configs\parser.py", line 233, in wrapper_inner
+[stderr]     response = fn(cfg, *args, **kwargs)
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 543, in eval_main
+[stderr]     policy = make_policy(
+[stderr]              ^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\factory.py", line 508, in make_policy
+[stderr]     policy = policy_cls.from_pretrained(**kwargs)
+[stderr]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\pretrained.py", line 108, in from_pretrained
+[stderr]     instance = cls(config, **kwargs)
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\modeling_smolvla.py", line 248, in __init__
+[stderr]     self.model = VLAFlowMatching(config, rtc_processor=self.rtc_processor)
+[stderr]                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\modeling_smolvla.py", line 571, in __init__
+[stderr]     self.vlm_with_expert = SmolVLMWithExpertModel(
+[stderr]                            ^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\smolvlm_with_expert.py", line 99, in __init__
+[stderr]     self.processor = AutoProcessor.from_pretrained(model_id)
+[stderr]                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\models\auto\processing_auto.py", line 313, in from_pretrained
+[stderr]     config_dict, _ = ProcessorMixin.get_processor_dict(pretrained_model_name_or_path, **kwargs)
+[stderr]                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\processing_utils.py", line 950, in get_processor_dict
+[stderr]     for template in list_repo_templates(
+[stderr]                     ^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\utils\hub.py", line 133, in list_repo_templates
+[stderr]     for entry in list_repo_tree(
+[stderr]                  ^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\huggingface_hub\hf_api.py", line 3841, in list_repo_tree
+[stderr]     for path_info in paginate(path=tree_url, headers=headers, params={"recursive": recursive, "expand": expand}):
+[stderr]                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\huggingface_hub\utils\_pagination.py", line 35, in paginate
+[stderr]     r = session.get(path, params=params, headers=headers)
+[stderr]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_client.py", line 1053, in get
+[stderr]     return self.request(
+[stderr]            ^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_client.py", line 825, in request
+[stderr]     return self.send(request, auth=auth, follow_redirects=follow_redirects)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_client.py", line 914, in send
+[stderr]     response = self._send_handling_auth(
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_client.py", line 942, in _send_handling_auth
+[stderr]     response = self._send_handling_redirects(
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_client.py", line 979, in _send_handling_redirects
+[stderr]     response = self._send_single_request(request)
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_client.py", line 1014, in _send_single_request
+[stderr]     response = transport.handle_request(request)
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_transports\default.py", line 249, in handle_request
+[stderr]     with map_httpcore_exceptions():
+[stderr]          ^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\contextlib.py", line 158, in __exit__
+[stderr]     self.gen.throw(value)
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\httpx\_transports\default.py", line 118, in map_httpcore_exceptions
+[stderr]     raise mapped_exc(message) from exc
+[stderr] httpx.ConnectTimeout: [WinError 10060] A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond
+[2026-07-24 10:53:39] EXIT_CODE: 1

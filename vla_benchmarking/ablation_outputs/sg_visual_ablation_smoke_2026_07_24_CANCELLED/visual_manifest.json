@@ -1,0 +1,25 @@
+{
+  "run_id": "sg_visual_ablation_smoke_2026_07_24",
+  "condition": "visual_arrows",
+  "model": "HuggingFaceVLA/smolvla_libero",
+  "tasks": [
+    0
+  ],
+  "episodes": 1,
+  "batch_size": 1,
+  "seed": 1000,
+  "device": "cpu",
+  "text_context_mode": "standard",
+  "text_prompt_contains_graph": false,
+  "visual_overlay": {
+    "image_slot": "pixels/image",
+    "content": "arrows_only",
+    "direction": "subject_to_object",
+    "subject_filter": "akita_black_bowl_1"
+  },
+  "prompt_audit": true,
+  "videos": true,
+  "max_videos": 1,
+  "baseline_eval_info": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_22_00_56_24/standard/eval_info.json",
+  "repo_commit": "643fb4059a5bf06f66b8a9b007d4e2b06cd5ceb6"
+}

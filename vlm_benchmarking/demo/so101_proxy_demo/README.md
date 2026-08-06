@@ -345,7 +345,7 @@ C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo.so101_proxy_
 C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo.so101_proxy_demo detect --sampled --camera wrist
 python -m demo.so101_proxy_demo generate-proxy
 python -m demo.so101_proxy_demo validate --camera all
-C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo --port 7860
+C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo offline --port 7860
 ```
 
 The unfiltered detector command above is the all-task/all-demo command. It is resumable and processes every one of the 257 usable episodes without skipping sampled frames. Do not run `generate-proxy` until `artifacts/reports/agent_bbox_report.json` says `complete_agent_coverage: true`.
@@ -416,10 +416,19 @@ The demo is titled **SO101 Demo** and provides:
 - Continuous source-video playback through byte-range MP4 streaming.
 - Subject filtering, arrows, labels, and bbox debugging.
 - Triplet provenance, confidence, gripper phase, reliability, and TP/FP/FN.
+- A worklist and simplified frame-level relation editor for local annotation.
+- CSV export with one per-view CSV and an `edited` column for saved graph overlays.
 
 The SO101 explorer itself never derives data from LIBERO. The unified local
 server also hosts the independent LIBERO explorer and initializes its simulator
 only when LIBERO rendering is requested.
+
+The browser is an overlay tool, not a proxy generator. Manual relation-label
+edits are written to `../../output/so101_graph_edits.jsonl`, and review marks
+are written to `../../output/so101_review_status.jsonl`. Generated proxy
+artifacts under `artifacts/` remain immutable. The health and
+`/so101/api/pipeline-status` endpoints report camera coverage, stale
+edit/review counts, report paths, and wrist completion status.
 
 To stop the unified demo after launch:
 
@@ -441,7 +450,7 @@ Known-good data smoke checks:
 ```powershell
 python -m demo.so101_proxy_demo audit-data
 python -m demo.so101_proxy_demo extract-metadata
-C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo --port 7860 --no-open-browser
+C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe -u -m demo offline --port 7860 --no-open-browser
 ```
 
 Expected audit values:

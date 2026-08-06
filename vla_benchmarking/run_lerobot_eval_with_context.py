@@ -14,21 +14,47 @@ from lerobot.envs import libero as lerobot_libero
 from bddl_utils import make_filtered_bddl
 from config import (
     RANDOMIZE_SCENES, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP, SCENE_GRAPH_SUBJECT_FILTER,
-    TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE, TASK_CAMERA_OVERRIDE,
+    TASK_GOAL_OBJECT_CONFIG, TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE, TASK_CAMERA_OVERRIDE,
 )
 from libero_live_semantic_context import LiveSemanticContextGenerator
+from prompt_audit import PromptAuditLogger
 from radomize_scenes import SceneRandomizerVecEnvWrapper, _resolve_envs
+from scene_graph_formats import LEGACY_FORMAT, normalize_context_format
+from visual_scene_graph import (
+    DEFAULT_GOAL_OBJECT,
+    SUPPORTED_VISUAL_CONDITIONS,
+    VISUAL_GOAL_ARROW_CONDITION,
+    VisualGraphVecEnvWrapper,
+    VisualRelationAuditLogger,
+    goal_arrow_prompt_hint,
+    resolve_task_goal_object,
+)
 
 _FILTERED_BDDL_CACHE: dict[tuple[str, tuple[str, ...]], str] = {}
 
 
 class TaskContextVecEnv:
-    def __init__(self, env, live_generator, context_mode, debug=False, max_chars=4000):
+    def __init__(
+        self,
+        env,
+        live_generator,
+        context_mode,
+        context_format=LEGACY_FORMAT,
+        debug=False,
+        max_chars=4000,
+        audit_logger=None,
+        prompt_suffix="",
+        prompt_suffix_by_task=None,
+    ):
         self.env = env
         self.live_generator = live_generator
         self.context_mode = context_mode
+        self.context_format = context_format
         self.debug = debug
         self.max_chars = max_chars
+        self.audit_logger = audit_logger
+        self.prompt_suffix = prompt_suffix.strip()
+        self.prompt_suffix_by_task = prompt_suffix_by_task or {}
         self._debug_printed = False
 
     def __getattr__(self, name):
@@ -47,19 +73,50 @@ class TaskContextVecEnv:
             TASK_PROMPT_OVERRIDE.get(sub_env.task_id, task)
             for task, sub_env in zip(result, sub_envs)
         ]
+        task_texts = result
+        final_result = []
+        for task, sub_env in zip(result, sub_envs):
+            task_id = getattr(sub_env, "task_id", None)
+            suffix = self.prompt_suffix_by_task.get(task_id, self.prompt_suffix).strip()
+            final_result.append(f"{task} {suffix}" if suffix else task)
+        result = final_result
 
         if self.live_generator is None:
+            if self.audit_logger is not None:
+                for task, task_text, sub_env in zip(result, task_texts, sub_envs):
+                    self.audit_logger.log(
+                        prompt=task,
+                        task_text=task_text,
+                        context_mode=self.context_mode,
+                        context_format=self.context_format,
+                        task_id=getattr(sub_env, "task_id", None),
+                        env_step=getattr(sub_env, "_elapsed_steps", None),
+                        relations_generated=0,
+                        relations_retained=0,
+                    )
             return result
 
-        suffixes = [
-            self.live_generator.prompt_suffix(sub_env, self.context_mode)
-            for sub_env in sub_envs
-        ]
+        final = []
+        for task, sub_env in zip(result, sub_envs):
+            prompt, relations, retained_count = self.live_generator.build_prompt(
+                sub_env,
+                task,
+                self.context_mode,
+                self.context_format,
+            )
+            final.append(prompt)
+            if self.audit_logger is not None:
+                self.audit_logger.log(
+                    prompt=prompt,
+                    task_text=task,
+                    context_mode=self.context_mode,
+                    context_format=self.context_format,
+                    task_id=getattr(sub_env, "task_id", None),
+                    env_step=getattr(sub_env, "_elapsed_steps", None),
+                    relations_generated=len(relations),
+                    relations_retained=retained_count,
+                )
 
-        final = [
-            f"{task}{suffix}"
-            for task, suffix in zip(result, suffixes)
-        ]
         if self.debug and not self._debug_printed:
             self._debug_printed = True
             print("\n===== DEBUG_SEMANTIC_CONTEXT =====")
@@ -85,9 +142,32 @@ def _is_augmented_mode() -> bool:
     return mode != "standard"
 
 
+def _visual_condition() -> str | None:
+    condition = os.environ.get("VISUAL_CONDITION", "").strip().lower()
+    if not condition:
+        return "visual_arrows" if _env_flag("VISUAL_ARROWS") else None
+    if condition == "none":
+        return None
+    if condition not in SUPPORTED_VISUAL_CONDITIONS:
+        options = ", ".join(["none", *sorted(SUPPORTED_VISUAL_CONDITIONS)])
+        raise SystemExit(f"ERROR: VISUAL_CONDITION must be one of: {options}.")
+    return condition
+
+
 def _has_cli_option(*names: str) -> bool:
     prefixes = tuple(f"{name}=" for name in names)
     return any(arg in names or arg.startswith(prefixes) for arg in sys.argv[1:])
+
+
+def _cli_option_value(name: str) -> str | None:
+    args = sys.argv[1:]
+    prefix = f"{name}="
+    for index, arg in enumerate(args):
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
+        if arg == name and index + 1 < len(args):
+            return args[index + 1]
+    return None
 
 
 def _env_flag(name: str) -> bool:
@@ -103,7 +183,9 @@ def _append_default_lerobot_args() -> None:
     policy_path = os.environ.get("MODELS", "lerobot/pi0_libero_base")
     policy_tag = policy_path.split('/')[-1]
     seed = os.environ.get("SEED", "1000")
-    out_put_dir = mode = os.environ.get("OUTPUT_DIR", "lerobot_eval_outputs").strip().lower()
+    output_root = Path(os.environ.get("OUTPUT_DIR", "lerobot_eval_outputs").strip())
+    if not output_root.is_absolute():
+        output_root = script_dir / output_root
 
     defaults = [
         (("--policy.path",), policy_path),
@@ -115,18 +197,12 @@ def _append_default_lerobot_args() -> None:
         (("--env.max_parallel_tasks",), os.environ.get("MAX_PARALLEL_TASKS", "1")),
         (("--eval.n_episodes",), os.environ.get("N_EPISODES", "1")),
         (("--eval.batch_size",), os.environ.get("BATCH_SIZE", "1")),
-        (("--output_dir",), (script_dir / out_put_dir / mode / policy_tag / seed / time_str).as_posix()),
+        (("--output_dir",), (output_root / mode / policy_tag / seed / time_str).as_posix()),
         (("--seed",), seed),
     ]
-    # If the policy is smolvla, add a default rename_map to fix feature mismatch
-    if policy_tag.lower() == "smolvla":
-        rename_map = {
-            "observation.images.image": "observation.images.camera1",
-            "observation.images.image2": "observation.images.camera2",
-        }
-        defaults.append(
-            (("--rename_map",), str(rename_map))
-        )
+    rename_map = os.environ.get("RENAME_MAP")
+    if rename_map:
+        defaults.append((("--rename_map",), rename_map))
 
     for names, value in defaults:
         if not _has_cli_option(*names):
@@ -295,7 +371,21 @@ def _patch_libero_env_camera_creation() -> None:
     lerobot_libero.LiberoEnv._ensure_env = patched_ensure_env
 
 
-def _wrap_task_vec_envs(result, live_generator, context_mode, debug_semantic_context, debug_max_chars):
+def _wrap_task_vec_envs(
+    result,
+    live_generator,
+    prompt_live_generator,
+    context_mode,
+    context_format,
+    debug_semantic_context,
+    debug_max_chars,
+    audit_logger,
+    visual_condition,
+    visual_audit_logger,
+    visual_goal_objects,
+    visual_prompt_suffix,
+    visual_prompt_suffix_by_task,
+):
     if not isinstance(result, dict):
         return result
 
@@ -308,31 +398,102 @@ def _wrap_task_vec_envs(result, live_generator, context_mode, debug_semantic_con
                 wrapped = SceneRandomizerVecEnvWrapper(
                     wrapped, task_id, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP
                 )
+            if visual_condition:
+                wrapped = VisualGraphVecEnvWrapper(
+                    wrapped,
+                    live_generator,
+                    condition=visual_condition,
+                    goal_object=visual_goal_objects,
+                    audit_logger=visual_audit_logger,
+                )
             wrapped = TaskContextVecEnv(
-                wrapped, live_generator, context_mode, debug_semantic_context, debug_max_chars
+                wrapped,
+                prompt_live_generator,
+                context_mode,
+                context_format,
+                debug_semantic_context,
+                debug_max_chars,
+                audit_logger,
+                visual_prompt_suffix,
+                visual_prompt_suffix_by_task,
             )
             suite_map[task_id] = wrapped
 
     return result
 
 
+def _patch_max_episodes_rendered() -> None:
+    value = os.environ.get("MAX_EPISODES_RENDERED")
+    if not value:
+        return
+    try:
+        max_episodes_rendered = int(value)
+    except ValueError as exc:
+        raise SystemExit("ERROR: MAX_EPISODES_RENDERED must be an integer.") from exc
+
+    eval_policy_all_fn = getattr(lerobot_eval, "eval_policy_all", None)
+    if eval_policy_all_fn is None or getattr(eval_policy_all_fn, "_max_videos_patched", False):
+        return
+
+    original_eval_policy_all = eval_policy_all_fn
+
+    def patched_eval_policy_all(*args, **kwargs):
+        kwargs["max_episodes_rendered"] = max_episodes_rendered
+        return original_eval_policy_all(*args, **kwargs)
+
+    patched_eval_policy_all._max_videos_patched = True
+    lerobot_eval.eval_policy_all = patched_eval_policy_all
+
+
 def main() -> None:
     _append_default_lerobot_args()
 
-    context_mode = os.environ.get("CONTEXT_MODE").strip().lower()
+    context_mode = os.environ.get("CONTEXT_MODE", "standard").strip().lower()
+    context_format = normalize_context_format(os.environ.get("CONTEXT_FORMAT", LEGACY_FORMAT))
     use_live_context = _is_augmented_mode()
+    visual_condition = _visual_condition()
+    visual_goal_override = os.environ.get("VISUAL_GOAL_OBJECT", "").strip()
+    visual_goal_objects = (
+        {task_id: visual_goal_override for task_id in TASK_GOAL_OBJECT_CONFIG}
+        if visual_goal_override
+        else dict(TASK_GOAL_OBJECT_CONFIG)
+    )
+    visual_prompt_suffix = ""
+    visual_prompt_suffix_by_task = {}
+    if visual_condition == VISUAL_GOAL_ARROW_CONDITION:
+        explicit_hint = os.environ.get("VISUAL_PROMPT_HINT", "").strip()
+        if explicit_hint:
+            visual_prompt_suffix = explicit_hint
+        else:
+            visual_prompt_suffix_by_task = {
+                task_id: goal_arrow_prompt_hint(
+                    resolve_task_goal_object(task_id, visual_goal_objects)
+                )
+                for task_id in TASK_GOAL_OBJECT_CONFIG
+            }
     debug_semantic_context = 1  # _env_flag("DEBUG_SEMANTIC_CONTEXT")
     debug_max_chars = int(os.environ.get("DEBUG_SEMANTIC_MAX_CHARS", "4000"))
+    output_dir = _cli_option_value("--output_dir")
+    audit_logger = PromptAuditLogger(
+        output_dir,
+        model_id=os.environ.get("MODELS", "lerobot/pi0_libero_base"),
+    )
+    visual_audit_logger = VisualRelationAuditLogger(
+        output_dir,
+        enabled=visual_condition is not None,
+    )
 
     live_generator = None
-    if use_live_context:
+    if use_live_context or visual_condition is not None:
         live_generator = LiveSemanticContextGenerator()
         live_generator.scene_graph_subject_filter = SCENE_GRAPH_SUBJECT_FILTER
+    prompt_live_generator = live_generator if use_live_context else None
 
     if TASK_REMOVE_CONFIG:
         _patch_libero_env_bddl_selection(TASK_REMOVE_CONFIG)
 
     _patch_libero_env_camera_creation()
+    _patch_max_episodes_rendered()
 
     # -------------------------
     # WRAP VECTOR ENVS ONLY
@@ -343,7 +504,11 @@ def main() -> None:
     def make_env_patched(*args, **kwargs):
         args = list(args)
         env_instance = args[0]
-        env_instance.render_mode = None
+        render_mode = os.environ.get("RENDER_MODE")
+        if render_mode is not None:
+            env_instance.render_mode = None if render_mode.lower() == "none" else render_mode
+        else:
+            env_instance.render_mode = None
         task_groups = _task_groups_by_camera(env_instance)
 
         results = []
@@ -355,16 +520,29 @@ def main() -> None:
         result = _merge_env_results(results)
 
         return _wrap_task_vec_envs(
-            result, live_generator, context_mode, debug_semantic_context, debug_max_chars
+            result,
+            live_generator,
+            prompt_live_generator,
+            context_mode,
+            context_format,
+            debug_semantic_context,
+            debug_max_chars,
+            audit_logger,
+            visual_condition,
+            visual_audit_logger,
+            visual_goal_objects,
+            visual_prompt_suffix,
+            visual_prompt_suffix_by_task,
         )
 
     lerobot_eval.make_env = make_env_patched
 
-    lerobot_eval.main()
+    try:
+        lerobot_eval.main()
+    finally:
+        audit_logger.close()
+        visual_audit_logger.close()
 
 
 if __name__ == "__main__":
     main()
-
-
-

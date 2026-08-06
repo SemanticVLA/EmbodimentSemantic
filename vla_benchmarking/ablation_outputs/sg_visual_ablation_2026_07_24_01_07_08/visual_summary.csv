@@ -1,0 +1,2 @@
+condition,pc_success,successes,episodes,videos,output_dir,eval_info,visual_relation_audit
+visual_arrows,10.0000,1,10,10,C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_visual_ablation_2026_07_24_01_07_08/visual_arrows,C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_visual_ablation_2026_07_24_01_07_08/visual_arrows/eval_info.json,C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_visual_ablation_2026_07_24_01_07_08/visual_arrows/visual_relation_audit.jsonl

@@ -96,12 +96,16 @@ CONTEXT_MODE=scene_graph TASK_IDS=[3] python run_lerobot_eval_with_context.py
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CONTEXT_MODE` | *(required)* | `standard`, `scene_graph`, `bounding_boxes`, `scene_graph_bounding_boxes` |
+| `CONTEXT_FORMAT` | `legacy_scene_graph` | Scene-graph serialization: `standard`, `legacy_scene_graph`, `triplet_published`, `triplet_human`, `triplet_human_bar`, `triplet_human_shared_subject`, `natural_separate`, `natural_compact`, `natural_compact_current`, `natural_compact_no_label`, `natural_compact_context_first` |
 | `TASK_IDS` | `[0]` | Task index, e.g. `[3]` or `[0,1,2]` |
 | `MODELS` | `lerobot/pi0_libero_base` | HuggingFace policy checkpoint path |
 | `DEVICE` | `cuda` | `cuda` or `cpu` |
 | `N_EPISODES` | `1` | Episodes per task |
 | `BATCH_SIZE` | `1` | Parallel episodes |
 | `SEED` | `1000` | Random seed |
+| `PROMPT_AUDIT` | `0` | Write `prompt_audit.jsonl` with raw prompt metadata |
+| `TOKEN_AUDIT` | `0` | Add tokenizer counts and truncation fields to `prompt_audit.jsonl` when possible |
+| `MAX_EPISODES_RENDERED` | LeRobot default `10` | Override rendered videos per task |
 | `HF_TOKEN` | — | HuggingFace token for authenticated downloads |
 
 **Visualize scene swaps only (no policy, no GPU needed):**
@@ -112,6 +116,98 @@ python randomize_scenes_demo.py 3 7    # specific tasks
 ```
 
 Output images are saved to `swap_outputs/`.
+
+### Scene-graph format ablation
+
+Run the default big SmolVLA matrix:
+
+```powershell
+python run_scene_graph_format_ablation.py
+```
+
+Default conditions:
+
+```text
+standard
+legacy_scene_graph
+triplet_published
+triplet_human
+triplet_human_bar
+triplet_human_shared_subject
+natural_separate
+natural_compact
+natural_compact_current
+natural_compact_no_label
+natural_compact_context_first
+```
+
+By default this runs all 10 LIBERO Spatial tasks, 4 episodes per task/format, and saves one video per evaluated episode.
+
+Outputs are written under `ablation_outputs/<run_id>/`:
+
+- `ablation_summary.csv`: one row per format with overall success and output paths
+- `ablation_task_summary.csv`: one row per format/task with task-level success
+- `ablation_episodes.csv`: one row per format/task/episode with seed, reward, success, and video path
+- `<format>/prompt_audit.jsonl`: raw prompts plus token counts/truncation info when tokenizer loading succeeds
+- `<format>/videos/`: LeRobot rendered episode videos, grouped by task
+
+Useful variants:
+
+```powershell
+python run_scene_graph_format_ablation.py --episodes 4 --tasks "[0,1,2,3,4,5,6,7,8,9]"
+python run_scene_graph_format_ablation.py --episodes 20 --formats "standard,legacy_scene_graph,triplet_published,natural_compact"
+python run_scene_graph_format_ablation.py --episodes 4 --no-token-audit
+```
+
+### Visual arrow ablation
+
+The visual condition keeps the normal task instruction as the complete text
+prompt and draws live ground-truth scene-graph edges directly on the main
+policy image. The overlay contains green subject-to-object arrows only: no
+relation labels and no bounding boxes. The wrist image remains unchanged.
+
+Preview the first policy frame for all ten tasks without loading a policy:
+
+```powershell
+python preview_visual_arrows.py
+```
+
+This writes individual raw/overlaid images, `preview_audit.json`, and the
+`visual_arrows_first_frames.png` contact sheet under
+`visual_arrow_previews/`. Tasks 2 and 6 use `frontview` because their existing
+camera override maps that camera to the main `pixels/image` slot; matching
+front-view bboxes are used for those arrows.
+
+Run the default SmolVLA visual ablation (ten tasks, four episodes each):
+
+```powershell
+python run_scene_graph_visual_ablation.py
+```
+
+The runner does not rerun the raw standard condition. It auto-detects the
+newest prior `standard/eval_info.json`, or accepts an explicit baseline:
+
+```powershell
+python run_scene_graph_visual_ablation.py --baseline-run .\ablation_outputs\sg_format_ablation_<run-id>
+```
+
+Outputs are written under
+`ablation_outputs/sg_visual_ablation_<timestamp>/`:
+
+- `visual_summary.csv`: overall visual-condition result
+- `visual_task_summary.csv`: task-level results
+- `visual_episodes.csv`: episode-level rewards, success, seeds, and videos
+- `visual_manifest.json`: run configuration and resolved baseline
+- `visual_vs_baseline.csv`: prior raw standard versus visual arrows
+- `visual_arrows/visual_relation_audit.jsonl`: live relations and drawable-edge audit
+- `visual_arrows/eval_stdout_stderr.log`: complete evaluation log
+- `visual_arrows/videos/`: videos made from the exact overlaid policy frames
+
+One-task CPU smoke run:
+
+```powershell
+python run_scene_graph_visual_ablation.py --tasks "[0]" --episodes 1 --max-videos 1 --device cpu
+```
 
 ---
 

@@ -1,0 +1,93 @@
+{
+  "task_id": 0,
+  "seed": 1000,
+  "resolution": 1024,
+  "camera": "agentview",
+  "subject": "akita_black_bowl_1",
+  "goal_object": "plate_1",
+  "raw_path": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/visual_arrow_previews_highres/task_00_1024_raw.png",
+  "all_arrows_path": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/visual_arrow_previews_highres/task_00_1024_all_bowl_arrows.png",
+  "goal_arrow_path": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/visual_arrow_previews_highres/task_00_1024_bowl_to_target.png",
+  "visible_bboxes": [
+    "akita_black_bowl_1",
+    "akita_black_bowl_2",
+    "cookies_1",
+    "flat_stove_1",
+    "glazed_rim_porcelain_ramekin_1",
+    "plate_1",
+    "wooden_cabinet_1"
+  ],
+  "source_relations": [
+    [
+      "akita_black_bowl_1",
+      "is_in_front_of",
+      "akita_black_bowl_2"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_left_of",
+      "cookies_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_in_front_of",
+      "flat_stove_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_in_front_of",
+      "glazed_rim_porcelain_ramekin_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_behind",
+      "plate_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_left_of",
+      "wooden_cabinet_1"
+    ]
+  ],
+  "all_drawn_relations": [
+    [
+      "akita_black_bowl_1",
+      "is_in_front_of",
+      "akita_black_bowl_2"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_left_of",
+      "cookies_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_in_front_of",
+      "flat_stove_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_in_front_of",
+      "glazed_rim_porcelain_ramekin_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_behind",
+      "plate_1"
+    ],
+    [
+      "akita_black_bowl_1",
+      "is_left_of",
+      "wooden_cabinet_1"
+    ]
+  ],
+  "all_skipped_relations_missing_bbox": [],
+  "goal_drawn_relations": [
+    [
+      "akita_black_bowl_1",
+      "goal",
+      "plate_1"
+    ]
+  ],
+  "goal_skipped_relations_missing_bbox": []
+}

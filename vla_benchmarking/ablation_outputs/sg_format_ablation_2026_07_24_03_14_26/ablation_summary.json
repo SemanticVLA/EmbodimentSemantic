@@ -1,0 +1,92 @@
+[
+  {
+    "format": "triplet_published",
+    "pc_success": "0.0000",
+    "successes": "0",
+    "episodes": "10",
+    "videos": "10",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_published",
+    "eval_info": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_published/eval_info.json",
+    "prompt_audit": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_published/prompt_audit.jsonl"
+  },
+  {
+    "format": "triplet_human",
+    "pc_success": "0.0000",
+    "successes": "0",
+    "episodes": "10",
+    "videos": "10",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human",
+    "eval_info": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human/eval_info.json",
+    "prompt_audit": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human/prompt_audit.jsonl"
+  },
+  {
+    "format": "triplet_human_bar",
+    "pc_success": "",
+    "successes": "",
+    "episodes": "",
+    "videos": "0",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human_bar",
+    "eval_info": "",
+    "prompt_audit": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human_bar/prompt_audit.jsonl"
+  },
+  {
+    "format": "triplet_human_shared_subject",
+    "pc_success": "",
+    "successes": "",
+    "episodes": "",
+    "videos": "0",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/triplet_human_shared_subject",
+    "eval_info": "",
+    "prompt_audit": ""
+  },
+  {
+    "format": "natural_separate",
+    "pc_success": "",
+    "successes": "",
+    "episodes": "",
+    "videos": "0",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/natural_separate",
+    "eval_info": "",
+    "prompt_audit": ""
+  },
+  {
+    "format": "natural_compact",
+    "pc_success": "",
+    "successes": "",
+    "episodes": "",
+    "videos": "0",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/natural_compact",
+    "eval_info": "",
+    "prompt_audit": ""
+  },
+  {
+    "format": "natural_compact_current",
+    "pc_success": "",
+    "successes": "",
+    "episodes": "",
+    "videos": "0",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/natural_compact_current",
+    "eval_info": "",
+    "prompt_audit": ""
+  },
+  {
+    "format": "natural_compact_no_label",
+    "pc_success": "",
+    "successes": "",
+    "episodes": "",
+    "videos": "0",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/natural_compact_no_label",
+    "eval_info": "",
+    "prompt_audit": ""
+  },
+  {
+    "format": "natural_compact_context_first",
+    "pc_success": "",
+    "successes": "",
+    "episodes": "",
+    "videos": "0",
+    "output_dir": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_24_03_14_26/natural_compact_context_first",
+    "eval_info": "",
+    "prompt_audit": ""
+  }
+]

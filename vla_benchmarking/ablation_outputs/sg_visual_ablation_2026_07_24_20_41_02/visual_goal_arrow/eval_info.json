@@ -1,0 +1,84 @@
+{
+  "per_task": [
+    {
+      "task_group": "libero_spatial",
+      "task_id": 2,
+      "metrics": {
+        "sum_rewards": [
+          0.0
+        ],
+        "max_rewards": [
+          0.0
+        ],
+        "successes": [
+          false
+        ],
+        "video_paths": [
+          "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_2\\eval_episode_0.mp4"
+        ]
+      }
+    },
+    {
+      "task_group": "libero_spatial",
+      "task_id": 6,
+      "metrics": {
+        "sum_rewards": [
+          0.0
+        ],
+        "max_rewards": [
+          0.0
+        ],
+        "successes": [
+          false
+        ],
+        "video_paths": [
+          "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_6\\eval_episode_0.mp4"
+        ]
+      }
+    },
+    {
+      "task_group": "libero_spatial",
+      "task_id": 9,
+      "metrics": {
+        "sum_rewards": [
+          0.0
+        ],
+        "max_rewards": [
+          0.0
+        ],
+        "successes": [
+          false
+        ],
+        "video_paths": [
+          "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_9\\eval_episode_0.mp4"
+        ]
+      }
+    }
+  ],
+  "per_group": {
+    "libero_spatial": {
+      "avg_sum_reward": 0.0,
+      "avg_max_reward": 0.0,
+      "pc_success": 0.0,
+      "n_episodes": 3,
+      "video_paths": [
+        "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_2\\eval_episode_0.mp4",
+        "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_6\\eval_episode_0.mp4",
+        "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_9\\eval_episode_0.mp4"
+      ]
+    }
+  },
+  "overall": {
+    "avg_sum_reward": 0.0,
+    "avg_max_reward": 0.0,
+    "pc_success": 0.0,
+    "n_episodes": 3,
+    "eval_s": 4449.410296678543,
+    "eval_ep_s": 1483.1367655595143,
+    "video_paths": [
+      "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_2\\eval_episode_0.mp4",
+      "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_6\\eval_episode_0.mp4",
+      "C:\\Users\\hassa\\OneDrive\\Desktop\\EmbodimentSemantic\\vla_benchmarking\\ablation_outputs\\sg_visual_ablation_2026_07_24_20_41_02\\visual_goal_arrow\\videos\\libero_spatial_9\\eval_episode_0.mp4"
+    ]
+  }
+}

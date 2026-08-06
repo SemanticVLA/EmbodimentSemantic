@@ -1,0 +1,2165 @@
+[2026-07-24 16:02:27] COMMAND: C:\Users\hassa\anaconda3\envs\vla_bench_py312\python.exe C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\run_lerobot_eval_with_context.py --eval.use_async_envs=false --output_dir=C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_visual_ablation_2026_07_24_16_02_27/visual_goal_arrow
+[stderr] [robosuite WARNING] No private macro file found! (__init__.py:7)
+[stderr] WARNING:robosuite_logs:No private macro file found!
+[stderr] [robosuite WARNING] It is recommended to use a private macro file (__init__.py:8)
+[stderr] WARNING:robosuite_logs:It is recommended to use a private macro file
+[stderr] [robosuite WARNING] To setup, run: python C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\robosuite/scripts/setup_macros.py (__init__.py:9)
+[stderr] WARNING:robosuite_logs:To setup, run: python C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\robosuite/scripts/setup_macros.py
+[stderr] Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+[stderr] Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+[stderr] See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+[stderr] WARNING 2026-07-24 16:03:18 ice_utils.py:34 No accelerated backend detected. Using default cpu, this will be slow.
+[stderr] WARNING 2026-07-24 16:03:18 \policies.py:86 Device 'cuda' is not available. Switching to 'cpu'.
+[stderr] WARNING 2026-07-24 16:03:19 figs\eval.py:69 No job name provided, using 'libero_smolvla' as job name.
+[stderr] INFO 2026-07-24 16:03:19 bot_eval.py:522 {'env': {'camera_name': 'agentview_image,robot0_eye_in_hand_image',
+[stderr]          'camera_name_mapping': None,
+[stderr]          'control_mode': 'relative',
+[stderr]          'disable_env_checker': True,
+[stderr]          'episode_length': None,
+[stderr]          'features': {'action': {'shape': (7,),
+[stderr]                                  'type': <FeatureType.ACTION: 'ACTION'>},
+[stderr]                       'pixels/agentview_image': {'shape': (360, 360, 3),
+[stderr]                                                  'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                       'pixels/robot0_eye_in_hand_image': {'shape': (360,
+[stderr]                                                                     360,
+[stderr]                                                                     3),
+[stderr]                                                           'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                       'robot_state/eef/mat': {'shape': (3, 3),
+[stderr]                                               'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/eef/pos': {'shape': (3,),
+[stderr]                                               'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/eef/quat': {'shape': (4,),
+[stderr]                                                'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/gripper/qpos': {'shape': (2,),
+[stderr]                                                    'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/gripper/qvel': {'shape': (2,),
+[stderr]                                                    'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/joints/pos': {'shape': (7,),
+[stderr]                                                  'type': <FeatureType.STATE: 'STATE'>},
+[stderr]                       'robot_state/joints/vel': {'shape': (7,),
+[stderr]                                                  'type': <FeatureType.STATE: 'STATE'>}},
+[stderr]          'features_map': {'action': 'action',
+[stderr]                           'pixels/agentview_image': 'observation.images.image',
+[stdout] Creating LIBERO envs | suites=['libero_spatial'] | n_envs(per task)=1 | init_states=True
+[stdout] Restricting to task_ids=[0, 1, 3, 4, 5, 7, 8, 9]
+[stdout] [info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[stderr]                           'pixels/robot0_eye_in_hand_image': 'observation.images.image2',
+[stderr]                           'robot_state/eef/mat': 'observation.state.eef_mat',
+[stderr]                           'robot_state/eef/pos': 'observation.state.eef_pos',
+[stderr]                           'robot_state/eef/quat': 'observation.state.eef_quat',
+[stderr]                           'robot_state/gripper/qpos': 'observation.state.gripper_qpos',
+[stderr]                           'robot_state/gripper/qvel': 'observation.state.gripper_qvel',
+[stderr]                           'robot_state/joints/pos': 'observation.state.joint_pos',
+[stderr]                           'robot_state/joints/vel': 'observation.state.joint_vel'},
+[stderr]          'fps': 30,
+[stderr]          'init_states': True,
+[stderr]          'is_libero_plus': False,
+[stderr]          'max_parallel_tasks': 1,
+[stderr]          'obs_type': 'pixels_agent_pos',
+[stderr]          'observation_height': 360,
+[stderr]          'observation_width': 360,
+[stderr]          'render_mode': 'rgb_array',
+[stderr]          'task': 'libero_spatial',
+[stderr]          'task_ids': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+[stderr]  'eval': {'batch_size': 1, 'n_episodes': 1, 'use_async_envs': False},
+[stderr]  'job_name': 'libero_smolvla',
+[stderr]  'output_dir': WindowsPath('C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_visual_ablation_2026_07_24_16_02_27/visual_goal_arrow'),
+[stderr]  'policy': {'adapt_to_pi_aloha': False,
+[stderr]             'add_image_special_tokens': False,
+[stderr]             'attention_mode': 'cross_attn',
+[stderr]             'chunk_size': 50,
+[stderr]             'compile_mode': 'max-autotune',
+[stderr]             'compile_model': False,
+[stderr]             'device': 'cpu',
+[stderr]             'empty_cameras': 0,
+[stderr]             'expert_width_multiplier': 0.5,
+[stderr]             'freeze_vision_encoder': True,
+[stderr]             'input_features': {'observation.images.image': {'shape': (3,
+[stderr]                                                                       256,
+[stderr]                                                                       256),
+[stderr]                                                             'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                                'observation.images.image2': {'shape': (3,
+[stderr]                                                                        256,
+[stderr]                                                                        256),
+[stderr]                                                              'type': <FeatureType.VISUAL: 'VISUAL'>},
+[stderr]                                'observation.state': {'shape': (8,),
+[stderr]                                                      'type': <FeatureType.STATE: 'STATE'>}},
+[stderr]             'license': None,
+[stderr]             'load_vlm_weights': True,
+[stderr]             'max_action_dim': 32,
+[stderr]             'max_period': 4.0,
+[stderr]             'max_state_dim': 32,
+[stderr]             'min_period': 0.004,
+[stderr]             'n_action_steps': 10,
+[stderr]             'n_obs_steps': 1,
+[stderr]             'normalization_mapping': {'ACTION': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+[stderr]                                       'STATE': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+[stderr]                                       'VISUAL': <NormalizationMode.IDENTITY: 'IDENTITY'>},
+[stderr]             'num_expert_layers': -1,
+[stderr]             'num_steps': 10,
+[stderr]             'num_vlm_layers': 0,
+[stderr]             'optimizer_betas': (0.9, 0.95),
+[stderr]             'optimizer_eps': 1e-08,
+[stderr]             'optimizer_grad_clip_norm': 10.0,
+[stderr]             'optimizer_lr': 0.0001,
+[stderr]             'optimizer_weight_decay': 1e-10,
+[stderr]             'output_features': {'action': {'shape': (7,),
+[stderr]                                            'type': <FeatureType.ACTION: 'ACTION'>}},
+[stderr]             'pad_language_to': 'longest',
+[stderr]             'prefix_length': 0,
+[stderr]             'pretrained_path': 'HuggingFaceVLA/smolvla_libero',
+[stderr]             'private': None,
+[stderr]             'push_to_hub': True,
+[stderr]             'repo_id': 'None',
+[stderr]             'resize_imgs_with_padding': (512, 512),
+[stderr]             'rtc_config': None,
+[stderr]             'scheduler_decay_lr': 2.5e-06,
+[stderr]             'scheduler_decay_steps': 30000,
+[stderr]             'scheduler_warmup_steps': 1000,
+[stderr]             'self_attn_every_n_layers': 2,
+[stderr]             'tags': None,
+[stderr]             'tokenizer_max_length': 48,
+[stderr]             'train_expert_only': True,
+[stderr]             'train_state_proj': True,
+[stderr]             'use_amp': False,
+[stderr]             'use_cache': True,
+[stderr]             'use_delta_joint_actions_aloha': False,
+[stderr]             'use_peft': False,
+[stderr]             'vlm_model_name': 'HuggingFaceTB/SmolVLM2-500M-Instruct'},
+[stderr]  'rename_map': {},
+[stderr]  'seed': 1000,
+[stderr]  'trust_remote_code': False}
+[stderr] WARNING 2026-07-24 16:03:19 ice_utils.py:54 Using CPU, this will be slow.
+[stderr] INFO 2026-07-24 16:03:19 bot_eval.py:531 Output dir: C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\ablation_outputs\sg_visual_ablation_2026_07_24_16_02_27\visual_goal_arrow
+[stderr] INFO 2026-07-24 16:03:19 bot_eval.py:533 Making environment (batch_size=1, async=False).
+[stdout] Built vec env | suite=libero_spatial | task_id=0 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=1 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=3 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=4 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=5 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=7 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=8 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=9 | n_envs=1
+[stdout] Creating LIBERO envs | suites=['libero_spatial'] | n_envs(per task)=1 | init_states=True
+[stdout] Restricting to task_ids=[2, 6]
+[stdout] [info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[stdout] Built vec env | suite=libero_spatial | task_id=2 | n_envs=1
+[stdout] Built vec env | suite=libero_spatial | task_id=6 | n_envs=1
+[stderr] INFO 2026-07-24 16:03:20 bot_eval.py:541 Making policy.
+[stdout] Loading  HuggingFaceTB/SmolVLM2-500M-Instruct weights ...
+[stderr] Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[stderr] WARNING 2026-07-24 16:03:20 ls\_http.py:904 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[stderr] `torch_dtype` is deprecated! Use `dtype` instead!
+[stderr] 
+[stderr] Loading weights:   0%|          | 0/489 [00:00<?, ?it/s]
+[stderr] Loading weights:   8%|8         | 41/489 [00:00<00:01, 373.87it/s]
+[stderr] Loading weights:  17%|#6        | 82/489 [00:00<00:01, 373.81it/s]
+[stderr] Loading weights:  25%|##4       | 122/489 [00:00<00:00, 373.62it/s]
+[stderr] Loading weights:  34%|###4      | 168/489 [00:00<00:00, 397.81it/s]
+[stderr] Loading weights:  43%|####2     | 208/489 [00:00<00:00, 390.25it/s]
+[stderr] Loading weights:  51%|#####     | 249/489 [00:00<00:00, 391.11it/s]
+[stderr] Loading weights:  62%|######1   | 301/489 [00:00<00:00, 420.58it/s]
+[stderr] Loading weights:  76%|#######5  | 371/489 [00:00<00:00, 498.00it/s]
+[stderr] Loading weights:  91%|#########1| 447/489 [00:00<00:00, 563.29it/s]
+[stderr] Loading weights: 100%|##########| 489/489 [00:01<00:00, 484.29it/s]
+[stderr] 
+[stderr] Stepping through eval batches:   0%|          | 0/1 [00:00<?, ?it/s]
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 0/280 [00:00<?, ?it/s][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 0/280 [01:31<?, ?it/s, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 1/280 [01:31<7:05:46, 91.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 1/280 [01:31<7:05:46, 91.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|          | 2/280 [01:31<2:55:40, 37.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|          | 2/280 [01:32<2:55:40, 37.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 3/280 [01:32<1:35:47, 20.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 3/280 [01:32<1:35:47, 20.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 4/280 [01:32<58:22, 12.69s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 4/280 [01:32<58:22, 12.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|1         | 5/280 [01:32<37:46,  8.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|1         | 5/280 [01:33<37:46,  8.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 6/280 [01:33<25:20,  5.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 6/280 [01:33<25:20,  5.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 7/280 [01:33<17:31,  3.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 7/280 [01:33<17:31,  3.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|2         | 8/280 [01:33<12:27,  2.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|2         | 8/280 [01:34<12:27,  2.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|3         | 9/280 [01:34<09:00,  1.99s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|3         | 9/280 [01:34<09:00,  1.99s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 10/280 [01:34<06:39,  1.48s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 10/280 [03:19<06:39,  1.48s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 11/280 [03:19<2:28:50, 33.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 11/280 [03:20<2:28:50, 33.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|4         | 12/280 [03:20<1:43:38, 23.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|4         | 12/280 [03:20<1:43:38, 23.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|4         | 13/280 [03:20<1:12:33, 16.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|4         | 13/280 [03:20<1:12:33, 16.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 14/280 [03:20<50:53, 11.48s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 14/280 [03:21<50:53, 11.48s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 15/280 [03:21<35:53,  8.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 15/280 [03:21<35:53,  8.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|5         | 16/280 [03:21<25:35,  5.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|5         | 16/280 [03:22<25:35,  5.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 17/280 [03:22<18:14,  4.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 17/280 [03:22<18:14,  4.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 18/280 [03:22<13:08,  3.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 18/280 [03:22<13:08,  3.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|6         | 19/280 [03:22<09:35,  2.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|6         | 19/280 [03:22<09:35,  2.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|7         | 20/280 [03:22<07:05,  1.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|7         | 20/280 [04:37<07:05,  1.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 21/280 [04:37<1:41:24, 23.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 21/280 [04:37<1:41:24, 23.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 22/280 [04:37<1:10:54, 16.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 22/280 [04:37<1:10:54, 16.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|8         | 23/280 [04:37<49:38, 11.59s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|8         | 23/280 [04:37<49:38, 11.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 24/280 [04:37<34:48,  8.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 24/280 [04:38<34:48,  8.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 25/280 [04:38<24:28,  5.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 25/280 [04:38<24:28,  5.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|9         | 26/280 [04:38<17:16,  4.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|9         | 26/280 [04:38<17:16,  4.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|9         | 27/280 [04:38<12:15,  2.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|9         | 27/280 [04:38<12:15,  2.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 28/280 [04:38<08:44,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 28/280 [04:38<08:44,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 29/280 [04:38<06:18,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 29/280 [04:38<06:18,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#         | 30/280 [04:38<04:36,  1.10s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#         | 30/280 [05:30<04:36,  1.10s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 31/280 [05:30<1:07:55, 16.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 31/280 [05:31<1:07:55, 16.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 32/280 [05:31<47:33, 11.50s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 32/280 [05:31<47:33, 11.50s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#1        | 33/280 [05:31<33:22,  8.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#1        | 33/280 [05:31<33:22,  8.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 34/280 [05:31<23:28,  5.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 34/280 [05:31<23:28,  5.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 35/280 [05:31<16:34,  4.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 35/280 [05:31<16:34,  4.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#2        | 36/280 [05:31<11:46,  2.90s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#2        | 36/280 [05:31<11:46,  2.90s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#3        | 37/280 [05:31<08:24,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#3        | 37/280 [05:32<08:24,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 38/280 [05:32<06:03,  1.50s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 38/280 [05:32<06:03,  1.50s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 39/280 [05:32<04:25,  1.10s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 39/280 [05:32<04:25,  1.10s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#4        | 40/280 [05:32<03:17,  1.21it/s, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#4        | 40/280 [06:26<03:17,  1.21it/s, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#4        | 41/280 [06:26<1:07:12, 16.87s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#4        | 41/280 [06:26<1:07:12, 16.87s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 42/280 [06:26<47:05, 11.87s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 42/280 [06:27<47:05, 11.87s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 43/280 [06:27<33:02,  8.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 43/280 [06:27<33:02,  8.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#5        | 44/280 [06:27<23:15,  5.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#5        | 44/280 [06:27<23:15,  5.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 45/280 [06:27<16:24,  4.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 45/280 [06:27<16:24,  4.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 46/280 [06:27<11:38,  2.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 46/280 [06:27<11:38,  2.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#6        | 47/280 [06:27<08:18,  2.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#6        | 47/280 [06:27<08:18,  2.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#7        | 48/280 [06:27<05:59,  1.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#7        | 48/280 [06:28<05:59,  1.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 49/280 [06:28<04:21,  1.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 49/280 [06:28<04:21,  1.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 50/280 [06:28<03:15,  1.17it/s, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 50/280 [07:38<03:15,  1.17it/s, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#8        | 51/280 [07:38<1:23:05, 21.77s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#8        | 51/280 [07:39<1:23:05, 21.77s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 52/280 [07:39<58:20, 15.35s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 52/280 [07:39<58:20, 15.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 53/280 [07:39<41:01, 10.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 53/280 [07:39<41:01, 10.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#9        | 54/280 [07:39<29:00,  7.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#9        | 54/280 [07:40<29:00,  7.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|#9        | 55/280 [07:40<20:34,  5.48s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|#9        | 55/280 [07:40<20:34,  5.48s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 56/280 [07:40<14:39,  3.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 56/280 [07:40<14:39,  3.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 57/280 [07:40<10:31,  2.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 57/280 [07:41<10:31,  2.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##        | 58/280 [07:41<07:37,  2.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##        | 58/280 [07:41<07:37,  2.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 59/280 [07:41<05:35,  1.52s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 59/280 [07:41<05:35,  1.52s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 60/280 [07:41<04:12,  1.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 60/280 [09:25<04:12,  1.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##1       | 61/280 [09:25<1:56:46, 31.99s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##1       | 61/280 [09:25<1:56:46, 31.99s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 62/280 [09:25<1:21:43, 22.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 62/280 [09:26<1:21:43, 22.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 63/280 [09:26<57:20, 15.85s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 63/280 [09:26<57:20, 15.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##2       | 64/280 [09:26<40:14, 11.18s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##2       | 64/280 [09:26<40:14, 11.18s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##3       | 65/280 [09:26<28:22,  7.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##3       | 65/280 [09:27<28:22,  7.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 66/280 [09:27<20:04,  5.63s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 66/280 [09:27<20:04,  5.63s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 67/280 [09:27<14:27,  4.07s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 67/280 [09:27<14:27,  4.07s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##4       | 68/280 [09:27<10:25,  2.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##4       | 68/280 [09:28<10:25,  2.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##4       | 69/280 [09:28<07:34,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##4       | 69/280 [09:28<07:34,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 70/280 [09:28<05:34,  1.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 70/280 [11:06<05:34,  1.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 71/280 [11:06<1:45:59, 30.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 71/280 [11:06<1:45:59, 30.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##5       | 72/280 [11:06<1:14:09, 21.39s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##5       | 72/280 [11:06<1:14:09, 21.39s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 73/280 [11:06<52:00, 15.08s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 73/280 [11:07<52:00, 15.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 74/280 [11:07<36:38, 10.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 74/280 [11:07<36:38, 10.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##6       | 75/280 [11:07<25:48,  7.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##6       | 75/280 [11:07<25:48,  7.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##7       | 76/280 [11:07<18:14,  5.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##7       | 76/280 [11:08<18:14,  5.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 77/280 [11:08<13:01,  3.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 77/280 [11:08<13:01,  3.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 78/280 [11:08<09:24,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 78/280 [11:08<09:24,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##8       | 79/280 [11:08<06:53,  2.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##8       | 79/280 [11:09<06:53,  2.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 80/280 [11:09<05:05,  1.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 80/280 [12:45<05:05,  1.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 81/280 [12:45<1:39:42, 30.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 81/280 [12:45<1:39:42, 30.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##9       | 82/280 [12:45<1:09:40, 21.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##9       | 82/280 [12:46<1:09:40, 21.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|##9       | 83/280 [12:46<48:44, 14.85s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|##9       | 83/280 [12:46<48:44, 14.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 84/280 [12:46<34:09, 10.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 84/280 [12:46<34:09, 10.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 85/280 [12:46<24:01,  7.39s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 85/280 [12:46<24:01,  7.39s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###       | 86/280 [12:46<16:57,  5.25s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###       | 86/280 [12:47<16:57,  5.25s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 87/280 [12:47<12:04,  3.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 87/280 [12:47<12:04,  3.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 88/280 [12:47<08:39,  2.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 88/280 [12:47<08:39,  2.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###1      | 89/280 [12:47<06:17,  1.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###1      | 89/280 [12:47<06:17,  1.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 90/280 [12:47<04:36,  1.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 90/280 [13:58<04:36,  1.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 91/280 [13:58<1:09:26, 22.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 91/280 [13:58<1:09:26, 22.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###2      | 92/280 [13:58<48:34, 15.50s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###2      | 92/280 [13:58<48:34, 15.50s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###3      | 93/280 [13:58<34:02, 10.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###3      | 93/280 [13:58<34:02, 10.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 94/280 [13:58<23:55,  7.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 94/280 [13:59<23:55,  7.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 95/280 [13:59<16:55,  5.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 95/280 [13:59<16:55,  5.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###4      | 96/280 [13:59<12:06,  3.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###4      | 96/280 [13:59<12:06,  3.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###4      | 97/280 [13:59<08:41,  2.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###4      | 97/280 [13:59<08:41,  2.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 98/280 [13:59<06:18,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 98/280 [14:00<06:18,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 99/280 [14:00<04:37,  1.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 99/280 [14:00<04:37,  1.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###5      | 100/280 [14:00<03:25,  1.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###5      | 100/280 [15:34<03:25,  1.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 101/280 [15:34<1:26:45, 29.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 101/280 [15:34<1:26:45, 29.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 102/280 [15:34<1:00:37, 20.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 102/280 [15:35<1:00:37, 20.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###6      | 103/280 [15:35<42:25, 14.38s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###6      | 103/280 [15:35<42:25, 14.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###7      | 104/280 [15:35<29:47, 10.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###7      | 104/280 [15:35<29:47, 10.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 105/280 [15:35<20:59,  7.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 105/280 [15:36<20:59,  7.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 106/280 [15:36<14:53,  5.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 106/280 [15:36<14:53,  5.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###8      | 107/280 [15:36<10:34,  3.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###8      | 107/280 [15:36<10:34,  3.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 108/280 [15:36<07:35,  2.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 108/280 [15:36<07:35,  2.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 109/280 [15:36<05:32,  1.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 109/280 [15:37<05:32,  1.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###9      | 110/280 [15:37<04:06,  1.45s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###9      | 110/280 [17:14<04:06,  1.45s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|###9      | 111/280 [17:14<1:25:13, 30.26s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|###9      | 111/280 [17:14<1:25:13, 30.26s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 112/280 [17:14<59:31, 21.26s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 112/280 [17:15<59:31, 21.26s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 113/280 [17:15<41:39, 14.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 113/280 [17:15<41:39, 14.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####      | 114/280 [17:15<29:13, 10.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####      | 114/280 [17:15<29:13, 10.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 115/280 [17:15<20:33,  7.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 115/280 [17:16<20:33,  7.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 116/280 [17:16<14:35,  5.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 116/280 [17:16<14:35,  5.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####1     | 117/280 [17:16<10:22,  3.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####1     | 117/280 [17:16<10:22,  3.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 118/280 [17:16<07:31,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 118/280 [17:17<07:31,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 119/280 [17:17<05:29,  2.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 119/280 [17:17<05:29,  2.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####2     | 120/280 [17:17<04:01,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####2     | 120/280 [18:42<04:01,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####3     | 121/280 [18:42<1:10:50, 26.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####3     | 121/280 [18:43<1:10:50, 26.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 122/280 [18:43<49:27, 18.78s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 122/280 [18:43<49:27, 18.78s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 123/280 [18:43<34:39, 13.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 123/280 [18:43<34:39, 13.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####4     | 124/280 [18:43<24:16,  9.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####4     | 124/280 [18:44<24:16,  9.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####4     | 125/280 [18:44<17:04,  6.61s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####4     | 125/280 [18:44<17:04,  6.61s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 126/280 [18:44<12:04,  4.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 126/280 [18:44<12:04,  4.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 127/280 [18:44<08:35,  3.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 127/280 [18:44<08:35,  3.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####5     | 128/280 [18:44<06:10,  2.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####5     | 128/280 [18:45<06:10,  2.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 129/280 [18:45<04:31,  1.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 129/280 [18:45<04:31,  1.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 130/280 [18:45<03:20,  1.33s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 130/280 [20:02<03:20,  1.33s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####6     | 131/280 [20:02<59:38, 24.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####6     | 131/280 [20:02<59:38, 24.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####7     | 132/280 [20:02<41:42, 16.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####7     | 132/280 [20:02<41:42, 16.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 133/280 [20:02<29:12, 11.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 133/280 [20:03<29:12, 11.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 134/280 [20:03<20:30,  8.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 134/280 [20:03<20:30,  8.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####8     | 135/280 [20:03<14:29,  5.99s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####8     | 135/280 [20:03<14:29,  5.99s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 136/280 [20:03<10:17,  4.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 136/280 [20:04<10:17,  4.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 137/280 [20:04<07:23,  3.10s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 137/280 [20:04<07:23,  3.10s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####9     | 138/280 [20:04<05:20,  2.25s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####9     | 138/280 [20:04<05:20,  2.25s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|####9     | 139/280 [20:04<03:52,  1.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|####9     | 139/280 [20:04<03:52,  1.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 140/280 [20:04<02:53,  1.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 140/280 [21:35<02:53,  1.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 141/280 [21:35<1:05:10, 28.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 141/280 [21:36<1:05:10, 28.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####     | 142/280 [21:36<45:29, 19.78s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####     | 142/280 [21:36<45:29, 19.78s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 143/280 [21:36<31:48, 13.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 143/280 [21:36<31:48, 13.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 144/280 [21:36<22:17,  9.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 144/280 [21:36<22:17,  9.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####1    | 145/280 [21:36<15:40,  6.96s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####1    | 145/280 [21:37<15:40,  6.96s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 146/280 [21:37<11:04,  4.96s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 146/280 [21:37<11:04,  4.96s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 147/280 [21:37<07:51,  3.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 147/280 [21:37<07:51,  3.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####2    | 148/280 [21:37<05:38,  2.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####2    | 148/280 [21:37<05:38,  2.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####3    | 149/280 [21:37<04:05,  1.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####3    | 149/280 [21:38<04:05,  1.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 150/280 [21:38<03:01,  1.40s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 150/280 [23:08<03:01,  1.40s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 151/280 [23:08<1:00:15, 28.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 151/280 [23:08<1:00:15, 28.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####4    | 152/280 [23:08<42:02, 19.71s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####4    | 152/280 [23:09<42:02, 19.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####4    | 153/280 [23:09<29:24, 13.89s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####4    | 153/280 [23:09<29:24, 13.89s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 154/280 [23:09<20:37,  9.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 154/280 [23:09<20:37,  9.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 155/280 [23:09<14:31,  6.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 155/280 [23:10<14:31,  6.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####5    | 156/280 [23:10<10:16,  4.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####5    | 156/280 [23:10<10:16,  4.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 157/280 [23:10<07:21,  3.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 157/280 [23:10<07:21,  3.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 158/280 [23:10<05:17,  2.60s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 158/280 [23:10<05:17,  2.60s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####6    | 159/280 [23:10<03:51,  1.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####6    | 159/280 [23:11<03:51,  1.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 160/280 [23:11<02:51,  1.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 160/280 [25:01<02:51,  1.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 161/280 [25:01<1:07:42, 34.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 161/280 [25:02<1:07:42, 34.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####7    | 162/280 [25:02<47:10, 23.99s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####7    | 162/280 [25:02<47:10, 23.99s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####8    | 163/280 [25:02<32:54, 16.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####8    | 163/280 [25:02<32:54, 16.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 164/280 [25:02<23:01, 11.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 164/280 [25:02<23:01, 11.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 165/280 [25:02<16:09,  8.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 165/280 [25:03<16:09,  8.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####9    | 166/280 [25:03<11:24,  6.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####9    | 166/280 [25:03<11:24,  6.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|#####9    | 167/280 [25:03<08:06,  4.31s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|#####9    | 167/280 [25:03<08:06,  4.31s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 168/280 [25:03<05:48,  3.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 168/280 [25:04<05:48,  3.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 169/280 [25:04<04:13,  2.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 169/280 [25:04<04:13,  2.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######    | 170/280 [25:04<03:05,  1.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######    | 170/280 [26:50<03:05,  1.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 171/280 [26:50<1:00:01, 33.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 171/280 [26:51<1:00:01, 33.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 172/280 [26:51<41:49, 23.24s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 172/280 [26:51<41:49, 23.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######1   | 173/280 [26:51<29:12, 16.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######1   | 173/280 [26:51<29:12, 16.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 174/280 [26:51<20:26, 11.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 174/280 [26:52<20:26, 11.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 175/280 [26:52<14:21,  8.21s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 175/280 [26:52<14:21,  8.21s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######2   | 176/280 [26:52<10:06,  5.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######2   | 176/280 [26:53<10:06,  5.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######3   | 177/280 [26:53<07:14,  4.22s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######3   | 177/280 [26:53<07:14,  4.22s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 178/280 [26:53<05:12,  3.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 178/280 [26:53<05:12,  3.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 179/280 [26:53<03:46,  2.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 179/280 [26:54<03:46,  2.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######4   | 180/280 [26:54<02:46,  1.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######4   | 180/280 [28:33<02:46,  1.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######4   | 181/280 [28:33<50:54, 30.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######4   | 181/280 [28:33<50:54, 30.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 182/280 [28:33<35:25, 21.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 182/280 [28:33<35:25, 21.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 183/280 [28:33<24:43, 15.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 183/280 [28:33<24:43, 15.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######5   | 184/280 [28:33<17:16, 10.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######5   | 184/280 [28:34<17:16, 10.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 185/280 [28:34<12:06,  7.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 185/280 [28:34<12:06,  7.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 186/280 [28:34<08:31,  5.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 186/280 [28:34<08:31,  5.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######6   | 187/280 [28:34<06:04,  3.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######6   | 187/280 [28:35<06:04,  3.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######7   | 188/280 [28:35<04:25,  2.89s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######7   | 188/280 [28:35<04:25,  2.89s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######7   | 189/280 [28:35<03:12,  2.12s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######7   | 189/280 [28:36<03:12,  2.12s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######7   | 190/280 [28:36<02:21,  1.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######7   | 190/280 [30:10<02:21,  1.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######8   | 191/280 [30:10<43:34, 29.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######8   | 191/280 [30:10<43:34, 29.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  69%|######8   | 192/280 [30:10<30:18, 20.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  69%|######8   | 192/280 [30:10<30:18, 20.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  69%|######8   | 193/280 [30:10<21:07, 14.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  69%|######8   | 193/280 [30:11<21:07, 14.57s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  69%|######9   | 194/280 [30:11<14:44, 10.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  69%|######9   | 194/280 [30:11<14:44, 10.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  70%|######9   | 195/280 [30:11<10:19,  7.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  70%|######9   | 195/280 [30:11<10:19,  7.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  70%|#######   | 196/280 [30:11<07:16,  5.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  70%|#######   | 196/280 [30:12<07:16,  5.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  70%|#######   | 197/280 [30:12<05:09,  3.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  70%|#######   | 197/280 [30:12<05:09,  3.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  71%|#######   | 198/280 [30:12<03:40,  2.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  71%|#######   | 198/280 [30:12<03:40,  2.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  71%|#######1  | 199/280 [30:12<02:39,  1.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  71%|#######1  | 199/280 [30:13<02:39,  1.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  71%|#######1  | 200/280 [30:13<01:57,  1.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  71%|#######1  | 200/280 [31:49<01:57,  1.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  72%|#######1  | 201/280 [31:49<39:33, 30.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  72%|#######1  | 201/280 [31:50<39:33, 30.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  72%|#######2  | 202/280 [31:50<27:28, 21.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  72%|#######2  | 202/280 [31:50<27:28, 21.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  72%|#######2  | 203/280 [31:50<19:05, 14.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  72%|#######2  | 203/280 [31:50<19:05, 14.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  73%|#######2  | 204/280 [31:50<13:20, 10.54s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  73%|#######2  | 204/280 [31:51<13:20, 10.54s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  73%|#######3  | 205/280 [31:51<09:19,  7.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  73%|#######3  | 205/280 [31:51<09:19,  7.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  74%|#######3  | 206/280 [31:51<06:33,  5.31s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  74%|#######3  | 206/280 [31:51<06:33,  5.31s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  74%|#######3  | 207/280 [31:51<04:38,  3.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  74%|#######3  | 207/280 [31:51<04:38,  3.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  74%|#######4  | 208/280 [31:51<03:18,  2.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  74%|#######4  | 208/280 [31:52<03:18,  2.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  75%|#######4  | 209/280 [31:52<02:23,  2.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  75%|#######4  | 209/280 [31:52<02:23,  2.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  75%|#######5  | 210/280 [31:52<01:46,  1.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  75%|#######5  | 210/280 [33:28<01:46,  1.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  75%|#######5  | 211/280 [33:28<34:08, 29.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  75%|#######5  | 211/280 [33:28<34:08, 29.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  76%|#######5  | 212/280 [33:28<23:38, 20.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  76%|#######5  | 212/280 [33:28<23:38, 20.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  76%|#######6  | 213/280 [33:28<16:24, 14.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  76%|#######6  | 213/280 [33:28<16:24, 14.70s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  76%|#######6  | 214/280 [33:28<11:24, 10.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  76%|#######6  | 214/280 [33:29<11:24, 10.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  77%|#######6  | 215/280 [33:29<07:57,  7.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  77%|#######6  | 215/280 [33:29<07:57,  7.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  77%|#######7  | 216/280 [33:29<05:35,  5.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  77%|#######7  | 216/280 [33:29<05:35,  5.24s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  78%|#######7  | 217/280 [33:29<03:56,  3.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  78%|#######7  | 217/280 [33:30<03:56,  3.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  78%|#######7  | 218/280 [33:30<02:48,  2.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  78%|#######7  | 218/280 [33:30<02:48,  2.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  78%|#######8  | 219/280 [33:30<02:02,  2.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  78%|#######8  | 219/280 [33:30<02:02,  2.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  79%|#######8  | 220/280 [33:30<01:29,  1.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  79%|#######8  | 220/280 [35:08<01:29,  1.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  79%|#######8  | 221/280 [35:08<29:57, 30.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  79%|#######8  | 221/280 [35:09<29:57, 30.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  79%|#######9  | 222/280 [35:09<20:41, 21.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  79%|#######9  | 222/280 [35:09<20:41, 21.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  80%|#######9  | 223/280 [35:09<14:18, 15.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  80%|#######9  | 223/280 [35:09<14:18, 15.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  80%|########  | 224/280 [35:09<09:55, 10.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  80%|########  | 224/280 [35:09<09:55, 10.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  80%|########  | 225/280 [35:09<06:54,  7.54s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  80%|########  | 225/280 [35:10<06:54,  7.54s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  81%|########  | 226/280 [35:10<04:50,  5.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  81%|########  | 226/280 [35:10<04:50,  5.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  81%|########1 | 227/280 [35:10<03:24,  3.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  81%|########1 | 227/280 [35:10<03:24,  3.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  81%|########1 | 228/280 [35:10<02:24,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  81%|########1 | 228/280 [35:11<02:24,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  82%|########1 | 229/280 [35:11<01:44,  2.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  82%|########1 | 229/280 [35:11<01:44,  2.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  82%|########2 | 230/280 [35:11<01:15,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  82%|########2 | 230/280 [36:49<01:15,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  82%|########2 | 231/280 [36:49<24:50, 30.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  82%|########2 | 231/280 [36:49<24:50, 30.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  83%|########2 | 232/280 [36:49<17:06, 21.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  83%|########2 | 232/280 [36:49<17:06, 21.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  83%|########3 | 233/280 [36:49<11:47, 15.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  83%|########3 | 233/280 [36:50<11:47, 15.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  84%|########3 | 234/280 [36:50<08:08, 10.62s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  84%|########3 | 234/280 [36:50<08:08, 10.62s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  84%|########3 | 235/280 [36:50<05:38,  7.52s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  84%|########3 | 235/280 [36:50<05:38,  7.52s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  84%|########4 | 236/280 [36:50<03:55,  5.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  84%|########4 | 236/280 [36:51<03:55,  5.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  85%|########4 | 237/280 [36:51<02:44,  3.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  85%|########4 | 237/280 [36:51<02:44,  3.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  85%|########5 | 238/280 [36:51<01:56,  2.78s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  85%|########5 | 238/280 [36:51<01:56,  2.78s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  85%|########5 | 239/280 [36:51<01:23,  2.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  85%|########5 | 239/280 [36:52<01:23,  2.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  86%|########5 | 240/280 [36:52<01:00,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  86%|########5 | 240/280 [38:28<01:00,  1.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  86%|########6 | 241/280 [38:28<19:34, 30.12s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  86%|########6 | 241/280 [38:29<19:34, 30.12s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  86%|########6 | 242/280 [38:29<13:24, 21.17s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  86%|########6 | 242/280 [38:29<13:24, 21.17s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  87%|########6 | 243/280 [38:29<09:11, 14.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  87%|########6 | 243/280 [38:29<09:11, 14.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  87%|########7 | 244/280 [38:29<06:18, 10.52s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  87%|########7 | 244/280 [38:29<06:18, 10.52s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  88%|########7 | 245/280 [38:29<04:20,  7.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  88%|########7 | 245/280 [38:30<04:20,  7.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  88%|########7 | 246/280 [38:30<02:59,  5.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  88%|########7 | 246/280 [38:30<02:59,  5.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  88%|########8 | 247/280 [38:30<02:04,  3.77s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  88%|########8 | 247/280 [38:30<02:04,  3.77s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  89%|########8 | 248/280 [38:30<01:26,  2.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  89%|########8 | 248/280 [38:30<01:26,  2.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  89%|########8 | 249/280 [38:30<01:01,  1.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  89%|########8 | 249/280 [38:31<01:01,  1.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  89%|########9 | 250/280 [38:31<00:44,  1.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  89%|########9 | 250/280 [39:52<00:44,  1.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  90%|########9 | 251/280 [39:52<12:18, 25.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  90%|########9 | 251/280 [39:52<12:18, 25.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  90%|######### | 252/280 [39:52<08:21, 17.90s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  90%|######### | 252/280 [39:53<08:21, 17.90s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  90%|######### | 253/280 [39:53<05:41, 12.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  90%|######### | 253/280 [39:53<05:41, 12.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  91%|######### | 254/280 [39:53<03:52,  8.94s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  91%|######### | 254/280 [39:53<03:52,  8.94s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  91%|#########1| 255/280 [39:53<02:38,  6.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  91%|#########1| 255/280 [39:54<02:38,  6.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  91%|#########1| 256/280 [39:54<01:48,  4.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  91%|#########1| 256/280 [39:54<01:48,  4.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  92%|#########1| 257/280 [39:54<01:15,  3.26s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  92%|#########1| 257/280 [39:54<01:15,  3.26s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  92%|#########2| 258/280 [39:54<00:52,  2.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  92%|#########2| 258/280 [39:55<00:52,  2.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  92%|#########2| 259/280 [39:55<00:37,  1.77s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  92%|#########2| 259/280 [39:55<00:37,  1.77s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  93%|#########2| 260/280 [39:55<00:26,  1.33s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  93%|#########2| 260/280 [41:13<00:26,  1.33s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  93%|#########3| 261/280 [41:13<07:41, 24.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  93%|#########3| 261/280 [41:13<07:41, 24.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  94%|#########3| 262/280 [41:13<05:07, 17.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  94%|#########3| 262/280 [41:13<05:07, 17.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  94%|#########3| 263/280 [41:13<03:24, 12.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  94%|#########3| 263/280 [41:14<03:24, 12.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  94%|#########4| 264/280 [41:14<02:15,  8.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  94%|#########4| 264/280 [41:14<02:15,  8.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  95%|#########4| 265/280 [41:14<01:30,  6.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  95%|#########4| 265/280 [41:14<01:30,  6.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  95%|#########5| 266/280 [41:14<01:00,  4.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  95%|#########5| 266/280 [41:14<01:00,  4.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  95%|#########5| 267/280 [41:14<00:39,  3.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  95%|#########5| 267/280 [41:15<00:39,  3.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  96%|#########5| 268/280 [41:15<00:26,  2.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  96%|#########5| 268/280 [41:15<00:26,  2.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  96%|#########6| 269/280 [41:15<00:18,  1.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  96%|#########6| 269/280 [41:15<00:18,  1.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  96%|#########6| 270/280 [41:15<00:12,  1.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  96%|#########6| 270/280 [42:32<00:12,  1.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  97%|#########6| 271/280 [42:32<03:34, 23.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  97%|#########6| 271/280 [42:32<03:34, 23.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  97%|#########7| 272/280 [42:32<02:13, 16.74s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  97%|#########7| 272/280 [42:32<02:13, 16.74s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  98%|#########7| 273/280 [42:32<01:22, 11.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  98%|#########7| 273/280 [42:32<01:22, 11.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  98%|#########7| 274/280 [42:32<00:49,  8.32s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  98%|#########7| 274/280 [42:33<00:49,  8.32s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  98%|#########8| 275/280 [42:33<00:29,  5.89s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  98%|#########8| 275/280 [42:33<00:29,  5.89s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  99%|#########8| 276/280 [42:33<00:16,  4.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  99%|#########8| 276/280 [42:33<00:16,  4.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  99%|#########8| 277/280 [42:33<00:09,  3.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  99%|#########8| 277/280 [42:33<00:09,  3.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  99%|#########9| 278/280 [42:33<00:04,  2.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  99%|#########9| 278/280 [42:34<00:04,  2.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps: 100%|#########9| 279/280 [42:34<00:01,  1.61s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps: 100%|#########9| 279/280 [42:34<00:01,  1.61s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps: 100%|##########| 280/280 [42:34<00:00,  1.21s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr]                                                                                                                     [A
+[stderr] Stepping through eval batches:   0%|          | 0/1 [42:54<?, ?it/s, running_success_rate=0.0%]
+[stderr] Stepping through eval batches: 100%|##########| 1/1 [42:54<00:00, 2574.47s/it, running_success_rate=0.0%]
+[stderr] Stepping through eval batches: 100%|##########| 1/1 [42:54<00:00, 2574.47s/it, running_success_rate=0.0%]
+[stderr] 
+[stderr] Stepping through eval batches:   0%|          | 0/1 [00:00<?, ?it/s]
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 0/280 [00:00<?, ?it/s][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 0/280 [01:31<?, ?it/s, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 1/280 [01:31<7:03:44, 91.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   0%|          | 1/280 [01:31<7:03:44, 91.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|          | 2/280 [01:31<2:55:18, 37.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|          | 2/280 [01:32<2:55:18, 37.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 3/280 [01:32<1:35:48, 20.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 3/280 [01:32<1:35:48, 20.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 4/280 [01:32<58:44, 12.77s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   1%|1         | 4/280 [01:33<58:44, 12.77s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|1         | 5/280 [01:33<38:14,  8.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|1         | 5/280 [01:33<38:14,  8.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 6/280 [01:33<25:52,  5.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 6/280 [01:34<25:52,  5.67s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 7/280 [01:34<18:02,  3.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   2%|2         | 7/280 [01:34<18:02,  3.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|2         | 8/280 [01:34<12:55,  2.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|2         | 8/280 [01:34<12:55,  2.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|3         | 9/280 [01:34<09:24,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   3%|3         | 9/280 [01:35<09:24,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 10/280 [01:35<07:07,  1.58s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 10/280 [03:41<07:07,  1.58s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 11/280 [03:41<2:58:06, 39.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|3         | 11/280 [03:41<2:58:06, 39.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|4         | 12/280 [03:41<2:03:58, 27.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   4%|4         | 12/280 [03:42<2:03:58, 27.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|4         | 13/280 [03:42<1:26:35, 19.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|4         | 13/280 [03:42<1:26:35, 19.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 14/280 [03:42<1:00:45, 13.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 14/280 [03:43<1:00:45, 13.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 15/280 [03:43<43:06,  9.76s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   5%|5         | 15/280 [03:44<43:06,  9.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|5         | 16/280 [03:44<30:54,  7.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|5         | 16/280 [03:44<30:54,  7.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 17/280 [03:44<22:24,  5.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 17/280 [03:45<22:24,  5.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 18/280 [03:45<16:19,  3.74s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   6%|6         | 18/280 [03:45<16:19,  3.74s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|6         | 19/280 [03:45<12:00,  2.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|6         | 19/280 [03:46<12:00,  2.76s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|7         | 20/280 [03:46<08:58,  2.07s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   7%|7         | 20/280 [05:43<08:58,  2.07s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 21/280 [05:43<2:38:30, 36.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 21/280 [05:44<2:38:30, 36.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 22/280 [05:44<1:50:59, 25.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|7         | 22/280 [05:44<1:50:59, 25.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|8         | 23/280 [05:44<1:18:04, 18.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   8%|8         | 23/280 [05:44<1:18:04, 18.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 24/280 [05:44<54:55, 12.87s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 24/280 [05:45<54:55, 12.87s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 25/280 [05:45<38:51,  9.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|8         | 25/280 [05:45<38:51,  9.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|9         | 26/280 [05:45<27:33,  6.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:   9%|9         | 26/280 [05:46<27:33,  6.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|9         | 27/280 [05:46<19:37,  4.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|9         | 27/280 [05:46<19:37,  4.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 28/280 [05:46<14:11,  3.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 28/280 [05:46<14:11,  3.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 29/280 [05:46<10:20,  2.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  10%|#         | 29/280 [05:47<10:20,  2.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#         | 30/280 [05:47<07:38,  1.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#         | 30/280 [07:15<07:38,  1.83s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 31/280 [07:15<1:54:46, 27.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 31/280 [07:15<1:54:46, 27.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 32/280 [07:15<1:20:29, 19.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  11%|#1        | 32/280 [07:15<1:20:29, 19.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#1        | 33/280 [07:15<56:27, 13.72s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#1        | 33/280 [07:16<56:27, 13.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 34/280 [07:16<39:50,  9.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 34/280 [07:16<39:50,  9.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 35/280 [07:16<28:10,  6.90s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  12%|#2        | 35/280 [07:16<28:10,  6.90s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#2        | 36/280 [07:16<19:58,  4.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#2        | 36/280 [07:17<19:58,  4.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#3        | 37/280 [07:17<14:17,  3.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  13%|#3        | 37/280 [07:17<14:17,  3.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 38/280 [07:17<10:18,  2.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 38/280 [07:17<10:18,  2.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 39/280 [07:17<07:33,  1.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#3        | 39/280 [07:17<07:33,  1.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#4        | 40/280 [07:17<05:39,  1.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  14%|#4        | 40/280 [09:31<05:39,  1.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#4        | 41/280 [09:31<2:43:12, 40.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#4        | 41/280 [09:31<2:43:12, 40.97s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 42/280 [09:31<1:54:17, 28.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 42/280 [09:32<1:54:17, 28.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 43/280 [09:32<1:20:09, 20.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  15%|#5        | 43/280 [09:32<1:20:09, 20.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#5        | 44/280 [09:32<56:17, 14.31s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#5        | 44/280 [09:32<56:17, 14.31s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 45/280 [09:32<39:39, 10.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 45/280 [09:33<39:39, 10.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 46/280 [09:33<28:05,  7.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  16%|#6        | 46/280 [09:33<28:05,  7.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#6        | 47/280 [09:33<20:03,  5.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#6        | 47/280 [09:33<20:03,  5.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#7        | 48/280 [09:33<14:22,  3.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  17%|#7        | 48/280 [09:34<14:22,  3.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 49/280 [09:34<10:28,  2.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 49/280 [09:34<10:28,  2.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 50/280 [09:34<07:41,  2.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#7        | 50/280 [11:07<07:41,  2.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#8        | 51/280 [11:07<1:51:25, 29.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  18%|#8        | 51/280 [11:07<1:51:25, 29.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 52/280 [11:07<1:18:08, 20.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 52/280 [11:08<1:18:08, 20.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 53/280 [11:08<54:55, 14.52s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#8        | 53/280 [11:08<54:55, 14.52s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#9        | 54/280 [11:08<38:47, 10.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  19%|#9        | 54/280 [11:09<38:47, 10.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|#9        | 55/280 [11:09<27:34,  7.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|#9        | 55/280 [11:09<27:34,  7.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 56/280 [11:09<19:45,  5.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 56/280 [11:10<19:45,  5.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 57/280 [11:10<14:15,  3.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  20%|##        | 57/280 [11:10<14:15,  3.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##        | 58/280 [11:10<10:19,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##        | 58/280 [11:10<10:19,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 59/280 [11:10<07:40,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 59/280 [11:11<07:40,  2.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 60/280 [11:11<05:41,  1.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  21%|##1       | 60/280 [12:23<05:41,  1.55s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##1       | 61/280 [12:23<1:23:25, 22.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##1       | 61/280 [12:23<1:23:25, 22.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 62/280 [12:23<58:25, 16.08s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 62/280 [12:24<58:25, 16.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 63/280 [12:24<41:02, 11.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  22%|##2       | 63/280 [12:24<41:02, 11.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##2       | 64/280 [12:24<28:54,  8.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##2       | 64/280 [12:24<28:54,  8.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##3       | 65/280 [12:24<20:27,  5.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  23%|##3       | 65/280 [12:25<20:27,  5.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 66/280 [12:25<14:33,  4.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 66/280 [12:25<14:33,  4.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 67/280 [12:25<10:27,  2.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##3       | 67/280 [12:25<10:27,  2.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##4       | 68/280 [12:25<07:35,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  24%|##4       | 68/280 [12:25<07:35,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##4       | 69/280 [12:25<05:36,  1.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##4       | 69/280 [12:26<05:36,  1.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 70/280 [12:26<04:11,  1.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 70/280 [14:10<04:11,  1.20s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 71/280 [14:10<1:52:11, 32.21s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  25%|##5       | 71/280 [14:11<1:52:11, 32.21s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##5       | 72/280 [14:11<1:19:01, 22.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##5       | 72/280 [14:12<1:19:01, 22.80s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 73/280 [14:12<56:00, 16.23s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 73/280 [14:13<56:00, 16.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 74/280 [14:13<39:50, 11.60s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  26%|##6       | 74/280 [14:14<39:50, 11.60s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##6       | 75/280 [14:14<28:37,  8.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##6       | 75/280 [14:14<28:37,  8.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##7       | 76/280 [14:14<20:40,  6.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  27%|##7       | 76/280 [14:15<20:40,  6.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 77/280 [14:15<15:06,  4.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 77/280 [14:16<15:06,  4.46s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 78/280 [14:16<11:06,  3.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##7       | 78/280 [14:16<11:06,  3.30s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##8       | 79/280 [14:16<08:11,  2.45s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  28%|##8       | 79/280 [14:17<08:11,  2.45s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 80/280 [14:17<06:23,  1.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 80/280 [18:08<06:23,  1.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 81/280 [18:08<3:54:12, 70.62s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##8       | 81/280 [18:08<3:54:12, 70.62s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##9       | 82/280 [18:08<2:43:45, 49.62s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  29%|##9       | 82/280 [18:09<2:43:45, 49.62s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|##9       | 83/280 [18:09<1:54:40, 34.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|##9       | 83/280 [18:10<1:54:40, 34.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 84/280 [18:10<1:20:33, 24.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 84/280 [18:10<1:20:33, 24.66s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 85/280 [18:10<56:37, 17.43s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  30%|###       | 85/280 [18:11<56:37, 17.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###       | 86/280 [18:11<40:07, 12.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###       | 86/280 [18:12<40:07, 12.41s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 87/280 [18:12<28:27,  8.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 87/280 [18:12<28:27,  8.85s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 88/280 [18:12<20:25,  6.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  31%|###1      | 88/280 [18:13<20:25,  6.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###1      | 89/280 [18:13<14:43,  4.63s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###1      | 89/280 [18:13<14:43,  4.63s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 90/280 [18:13<10:53,  3.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 90/280 [21:02<10:53,  3.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 91/280 [21:02<2:47:23, 53.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  32%|###2      | 91/280 [21:03<2:47:23, 53.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###2      | 92/280 [21:03<1:57:10, 37.40s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###2      | 92/280 [21:04<1:57:10, 37.40s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###3      | 93/280 [21:04<1:22:30, 26.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  33%|###3      | 93/280 [21:05<1:22:30, 26.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 94/280 [21:05<58:13, 18.78s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 94/280 [21:06<58:13, 18.78s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 95/280 [21:06<41:36, 13.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###3      | 95/280 [21:07<41:36, 13.49s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###4      | 96/280 [21:07<29:40,  9.68s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  34%|###4      | 96/280 [21:08<29:40,  9.68s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###4      | 97/280 [21:08<21:28,  7.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###4      | 97/280 [21:09<21:28,  7.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 98/280 [21:09<15:45,  5.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 98/280 [21:09<15:45,  5.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 99/280 [21:09<11:39,  3.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  35%|###5      | 99/280 [21:10<11:39,  3.86s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###5      | 100/280 [21:10<08:48,  2.94s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###5      | 100/280 [25:08<08:48,  2.94s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 101/280 [25:08<3:38:39, 73.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 101/280 [25:08<3:38:39, 73.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 102/280 [25:08<2:32:56, 51.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  36%|###6      | 102/280 [25:09<2:32:56, 51.56s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###6      | 103/280 [25:09<1:47:02, 36.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###6      | 103/280 [25:10<1:47:02, 36.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###7      | 104/280 [25:10<1:15:08, 25.61s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  37%|###7      | 104/280 [25:11<1:15:08, 25.61s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 105/280 [25:11<52:53, 18.14s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 105/280 [25:11<52:53, 18.14s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 106/280 [25:11<37:26, 12.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###7      | 106/280 [25:13<37:26, 12.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###8      | 107/280 [25:13<27:25,  9.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  38%|###8      | 107/280 [25:14<27:25,  9.51s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 108/280 [25:14<20:03,  7.00s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 108/280 [25:15<20:03,  7.00s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 109/280 [25:15<14:54,  5.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###8      | 109/280 [25:16<14:54,  5.23s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###9      | 110/280 [25:16<11:09,  3.94s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  39%|###9      | 110/280 [27:36<11:09,  3.94s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|###9      | 111/280 [27:36<2:06:24, 44.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|###9      | 111/280 [27:37<2:06:24, 44.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 112/280 [27:37<1:28:16, 31.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 112/280 [27:37<1:28:16, 31.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 113/280 [27:37<1:01:44, 22.18s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  40%|####      | 113/280 [27:38<1:01:44, 22.18s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####      | 114/280 [27:38<43:15, 15.63s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####      | 114/280 [27:38<43:15, 15.63s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 115/280 [27:38<30:22, 11.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 115/280 [27:38<30:22, 11.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 116/280 [27:38<21:24,  7.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  41%|####1     | 116/280 [27:39<21:24,  7.84s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####1     | 117/280 [27:39<15:11,  5.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####1     | 117/280 [27:39<15:11,  5.59s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 118/280 [27:39<10:51,  4.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 118/280 [27:39<10:51,  4.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 119/280 [27:39<07:49,  2.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  42%|####2     | 119/280 [27:40<07:49,  2.92s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####2     | 120/280 [27:40<05:44,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####2     | 120/280 [30:15<05:44,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####3     | 121/280 [30:15<2:07:23, 48.07s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  43%|####3     | 121/280 [30:15<2:07:23, 48.07s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 122/280 [30:15<1:28:52, 33.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 122/280 [30:16<1:28:52, 33.75s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 123/280 [30:16<1:02:04, 23.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####3     | 123/280 [30:16<1:02:04, 23.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####4     | 124/280 [30:16<43:26, 16.71s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  44%|####4     | 124/280 [30:16<43:26, 16.71s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####4     | 125/280 [30:16<30:30, 11.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####4     | 125/280 [30:17<30:30, 11.81s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 126/280 [30:17<21:30,  8.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 126/280 [30:17<21:30,  8.38s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 127/280 [30:17<15:14,  5.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  45%|####5     | 127/280 [30:17<15:14,  5.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####5     | 128/280 [30:17<10:52,  4.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####5     | 128/280 [30:18<10:52,  4.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 129/280 [30:18<07:51,  3.12s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 129/280 [30:18<07:51,  3.12s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 130/280 [30:18<05:43,  2.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  46%|####6     | 130/280 [32:25<05:43,  2.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####6     | 131/280 [32:25<1:38:37, 39.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####6     | 131/280 [32:26<1:38:37, 39.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####7     | 132/280 [32:26<1:08:53, 27.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  47%|####7     | 132/280 [32:26<1:08:53, 27.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 133/280 [32:26<48:13, 19.69s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 133/280 [32:27<48:13, 19.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 134/280 [32:27<33:54, 13.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####7     | 134/280 [32:27<33:54, 13.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####8     | 135/280 [32:27<23:53,  9.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  48%|####8     | 135/280 [32:27<23:53,  9.88s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 136/280 [32:27<16:54,  7.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 136/280 [32:28<16:54,  7.04s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 137/280 [32:28<12:11,  5.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####8     | 137/280 [32:28<12:11,  5.11s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####9     | 138/280 [32:28<08:48,  3.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  49%|####9     | 138/280 [32:29<08:48,  3.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|####9     | 139/280 [32:29<06:33,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|####9     | 139/280 [32:30<06:33,  2.79s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 140/280 [32:30<05:01,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 140/280 [35:09<05:01,  2.15s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 141/280 [35:09<1:54:26, 49.40s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  50%|#####     | 141/280 [35:10<1:54:26, 49.40s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####     | 142/280 [35:10<1:19:50, 34.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####     | 142/280 [35:10<1:19:50, 34.72s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 143/280 [35:10<55:50, 24.45s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 143/280 [35:11<55:50, 24.45s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 144/280 [35:11<39:09, 17.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  51%|#####1    | 144/280 [35:11<39:09, 17.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####1    | 145/280 [35:11<27:35, 12.26s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####1    | 145/280 [35:12<27:35, 12.26s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 146/280 [35:12<19:31,  8.74s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 146/280 [35:12<19:31,  8.74s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 147/280 [35:12<13:54,  6.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  52%|#####2    | 147/280 [35:13<13:54,  6.28s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####2    | 148/280 [35:13<10:05,  4.58s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####2    | 148/280 [35:14<10:05,  4.58s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####3    | 149/280 [35:14<07:28,  3.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  53%|#####3    | 149/280 [35:15<07:28,  3.43s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 150/280 [35:15<05:43,  2.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 150/280 [37:50<05:43,  2.64s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 151/280 [37:50<1:44:20, 48.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####3    | 151/280 [37:51<1:44:20, 48.53s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####4    | 152/280 [37:51<1:12:42, 34.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  54%|#####4    | 152/280 [37:51<1:12:42, 34.08s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####4    | 153/280 [37:51<50:45, 23.98s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####4    | 153/280 [37:51<50:45, 23.98s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 154/280 [37:51<35:30, 16.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 154/280 [37:52<35:30, 16.91s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 155/280 [37:52<24:53, 11.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  55%|#####5    | 155/280 [37:52<24:53, 11.95s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####5    | 156/280 [37:52<17:32,  8.48s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####5    | 156/280 [37:53<17:32,  8.48s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 157/280 [37:53<12:23,  6.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 157/280 [37:53<12:23,  6.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 158/280 [37:53<08:51,  4.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  56%|#####6    | 158/280 [37:53<08:51,  4.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####6    | 159/280 [37:53<06:25,  3.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####6    | 159/280 [37:54<06:25,  3.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 160/280 [37:54<04:52,  2.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 160/280 [41:13<04:52,  2.44s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 161/280 [41:13<2:01:52, 61.45s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  57%|#####7    | 161/280 [41:14<2:01:52, 61.45s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####7    | 162/280 [41:14<1:24:52, 43.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####7    | 162/280 [41:14<1:24:52, 43.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####8    | 163/280 [41:14<59:10, 30.35s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  58%|#####8    | 163/280 [41:15<59:10, 30.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 164/280 [41:15<41:21, 21.39s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 164/280 [41:15<41:21, 21.39s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 165/280 [41:15<29:00, 15.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####8    | 165/280 [41:16<29:00, 15.13s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####9    | 166/280 [41:16<20:23, 10.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  59%|#####9    | 166/280 [41:16<20:23, 10.73s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|#####9    | 167/280 [41:16<14:24,  7.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|#####9    | 167/280 [41:17<14:24,  7.65s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 168/280 [41:17<10:15,  5.50s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 168/280 [41:17<10:15,  5.50s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 169/280 [41:17<07:26,  4.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  60%|######    | 169/280 [41:18<07:26,  4.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######    | 170/280 [41:18<05:32,  3.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######    | 170/280 [44:22<05:32,  3.02s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 171/280 [44:22<1:44:18, 57.42s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 171/280 [44:23<1:44:18, 57.42s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 172/280 [44:23<1:12:38, 40.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  61%|######1   | 172/280 [44:23<1:12:38, 40.35s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######1   | 173/280 [44:23<50:37, 28.39s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######1   | 173/280 [44:24<50:37, 28.39s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 174/280 [44:24<35:23, 20.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 174/280 [44:24<35:23, 20.03s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 175/280 [44:24<24:46, 14.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  62%|######2   | 175/280 [44:25<24:46, 14.16s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######2   | 176/280 [44:25<17:25, 10.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######2   | 176/280 [44:25<17:25, 10.05s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######3   | 177/280 [44:25<12:19,  7.18s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  63%|######3   | 177/280 [44:26<12:19,  7.18s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 178/280 [44:26<08:49,  5.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 178/280 [44:26<08:49,  5.19s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 179/280 [44:26<06:26,  3.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######3   | 179/280 [44:27<06:26,  3.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######4   | 180/280 [44:27<04:42,  2.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  64%|######4   | 180/280 [48:03<04:42,  2.82s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######4   | 181/280 [48:03<1:50:26, 66.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######4   | 181/280 [48:04<1:50:26, 66.93s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 182/280 [48:04<1:16:47, 47.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 182/280 [48:04<1:16:47, 47.01s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 183/280 [48:04<53:27, 33.06s/it, running_success_rate=0.0%]  [A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  65%|######5   | 183/280 [48:05<53:27, 33.06s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######5   | 184/280 [48:05<37:15, 23.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######5   | 184/280 [48:05<37:15, 23.29s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 185/280 [48:05<26:04, 16.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 185/280 [48:06<26:04, 16.47s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 186/280 [48:06<18:18, 11.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  66%|######6   | 186/280 [48:07<18:18, 11.69s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######6   | 187/280 [48:07<12:56,  8.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######6   | 187/280 [48:07<12:56,  8.34s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######7   | 188/280 [48:07<09:11,  6.00s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  67%|######7   | 188/280 [48:08<09:11,  6.00s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######7   | 189/280 [48:08<06:37,  4.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######7   | 189/280 [48:08<06:37,  4.37s/it, running_success_rate=0.0%][A
+[stderr] 
+[stderr] Running rollout with at most 280 steps:  68%|######7   | 190/280 [48:08<04:49,  3.22s/it, running_success_rate=0.0%][A
+[stderr] Stepping through eval batches:   0%|          | 0/1 [48:36<?, ?it/s]
+[stderr] Traceback (most recent call last):
+[stderr]   File "C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\run_lerobot_eval_with_context.py", line 528, in <module>
+[stderr]     main()
+[stderr]   File "C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\run_lerobot_eval_with_context.py", line 521, in main
+[stderr]     lerobot_eval.main()
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 840, in main
+[stderr]     eval_main()
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\configs\parser.py", line 233, in wrapper_inner
+[stderr]     response = fn(cfg, *args, **kwargs)
+[stderr]                ^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 567, in eval_main
+[stderr]     info = eval_policy_all(
+[stderr]            ^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\OneDrive\Desktop\EmbodimentSemantic\vla_benchmarking\run_lerobot_eval_with_context.py", line 433, in patched_eval_policy_all
+[stderr]     return original_eval_policy_all(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 774, in eval_policy_all
+[stderr]     tg, tid, metrics = task_runner(task_group, task_id, env)
+[stderr]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 676, in run_one
+[stderr]     metrics = eval_one(
+[stderr]               ^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 626, in eval_one
+[stderr]     task_result = eval_policy(
+[stderr]                   ^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 354, in eval_policy
+[stderr]     rollout_data = rollout(
+[stderr]                    ^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\scripts\lerobot_eval.py", line 186, in rollout
+[stderr]     action = policy.select_action(observation)
+[stderr]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+[stderr]     return func(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\modeling_smolvla.py", line 344, in select_action
+[stderr]     actions = self._get_action_chunk(batch, noise)
+[stderr]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\modeling_smolvla.py", line 293, in _get_action_chunk
+[stderr]     actions = self.model.sample_actions(
+[stderr]               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\modeling_smolvla.py", line 830, in sample_actions
+[stderr]     prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+[stderr]                                                       ^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\modeling_smolvla.py", line 665, in embed_prefix
+[stderr]     img_emb = self.vlm_with_expert.embed_image(img)
+[stderr]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\lerobot\policies\smolvla\smolvlm_with_expert.py", line 196, in embed_image
+[stderr]     .vision_model(
+[stderr]      ^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1776, in _wrapped_call_impl
+[stderr]     return self._call_impl(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1787, in _call_impl
+[stderr]     return forward_call(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\utils\generic.py", line 917, in wrapper
+[stderr]     output = func(self, *args, **kwargs)
+[stderr]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\utils\output_capturing.py", line 253, in wrapper
+[stderr]     outputs = func(self, *args, **kwargs)
+[stderr]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\models\smolvlm\modeling_smolvlm.py", line 376, in forward
+[stderr]     encoder_outputs: BaseModelOutput = self.encoder(
+[stderr]                                        ^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1776, in _wrapped_call_impl
+[stderr]     return self._call_impl(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1787, in _call_impl
+[stderr]     return forward_call(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\models\smolvlm\modeling_smolvlm.py", line 303, in forward
+[stderr]     layer_outputs = encoder_layer(
+[stderr]                     ^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\modeling_layers.py", line 93, in __call__
+[stderr]     return super().__call__(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1776, in _wrapped_call_impl
+[stderr]     return self._call_impl(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1787, in _call_impl
+[stderr]     return forward_call(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\models\smolvlm\modeling_smolvlm.py", line 273, in forward
+[stderr]     hidden_states = self.mlp(hidden_states)
+[stderr]                     ^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1776, in _wrapped_call_impl
+[stderr]     return self._call_impl(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1787, in _call_impl
+[stderr]     return forward_call(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\transformers\models\smolvlm\modeling_smolvlm.py", line 241, in forward
+[stderr]     hidden_states = self.fc2(hidden_states)
+[stderr]                     ^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1776, in _wrapped_call_impl
+[stderr]     return self._call_impl(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\module.py", line 1787, in _call_impl
+[stderr]     return forward_call(*args, **kwargs)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "C:\Users\hassa\anaconda3\envs\vla_bench_py312\Lib\site-packages\torch\nn\modules\linear.py", line 134, in forward
+[stderr]     return F.linear(input, self.weight, self.bias)
+[stderr]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr] KeyboardInterrupt
+[stderr] 
+[stderr] 
+[stderr]                                                                                                                     [A

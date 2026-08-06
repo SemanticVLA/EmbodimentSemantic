@@ -3,8 +3,19 @@
 window.DemoCommon = (() => {
   async function fetchJson(url, options = {}) {
     const response = await fetch(url, {cache: "no-store", ...options});
-    const payload = await response.json();
-    if (!response.ok || payload.error) throw new Error(payload.error || response.statusText);
+    const text = await response.text();
+    let payload = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = {error: text.slice(0, 240)};
+      }
+    }
+    if (!response.ok || payload.error) {
+      const detail = payload.error || response.statusText || `HTTP ${response.status}`;
+      throw new Error(`${response.status} ${detail}`.trim());
+    }
     return payload;
   }
 

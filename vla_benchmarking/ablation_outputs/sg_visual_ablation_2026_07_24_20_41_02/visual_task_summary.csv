@@ -1,0 +1,4 @@
+condition,task_group,task_id,episodes,successes,pc_success,avg_sum_reward,avg_max_reward,videos
+visual_goal_arrow,libero_spatial,2,1,0,0.0000,0.000000,0.000000,1
+visual_goal_arrow,libero_spatial,6,1,0,0.0000,0.000000,0.000000,1
+visual_goal_arrow,libero_spatial,9,1,0,0.0000,0.000000,0.000000,1

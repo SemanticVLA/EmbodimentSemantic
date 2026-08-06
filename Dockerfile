@@ -67,7 +67,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         > /opt/libero-config/config.yaml \
     && python -c "from libero.libero import get_libero_path; from libero.libero.envs import OffScreenRenderEnv; assert get_libero_path('bddl_files')"
 
-# Optional live-simulator target retained for local use and future Fly deployments.
+# Optional target retained for checking the online demo dataset with live LIBERO rendering.
 FROM libero-deps AS libero-runtime
 
 WORKDIR /app/vlm_benchmarking
@@ -77,10 +77,10 @@ RUN python -m demo.deployment_smoke
 
 EXPOSE 7860
 
-CMD ["python", "-u", "-m", "demo", "--input-dir", "demo/libero_demo_cache", "--output-dir", "demo/libero_prediction_cache", "--so101-config", "demo/so101_demo_cache/config.yaml", "--host", "0.0.0.0", "--port", "7860", "--res", "1024", "--no-disk-cache", "--no-open-browser"]
+CMD ["python", "-u", "-m", "demo", "online", "--live-rendering", "--no-bundled-cache"]
 
 FROM app-base AS production
 
 RUN python -m demo.deployment_smoke --cached-only --bundled-cache-dir demo/libero_frame_cache
 
-CMD ["python", "-u", "-m", "demo", "--input-dir", "demo/libero_demo_cache", "--output-dir", "demo/libero_prediction_cache", "--so101-config", "demo/so101_demo_cache/config.yaml", "--bundled-cache-dir", "demo/libero_frame_cache", "--cached-only", "--host", "0.0.0.0", "--port", "7860", "--res", "1024", "--no-disk-cache", "--no-open-browser"]
+CMD ["python", "-u", "-m", "demo", "online"]

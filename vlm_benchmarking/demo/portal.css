@@ -38,6 +38,7 @@ html, body {
   align-items: baseline;
   gap: 16px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .brand strong {
@@ -49,6 +50,32 @@ html, body {
   color: var(--muted);
   font-size: 14px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-badge {
+  max-width: 100%;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid #b8d8ca;
+  border-radius: 6px;
+  color: #075f43;
+  background: #ecfdf5;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-spacer {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .dataset-tabs {

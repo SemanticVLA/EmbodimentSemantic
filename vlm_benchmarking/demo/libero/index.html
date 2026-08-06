@@ -88,9 +88,9 @@
           <label for="camera">Camera</label><select id="camera"></select>
           <label for="resolution">Resolution</label><select id="resolution"></select>
           <label for="overlayMode">Mode</label><select id="overlayMode">
-            <option value="gt">Ground truth</option>
-            <option value="prediction">Predictions</option>
-            <option value="compare">GT vs Prediction</option>
+            <option value="gt">Simulator GT</option>
+            <option value="prediction">VLM Prediction</option>
+            <option value="compare">Simulator GT vs VLM</option>
           </select>
           <label id="predictionLabel" for="predictionRun">Prediction</label><select id="predictionRun"></select>
         </div>
@@ -135,8 +135,8 @@
     <section class="stage-wrap">
       <div id="status" class="status">Loading...</div>
       <div class="legend" aria-label="Overlay legend">
-        <span class="legend-item"><span class="swatch good"></span>Correct / GT</span>
-        <span class="legend-item"><span class="swatch bad"></span>Prediction error</span>
+        <span class="legend-item"><span class="swatch good"></span>Correct / Simulator GT</span>
+        <span class="legend-item"><span class="swatch bad"></span>VLM prediction error</span>
         <span class="legend-item"><span class="swatch box"></span>Debug bbox</span>
       </div>
       <div class="stage"><canvas id="canvas"></canvas></div>
@@ -147,7 +147,7 @@
         <span id="tripletCount" class="triplet-count">0</span>
       </div>
       <div id="tripletScope" class="triplet-scope"></div>
-      <div class="triplet-scope">Green rows/arrows match GT; red rows/arrows are prediction errors.</div>
+      <div class="triplet-scope">Green rows/arrows match Simulator GT; red rows/arrows are VLM prediction errors.</div>
       <div id="metricsScope" class="triplet-scope"></div>
       <div id="metrics" class="metrics"></div>
       <div id="metadataSummary" class="metadata-summary"></div>
@@ -353,18 +353,20 @@
     function statusForOverlay(overlay) {
       if (overlay.mode === "prediction" || overlay.mode === "compare") {
         if (!overlay.prediction_available) {
-          return `${prettyCamera(overlay.camera)} prediction | no prediction record at frame ${overlay.frame}; using ${frameStride()}-frame prediction stride`;
+          return `${prettyCamera(overlay.camera)} VLM prediction | no prediction record at frame ${overlay.frame}; using ${frameStride()}-frame prediction stride`;
         }
         const metrics = overlay.metrics || {};
         const swapped = overlay.duplicate_bowl_swap_applied ? " | bowl IDs normalized" : "";
-        const prefix = overlay.mode === "compare" ? "GT vs prediction" : "prediction";
+        const prefix = overlay.mode === "compare" ? "Simulator GT vs VLM" : "VLM prediction";
         return `${prettyCamera(overlay.camera)} ${prefix} | F1 ${formatPercent(metrics.f1)} | TP ${metrics.tp ?? 0} FP ${metrics.fp ?? 0} FN ${metrics.fn ?? 0} | ${overlay.correct_visible_triplet_count}/${overlay.visible_triplet_count} visible edges correct${swapped}`;
       }
-      return `${prettyCamera(overlay.camera)} ground truth | ${overlay.visible_triplet_count} visible edges | ${overlay.triplet_count} total triplets`;
+      return `${prettyCamera(overlay.camera)} Simulator GT | ${overlay.visible_triplet_count} visible edges | ${overlay.triplet_count} total triplets`;
     }
     async function loadTasks() {
       const health = await api("/api/health");
-      els.build.textContent = health.build;
+      els.build.textContent = health.demo_mode_label
+        ? `${health.demo_mode_label} | ${health.build}`
+        : health.build;
       simulatorStarted = Boolean(health.simulator_started);
       predictionFrameStride = Number(health.prediction_frame_stride || 5);
       presets = health.presets || [];

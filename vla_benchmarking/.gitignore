@@ -1,1 +1,7 @@
 __pycache__/*.pyc
+
+# hdf5_to_lerobot_dataset.py outputs -- regenerable, large (video-encoded datasets)
+lora_datasets/
+lora_datasets_smoketest/
+lora_runs/
+hdf5_conversion_previews/

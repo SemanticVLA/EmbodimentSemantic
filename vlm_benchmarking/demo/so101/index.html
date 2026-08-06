@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SO101 Demo</title>
   <link rel="stylesheet" href="../common/demo.css">
-  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="app.css?v=20260722-exportpath1">
 </head>
 <body>
   <header class="app-header">
@@ -13,7 +13,10 @@
       <h1>SO101 Demo</h1>
       <p>Real-world 2D Proxy GT</p>
     </div>
-    <div id="buildStatus" class="build build-status">Loading dataset</div>
+    <div class="header-status">
+      <div id="modeBanner" class="mode-banner" hidden></div>
+      <div id="buildStatus" class="build build-status">Loading dataset</div>
+    </div>
   </header>
 
   <main class="workspace">
@@ -55,6 +58,26 @@
 
         <label for="subject">Subject</label>
         <select id="subject"><option value="black_bowl">Black bowl</option></select>
+      </section>
+
+      <section id="worklistPanel" class="control-section">
+        <h2 class="section-title">Worklist</h2>
+        <label for="worklistEditFilter">Edit status</label>
+        <select id="worklistEditFilter">
+          <option value="all">All</option>
+          <option value="generated">Generated</option>
+          <option value="edited">Edited</option>
+        </select>
+
+        <label for="worklistValidationFilter">Validation</label>
+        <select id="worklistValidationFilter">
+          <option value="all">All</option>
+          <option value="valid">Valid</option>
+          <option value="invalid">Invalid</option>
+          <option value="stale">Stale</option>
+        </select>
+
+        <div id="worklistStats" class="worklist-stats">Loading worklist</div>
       </section>
 
       <section class="control-section">
@@ -99,21 +122,52 @@
       </div>
     </section>
 
-    <aside class="triplet-panel scroll-panel" aria-label="Triplets and provenance">
-      <div class="triplet-header">
-        <div>
-          <h2>Triplets</h2>
-          <p id="tripletSubtitle">2D Proxy GT</p>
-        </div>
-        <strong id="tripletCount">0</strong>
+    <aside class="triplet-panel scroll-panel" aria-label="SO101 side panel">
+      <div class="right-panel-tabs" role="tablist" aria-label="Right panel">
+        <button id="annotationTab" type="button" role="tab" aria-controls="annotationPanel" aria-selected="false">Annotation</button>
+        <button id="evalTab" type="button" role="tab" aria-controls="evalPanel" aria-selected="true">Eval</button>
       </div>
-      <div id="metrics" class="metrics"></div>
-      <div id="metadataSummary" class="metadata-summary"></div>
-      <div id="tripletList" class="triplet-list"></div>
+
+      <section id="annotationPanel" class="right-panel-page" role="tabpanel" aria-labelledby="annotationTab" hidden>
+        <section id="graphEditorPanel" class="graph-editor">
+          <div class="editor-header">
+            <div>
+              <h2>Annotation</h2>
+              <p>Edit relation labels for this frame.</p>
+            </div>
+            <span id="editorState">Clean</span>
+          </div>
+          <div id="frameBadges" class="frame-badges"></div>
+          <div id="validationDetails" class="validation-details"></div>
+          <div id="exportStatus" class="export-status"></div>
+          <div id="annotationReadOnlyNotice" class="annotation-notice" hidden>Annotation is available only in offline localhost mode.</div>
+          <div id="graphEditorRows" class="editor-rows"></div>
+          <div class="editor-actions">
+            <button id="saveGraphButton" type="button">Save</button>
+            <button id="nextGraphButton" type="button">Next</button>
+            <button id="resetGraphButton" type="button">Reset</button>
+            <button id="exportCsvButton" type="button">Export CSVs</button>
+          </div>
+        </section>
+      </section>
+
+      <section id="evalPanel" class="right-panel-page" role="tabpanel" aria-labelledby="evalTab">
+        <div class="triplet-header">
+          <div>
+            <h2>Eval</h2>
+            <p id="tripletSubtitle">2D Proxy GT</p>
+          </div>
+          <strong id="tripletCount">0</strong>
+        </div>
+        <div id="metrics" class="metrics"></div>
+        <div id="metadataSummary" class="metadata-summary"></div>
+        <div id="coverageNotice" class="coverage-notice" hidden></div>
+        <div id="tripletList" class="triplet-list"></div>
+      </section>
     </aside>
   </main>
 
-  <script src="../common/demo_common.js"></script>
-  <script src="app.js"></script>
+  <script src="../common/demo_common.js?v=20260722-exportpath1"></script>
+  <script src="app.js?v=20260722-exportpath1"></script>
 </body>
 </html>

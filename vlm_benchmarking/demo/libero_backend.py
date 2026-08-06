@@ -1150,26 +1150,27 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
                 camera = self._camera_from_query(query)
                 self._send_json({"runs": self.server.predictions.list_runs(task, camera)})
             elif parsed.path == "/api/health":
-                self._send_json(
-                    {
-                        "build": DEMO_BUILD,
-                        "default_camera": self.server.default_camera,
-                        "cameras": self.server.camera_options(),
-                        "default_res": self.server.default_res,
-                        "res": self.server.default_res,
-                        "resolutions": self.server.resolution_options(),
-                        "prediction_frame_stride": PREDICTION_FRAME_STRIDE,
-                        "presets": self.server.available_presets(),
-                        "overlay_cache_size": len(self.server.overlay_cache),
-                        "simulator_started": self.server.simulator_started(),
-                        "disk_cache": self.server.disk_cache.enabled,
-                        "bundled_cache": self.server.bundled_cache.enabled,
-                        "bundled_cache_complete": self.server.bundled_cache.complete,
-                        "bundled_cache_frames": self.server.bundled_cache.cached_frames,
-                        "bundled_cache_resolution": self.server.bundled_cache.resolution,
-                        "cached_only": self.server.cached_only,
-                    }
-                )
+                payload = {
+                    "build": DEMO_BUILD,
+                    "default_camera": self.server.default_camera,
+                    "cameras": self.server.camera_options(),
+                    "default_res": self.server.default_res,
+                    "res": self.server.default_res,
+                    "resolutions": self.server.resolution_options(),
+                    "prediction_frame_stride": PREDICTION_FRAME_STRIDE,
+                    "presets": self.server.available_presets(),
+                    "overlay_cache_size": len(self.server.overlay_cache),
+                    "simulator_started": self.server.simulator_started(),
+                    "disk_cache": self.server.disk_cache.enabled,
+                    "bundled_cache": self.server.bundled_cache.enabled,
+                    "bundled_cache_complete": self.server.bundled_cache.complete,
+                    "bundled_cache_frames": self.server.bundled_cache.cached_frames,
+                    "bundled_cache_resolution": self.server.bundled_cache.resolution,
+                    "cached_only": self.server.cached_only,
+                }
+                if hasattr(self.server, "mode_health"):
+                    payload.update(self.server.mode_health())
+                self._send_json(payload)
             elif parsed.path == "/api/frame":
                 self._handle_frame(parse_qs(parsed.query))
             elif parsed.path == "/api/preload":

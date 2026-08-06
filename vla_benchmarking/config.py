@@ -18,6 +18,19 @@ TASK_NAMES = {
     9: "pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate",
 }
 
+TASK_GOAL_OBJECT_CONFIG: dict[int, str] = {
+    0: "plate_1",
+    1: "plate_1",
+    2: "plate_1",
+    3: "plate_1",
+    4: "plate_1",
+    5: "plate_1",
+    6: "plate_1",
+    7: "plate_1",
+    8: "plate_1",
+    9: "plate_1",
+}
+
 SCENE_GRAPH_SUBJECT_FILTER = "akita_black_bowl_1"  # set to None to include all subjects
 
 # Default cameras lerobot passes to every LIBERO env (LiberoEnvConfig.camera_name default).

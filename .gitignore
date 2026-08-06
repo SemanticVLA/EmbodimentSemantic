@@ -5,3 +5,6 @@ __pycache__/
 pytest.ini
 *.err.log
 *.out.log
+*.mp4
+CLAUDE.md
+~BROMIUM/

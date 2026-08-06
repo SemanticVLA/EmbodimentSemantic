@@ -1,0 +1,38 @@
+{
+  "run_id": "sg_visual_ablation_2026_07_24_20_41_02",
+  "condition": "visual_goal_arrow",
+  "model": "HuggingFaceVLA/smolvla_libero",
+  "tasks": [
+    2,
+    6,
+    9
+  ],
+  "episodes": 1,
+  "batch_size": 1,
+  "seed": 1000,
+  "device": "cpu",
+  "text_context_mode": "standard",
+  "text_prompt_contains_graph": false,
+  "visual_prompt_hint": {
+    "2": "The green arrow in the image points from the black bowl to the plate where it should be placed.",
+    "6": "The green arrow in the image points from the black bowl to the plate where it should be placed.",
+    "9": "The green arrow in the image points from the black bowl to the plate where it should be placed."
+  },
+  "visual_overlay": {
+    "image_slot": "pixels/image",
+    "content": "goal_arrow_only",
+    "direction": "subject_to_object",
+    "subject_filter": "akita_black_bowl_1",
+    "goal_objects_by_task": {
+      "2": "plate_1",
+      "6": "plate_1",
+      "9": "plate_1"
+    },
+    "camera_source": "camera mapped to the main pixels/image policy slot"
+  },
+  "prompt_audit": true,
+  "videos": true,
+  "max_videos": 1,
+  "baseline_eval_info": "C:/Users/hassa/OneDrive/Desktop/EmbodimentSemantic/vla_benchmarking/ablation_outputs/sg_format_ablation_2026_07_22_00_56_24/standard/eval_info.json",
+  "repo_commit": "643fb4059a5bf06f66b8a9b007d4e2b06cd5ceb6"
+}
