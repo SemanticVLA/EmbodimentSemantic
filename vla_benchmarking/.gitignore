@@ -5,3 +5,8 @@ lora_datasets/
 lora_datasets_smoketest/
 lora_runs/
 hdf5_conversion_previews/
+base_models/
+slurm_train_*.out
+slurm_train_*.err
+.venv-lora/
+.cache/

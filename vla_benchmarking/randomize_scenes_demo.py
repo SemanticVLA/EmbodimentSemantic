@@ -5,36 +5,43 @@ import sys
 os.environ.setdefault("MUJOCO_GL", "wgl")
 
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-_libero_root = os.path.join(_repo_root, "LIBERO")
+_libero_root = os.path.join(os.path.dirname(_repo_root), "LIBERO")
 
-# Point LIBERO at our project-local config so it doesn't use ~/.libero (which may point elsewhere)
-os.environ["LIBERO_CONFIG_PATH"] = os.path.join(_repo_root, ".libero")
+# Prefer a project-local LIBERO config only when one actually exists. Otherwise
+# keep the user's configured ~/.libero paths, which point at the local clone.
+_project_libero_config = os.path.join(_repo_root, ".libero")
+if os.path.isdir(_project_libero_config):
+    os.environ["LIBERO_CONFIG_PATH"] = _project_libero_config
 
 # Insert at 0 so our LIBERO clone wins over any other libero on sys.path/PYTHONPATH
 sys.path.insert(0, _repo_root)
 sys.path.insert(0, _libero_root)
 
-from radomize_scenes import swap_objects, move_object, settle_physics
-from bddl_utils import make_filtered_bddl
+from radomize_scenes import (
+    discover_objects,
+    get_object_pose,
+    set_object_pose,
+    swap_objects,
+)
+from bddl_utils import (
+    extract_joint_schema,
+    make_filtered_bddl,
+    project_init_states_by_joint_name,
+)
 
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
+from lerobot.envs.libero import get_libero_dummy_action, get_task_init_states
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+import numpy as np
 
 from config import (
-    BENCHMARK_NAME, CAMERA_NAME, CAMERA_HEIGHT, CAMERA_WIDTH,
-    SETTLE_STEPS_INIT, SETTLE_STEPS_SWAP, TASK_SWAP_CONFIG,
+    BENCHMARK_NAME, CAMERA_HEIGHT, CAMERA_WIDTH,
+    SETTLE_STEPS_SWAP, TASK_SWAP_CONFIG,
     TASK_NAMES, OUTPUT_DIR, DEFAULT_CAMERAS,
-    TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE, TASK_CAMERA_OVERRIDE,
+    TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE,
 )
-
-
-def _get_cameras_for_task(task_id: int) -> list[str]:
-    """Return after-side camera list: override if configured, else DEFAULT_CAMERAS."""
-    if task_id in TASK_CAMERA_OVERRIDE:
-        return [c.strip() for c in TASK_CAMERA_OVERRIDE[task_id].split(",") if c.strip()]
-    return DEFAULT_CAMERAS
 
 
 def _render(env, cameras: list[str]) -> list:
@@ -45,15 +52,47 @@ def _render(env, cameras: list[str]) -> list:
     ]
 
 
-def _make_env(bddl_path: str) -> OffScreenRenderEnv:
+def _make_env(bddl_path: str, cameras: list[str], seed: int) -> OffScreenRenderEnv:
     env = OffScreenRenderEnv(
         bddl_file_name=bddl_path,
+        camera_names=cameras,
         camera_heights=CAMERA_HEIGHT,
         camera_widths=CAMERA_WIDTH,
     )
+    env.seed(seed)
     env.reset()
-    settle_physics(env, max_steps=SETTLE_STEPS_INIT)
     return env
+
+
+def _set_first_frame_state(env: OffScreenRenderEnv, state: np.ndarray) -> None:
+    """Match LeRobot's first-frame reset behavior for a stored LIBERO state."""
+    env.set_init_state(state)
+    for _ in range(10):
+        env.step(get_libero_dummy_action())
+
+
+def _snapshot_protected(env: OffScreenRenderEnv) -> dict[str, np.ndarray]:
+    snapshot = {}
+    for label in ("akita_black_bowl_1", "plate_1"):
+        pose = get_object_pose(env, label)
+        if pose is None:
+            raise RuntimeError(f"protected object missing from demo scene: {label}")
+        snapshot[label] = pose
+    return snapshot
+
+
+def _restore_and_verify_protected(
+    env: OffScreenRenderEnv,
+    snapshot: dict[str, np.ndarray],
+) -> None:
+    for label, expected in snapshot.items():
+        if not set_object_pose(env, label, expected):
+            raise RuntimeError(f"could not restore protected object in demo: {label}")
+    env.sim.forward()
+    for label, expected in snapshot.items():
+        actual = get_object_pose(env, label)
+        if actual is None or not np.allclose(actual, expected, atol=1e-7, rtol=0):
+            raise RuntimeError(f"protected object moved during demo randomization: {label}")
 
 
 def run_task_demo(task_id: int, output_dir: str = OUTPUT_DIR):
@@ -63,32 +102,63 @@ def run_task_demo(task_id: int, output_dir: str = OUTPUT_DIR):
 
     base_bddl = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
     remove_objects = TASK_REMOVE_CONFIG.get(task_id, [])
-    cameras = _get_cameras_for_task(task_id)
+    cameras = DEFAULT_CAMERAS
     swaps = TASK_SWAP_CONFIG.get(task_id, [])
+    canonical_state = np.asarray(get_task_init_states(task_suite, task_id)[0]).copy()
 
-    if task_id in TASK_CAMERA_OVERRIDE:
-        print(f"  [CAMERA] Override: {DEFAULT_CAMERAS} → {cameras}")
-
-    # --- Before: always original BDDL, lerobot default cameras, no swaps ---
-    env_before = _make_env(base_bddl)
-    frames_before = _render(env_before, DEFAULT_CAMERAS)
-    env_before.close()
-
-    # --- After: filtered BDDL (if any) + swaps applied ---
+    # --- Use the exact same stored first state on both sides. ---
     if remove_objects:
         filtered_bddl = make_filtered_bddl(base_bddl, remove_objects)
         print(f"  [REMOVE] Removed {remove_objects} from BDDL")
     else:
         filtered_bddl = base_bddl
 
-    env_after = _make_env(filtered_bddl)
-    for obj_a, obj_b in swaps:
-        if isinstance(obj_b, str):
-            swap_objects(env_after, obj_a, obj_b, settle_steps=SETTLE_STEPS_SWAP, verbose=False)
-        else:
-            move_object(env_after, obj_a, obj_b, settle_steps=SETTLE_STEPS_SWAP, verbose=False)
-    frames_after = _render(env_after, cameras)
-    env_after.close()
+    render_seed = 1000 + task_id
+    env_before = _make_env(base_bddl, cameras, render_seed)
+    try:
+        source_schema = extract_joint_schema(env_before.sim.model)
+        _set_first_frame_state(env_before, canonical_state)
+        canonical_protected = _snapshot_protected(env_before)
+        frames_before = _render(env_before, cameras)
+    finally:
+        # MuJoCo's offscreen renderer is process-global in this runtime. Render
+        # and close the canonical model before constructing the filtered model,
+        # otherwise one context can display the other model's scene.
+        env_before.close()
+
+    env_after = _make_env(filtered_bddl, cameras, render_seed)
+    try:
+        target_schema = extract_joint_schema(env_after.sim.model)
+        filtered_state = project_init_states_by_joint_name(
+            canonical_state,
+            source_schema,
+            target_schema,
+        )
+        _set_first_frame_state(env_after, filtered_state)
+        removed_still_present = [
+            label for label in remove_objects if label in discover_objects(env_after)
+        ]
+        if removed_still_present:
+            raise RuntimeError(f"configured removals still visible: {removed_still_present}")
+
+        protected = _snapshot_protected(env_after)
+        for label, expected in canonical_protected.items():
+            if not np.allclose(protected[label], expected, atol=1e-7, rtol=0):
+                raise RuntimeError(f"protected object changed before task {task_id} layout: {label}")
+        for obj_a, obj_b in swaps:
+            result = swap_objects(
+                env_after,
+                obj_a,
+                obj_b,
+                settle_steps=SETTLE_STEPS_SWAP,
+                verbose=False,
+            )
+            if result.get("skipped") or sorted(result.get("applied", [])) != sorted((obj_a, obj_b)):
+                raise RuntimeError(f"task {task_id} swap failed: {result}")
+        _restore_and_verify_protected(env_after, protected)
+        frames_after = _render(env_after, cameras)
+    finally:
+        env_after.close()
 
     # --- Prompt ---
     base_prompt = TASK_NAMES.get(task_id, f"task_{task_id}")
@@ -101,8 +171,7 @@ def run_task_demo(task_id: int, output_dir: str = OUTPUT_DIR):
 
     # --- Build figure ---
     # Before: one row per DEFAULT_CAMERAS (agentview + robot0_eye_in_hand).
-    # After:  one row per cameras (TASK_CAMERA_OVERRIDE if set, else DEFAULT_CAMERAS).
-    # Rows are paired by index; if counts differ each side fills its own rows.
+    # Both sides use the fixed training camera pair.
     n_before = len(frames_before)
     n_after  = len(frames_after)
     n_rows   = max(n_before, n_after)
@@ -123,6 +192,10 @@ def run_task_demo(task_id: int, output_dir: str = OUTPUT_DIR):
         info_lines = []
         if remove_objects:
             info_lines.append(f"REMOVED: {', '.join(remove_objects)}")
+        if swaps:
+            info_lines.append(
+                "SWAPPED: " + ", ".join(f"{left} ↔ {right}" for left, right in swaps)
+            )
         if prompt_changed:
             info_lines.append(f"PROMPT: {final_prompt}")
         ax_text.text(0.01, 0.5, "\n".join(info_lines), transform=ax_text.transAxes,
@@ -167,7 +240,6 @@ if __name__ == "__main__":
         list(TASK_SWAP_CONFIG.keys())
         + list(TASK_REMOVE_CONFIG.keys())
         + list(TASK_PROMPT_OVERRIDE.keys())
-        + list(TASK_CAMERA_OVERRIDE.keys())
     ))
     if not all_tasks:
         all_tasks = list(range(10))

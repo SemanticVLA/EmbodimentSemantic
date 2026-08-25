@@ -17,8 +17,26 @@ from scene_graph_formats import human_object_name
 
 
 DEFAULT_ARROW_COLOR_RGB = (0, 166, 107)
+# These defaults deliberately preserve the frozen-policy visual-ablation style.
+# The sealed LoRA data/eval contract uses the explicit SEALED_* values below.
 DEFAULT_ARROW_WIDTH = 1
 DEFAULT_ARROW_HEAD_LENGTH = 8
+SEALED_LORA_IMAGE_SIZE = 256
+SEALED_LORA_ARROW_WIDTH = 1
+SEALED_LORA_ARROW_HEAD_LENGTH = 16
+SEALED_LORA_VISUAL_CONTRACT = {
+    # Width 1 is a new geometry contract; keep it distinct from the prior
+    # width-2 v1 artifacts so provenance checks cannot silently mix them.
+    "name": "sealed_lora_visual_v2",
+    "main_image_size": SEALED_LORA_IMAGE_SIZE,
+    "wrist_image_size": SEALED_LORA_IMAGE_SIZE,
+    "source_bbox_size": 128,
+    "bbox_scaling": "scale_then_clamp_to_image_bounds",
+    "arrow_color_rgb": list(DEFAULT_ARROW_COLOR_RGB),
+    "line_width": SEALED_LORA_ARROW_WIDTH,
+    "head_length": SEALED_LORA_ARROW_HEAD_LENGTH,
+    "overlay_order": "resize_main_then_overlay_then_flip180",
+}
 DEFAULT_GOAL_OBJECT = "plate_1"
 VISUAL_ARROWS_CONDITION = "visual_arrows"
 VISUAL_GOAL_ARROW_CONDITION = "visual_goal_arrow"
@@ -215,6 +233,8 @@ class VisualGraphVecEnvWrapper:
         condition: str = VISUAL_ARROWS_CONDITION,
         goal_object: str | Mapping[int, str] = DEFAULT_GOAL_OBJECT,
         audit_logger: VisualRelationAuditLogger | None = None,
+        line_width: int = DEFAULT_ARROW_WIDTH,
+        head_length: int = DEFAULT_ARROW_HEAD_LENGTH,
     ) -> None:
         if condition not in SUPPORTED_VISUAL_CONDITIONS:
             raise ValueError(
@@ -227,6 +247,12 @@ class VisualGraphVecEnvWrapper:
         self.condition = condition
         self.goal_object = goal_object
         self.audit_logger = audit_logger
+        if line_width <= 0:
+            raise ValueError("line_width must be positive")
+        if head_length <= 0:
+            raise ValueError("head_length must be positive")
+        self.line_width = line_width
+        self.head_length = head_length
         self._sub_envs = _resolve_envs(env)
         self._cameras = [
             self._camera_for_slot(sub_env, image_key)
@@ -308,6 +334,8 @@ class VisualGraphVecEnvWrapper:
                 batch_images[observation_index],
                 bboxes,
                 relations,
+                line_width=self.line_width,
+                head_length=self.head_length,
                 copy_image=False,
             )
             batch_images[observation_index] = overlaid
@@ -321,6 +349,8 @@ class VisualGraphVecEnvWrapper:
                         "env_step": self._env_step(sub_env),
                         "camera": camera,
                         "image_slot": f"pixels/{self.image_key}",
+                        "line_width": self.line_width,
+                        "head_length": self.head_length,
                         "subject_filter": self.live_generator.scene_graph_subject_filter,
                         "goal_object": task_goal_object if self.condition == VISUAL_GOAL_ARROW_CONDITION else None,
                         "visible_bboxes": sorted(bboxes),

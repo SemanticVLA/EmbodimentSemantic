@@ -16,18 +16,16 @@ from libero.libero import benchmark
 
 from config import (
     BENCHMARK_NAME,
-    DEFAULT_CAMERAS,
+    LEROBOT_CAMERA_KEYS,
     SCENE_GRAPH_SUBJECT_FILTER,
     SETTLE_STEPS_SWAP,
-    TASK_CAMERA_OVERRIDE,
     TASK_REMOVE_CONFIG,
     TASK_SWAP_CONFIG,
 )
 from libero_live_semantic_context import LiveSemanticContextGenerator
-from radomize_scenes import move_object, swap_objects
+from radomize_scenes import SceneRandomizerVecEnvWrapper, swap_objects
 from run_lerobot_eval_with_context import (
     _camera_name_mapping,
-    _normalize_lerobot_camera_name,
     _patch_libero_env_bddl_selection,
     _patch_libero_env_camera_creation,
 )
@@ -42,8 +40,17 @@ def _parse_tasks(value: str) -> list[int]:
 
 
 def _apply_task_swaps(inner_env, task_id: int) -> None:
-    for obj_a, obj_b in TASK_SWAP_CONFIG.get(task_id, []):
-        if isinstance(obj_b, str):
+    """Apply the configured distractor swaps with production protections."""
+    protected = SceneRandomizerVecEnvWrapper._snapshot_protected(inner_env)
+    configured = TASK_SWAP_CONFIG.get(task_id, [])
+    results = []
+    for obj_a, obj_b in configured:
+        if not isinstance(obj_a, str) or not isinstance(obj_b, str):
+            raise TypeError(
+                "TASK_SWAP_CONFIG entries must be string object-name pairs; "
+                f"got ({obj_a!r}, {obj_b!r})"
+            )
+        results.append(
             swap_objects(
                 inner_env,
                 obj_a,
@@ -51,22 +58,25 @@ def _apply_task_swaps(inner_env, task_id: int) -> None:
                 settle_steps=SETTLE_STEPS_SWAP,
                 verbose=False,
             )
-        else:
-            move_object(
-                inner_env,
-                obj_a,
-                obj_b,
-                settle_steps=SETTLE_STEPS_SWAP,
-                verbose=False,
-            )
+        )
+
+    expected_labels = [label for swap in configured for label in swap]
+    applied_labels = [label for result in results for label in result.get("applied", [])]
+    skipped = [item for result in results for item in result.get("skipped", [])]
+    if skipped or sorted(applied_labels) != sorted(expected_labels):
+        raise RuntimeError(
+            f"task {task_id} layout was not fully applied: "
+            f"expected={expected_labels}, applied={applied_labels}, skipped={skipped}"
+        )
+
+    SceneRandomizerVecEnvWrapper._restore_protected(inner_env, protected)
+    inner_env.sim.forward()
+    SceneRandomizerVecEnvWrapper._verify_protected(inner_env, protected)
 
 
 def _policy_cameras(task_id: int) -> str:
-    configured = TASK_CAMERA_OVERRIDE.get(task_id, ",".join(DEFAULT_CAMERAS))
-    normalized = _normalize_lerobot_camera_name(configured)
-    if normalized is None:
-        raise ValueError(f"Task {task_id} has no policy cameras")
-    return normalized
+    del task_id
+    return ",".join(LEROBOT_CAMERA_KEYS)
 
 
 def _make_contact_sheet(

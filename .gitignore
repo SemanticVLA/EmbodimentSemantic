@@ -8,3 +8,6 @@ pytest.ini
 *.mp4
 CLAUDE.md
 ~BROMIUM/
+.codex
+PROJECT_CONTEXT.md
+AGENTS.md

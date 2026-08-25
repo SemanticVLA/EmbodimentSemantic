@@ -3,6 +3,10 @@ from __future__ import annotations
 import numpy as np
 
 from visual_scene_graph import (
+    DEFAULT_ARROW_HEAD_LENGTH,
+    DEFAULT_ARROW_WIDTH,
+    SEALED_LORA_ARROW_HEAD_LENGTH,
+    SEALED_LORA_ARROW_WIDTH,
     VisualGraphVecEnvWrapper,
     draw_scene_graph_arrows,
     goal_arrow_prompt_hint,
@@ -39,6 +43,37 @@ def test_renderer_skips_relation_with_missing_bbox():
     assert rendered.shape == image.shape
     assert rendered.dtype == image.dtype
     assert np.array_equal(rendered, image)
+
+
+def test_sealed_arrow_style_has_expected_visible_mask_and_legacy_defaults_remain():
+    image = np.zeros((256, 256, 3), dtype=np.uint8)
+    bboxes = {"subject": [12, 120, 32, 140], "object": [220, 120, 240, 140]}
+    legacy = draw_scene_graph_arrows(image, bboxes, [("subject", "r", "object")])
+    sealed = draw_scene_graph_arrows(
+        image,
+        bboxes,
+        [("subject", "r", "object")],
+        line_width=SEALED_LORA_ARROW_WIDTH,
+        head_length=SEALED_LORA_ARROW_HEAD_LENGTH,
+    )
+    legacy_mask = np.any(legacy != image, axis=2)
+    sealed_mask = np.any(sealed != image, axis=2)
+    assert sealed_mask.any()
+    assert sealed_mask.sum() > legacy_mask.sum()
+    # The source buffer is not touched and the mask contains no changes where
+    # the renderer was not asked to draw (a zero-input localization baseline).
+    assert not np.any(image)
+    wrapper = VisualGraphVecEnvWrapper(
+        _FakeVecEnv(),
+        _FakeGenerator(),
+        line_width=SEALED_LORA_ARROW_WIDTH,
+        head_length=SEALED_LORA_ARROW_HEAD_LENGTH,
+    )
+    assert wrapper.line_width == SEALED_LORA_ARROW_WIDTH
+    assert wrapper.head_length == SEALED_LORA_ARROW_HEAD_LENGTH
+    legacy_wrapper = VisualGraphVecEnvWrapper(_FakeVecEnv(), _FakeGenerator())
+    assert legacy_wrapper.line_width == DEFAULT_ARROW_WIDTH
+    assert legacy_wrapper.head_length == DEFAULT_ARROW_HEAD_LENGTH
 
 
 def test_goal_arrow_selector_keeps_only_target_to_goal():

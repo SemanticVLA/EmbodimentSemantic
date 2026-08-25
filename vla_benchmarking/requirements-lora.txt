@@ -1,0 +1,9 @@
+# Python 3.12 only. Install this file inside a fresh Lambda GPU environment.
+# Keep the base robotics pins from requirements.txt, then add the exact
+# LeRobot extras required by conversion, SmolVLA loading, LIBERO, and LoRA.
+# Use the reviewed source commit: PyPI 0.5.2 is not the reproducible runtime
+# used by the sealed converter/evaluator contract.
+-r requirements.txt
+lerobot[dataset,training,peft,smolvla,libero] @ git+https://github.com/huggingface/lerobot.git@d656da8ccca5989ff0a2207e81fbfa2c2d5bafb1
+accelerate==1.10.1
+peft==0.18.0

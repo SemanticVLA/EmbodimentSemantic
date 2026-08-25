@@ -21,7 +21,7 @@ mkdir -p logs
 # Usage:
 # sbatch run_eval.sh                                      # task 1, standard mode, SmolVLA
 # sbatch run_eval.sh standard "[1]"                      # task 1 only, standard mode
-# sbatch run_eval.sh scene_graph "[1,3,5,9]"             # swap tasks, scene graph mode
+# sbatch run_eval.sh scene_graph "[2,4,7,8,9]"           # swap tasks, scene graph mode
 #
 # Args: $1 = CONTEXT_MODE (default: standard)
 #       $2 = TASK_IDS     (default: [1])

@@ -1,0 +1,239 @@
+{
+  "schema_version": 2,
+  "audited_at_utc": "2026-08-20T10:11:17Z",
+  "purpose": "Unambiguous ledger separating what a model was trained on from what it received during evaluation.",
+  "persistent_update_rule": ".cursor/rules/smolvla-experiment-updates.mdc",
+  "analysis_scope": "Epoch 15 checkpoints only (step 029190).",
+  "mandatory_update_protocol": {
+    "trigger": "Every user request for an update, progress, completion state, current score, or current results.",
+    "steps": [
+      "Connect to Lambda and refresh every running training and evaluation job.",
+      "Inspect process state, latest training logs and checkpoints, completed episode artifacts, and eval_info.json when present.",
+      "Update this JSON, including audited_at_utc, statuses, progress, PIDs, per-task counts, and partial-versus-final state.",
+      "Update EXPERIMENT_LEDGER.md with the identical audit timestamp and facts.",
+      "Parse this JSON and check both files for contradictory statuses or scores.",
+      "Only then answer the user with the refreshed numbers."
+    ],
+    "remote_failure_rule": "If Lambda is unreachable, retain the last successful audited_at_utc, label all displayed running counts stale, and explicitly report that refresh failed. Never present an old snapshot as current."
+  },
+  "status_freshness": {
+    "snapshot_only": true,
+    "instruction": "Refresh every running job on Lambda before reporting current progress. Audited PIDs and partial counts are not live state."
+  },
+  "terminology": {
+    "trained_on": "Image condition in the LeRobot dataset used for LoRA fine-tuning.",
+    "evaluated_with": "Live image overlay condition supplied during LIBERO rollout.",
+    "frozen_base": "Pinned smolvla_libero base policy with no LoRA adapter.",
+    "all_arrows": "Multiple live or baked arrows from akita_black_bowl_1 to all selected visible spatial-relation objects.",
+    "target_arrow": "Exactly one live or baked arrow from akita_black_bowl_1 to the task goal, plate_1.",
+    "no_arrows": "No synthetic arrow overlay."
+  },
+  "common_contract": {
+    "base_policy_revision": "6721902bc4d61e50a3bfdb11dfb4cb626f05d102",
+    "tasks_for_checkpoint_probes": [0, 7],
+    "episodes_per_task": 10,
+    "seed": 1000,
+    "camera_name": "agentview,robot0_eye_in_hand",
+    "observation_size": [256, 256],
+    "n_action_steps": "checkpoint",
+    "custom_task_0_7_interventions": {
+      "scene_layout": false,
+      "object_removal": false,
+      "camera_selection": false
+    },
+    "canonical_libero_init_state_variation": true,
+    "static_prompt_overrides": true
+  },
+  "dataset_definitions": [
+    {
+      "id": "all_arrows_dataset",
+      "trained_on": "all_arrows",
+      "root": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/lora_datasets/treatment",
+      "episodes": 500,
+      "frames": 62250,
+      "pair_kind": "sealed_lora_control_treatment"
+    },
+    {
+      "id": "target_arrow_dataset",
+      "trained_on": "target_arrow",
+      "root": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/lora_datasets_target_arrow/target_arrow_treatment",
+      "episodes": 500,
+      "frames": 62250,
+      "pair_kind": "sealed_lora_control_target_arrow_treatment"
+    },
+    {
+      "id": "no_arrows_dataset",
+      "trained_on": "no_arrows",
+      "root": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/lora_datasets/control",
+      "episodes": 500,
+      "frames": 62250,
+      "pair_kind": "sealed_lora_control_treatment"
+    }
+  ],
+  "training_runs": [
+    {
+      "id": "all_arrows_lora_epoch_15_checkpoint",
+      "status": "complete",
+      "trained_on": "all_arrows",
+      "base_model": "frozen_base",
+      "selected_epoch": 15,
+      "selected_steps": 29190,
+      "save_frequency": 1946,
+      "batch_size": 32,
+      "peft_rank": 16,
+      "seed": 1000,
+      "run_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/lora_runs/treatment_2026_08_17_19_42_03",
+      "selected_checkpoint": "029190"
+    },
+    {
+      "id": "target_arrow_lora_15_epochs",
+      "status": "complete",
+      "trained_on": "target_arrow",
+      "base_model": "frozen_base",
+      "epochs": 15,
+      "steps": 29190,
+      "save_frequency": 1946,
+      "batch_size": 32,
+      "peft_rank": 16,
+      "seed": 1000,
+      "run_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/lora_runs/target_arrow_treatment_2026_08_18_19_47_55",
+      "final_checkpoint": "029190"
+    },
+    {
+      "id": "no_arrows_lora_15_epochs",
+      "status": "complete",
+      "trained_on": "no_arrows",
+      "base_model": "frozen_base",
+      "epochs": 15,
+      "steps": 29190,
+      "current_step_at_audit": 29190,
+      "progress_fraction_at_audit": 1.0,
+      "save_frequency": 1946,
+      "batch_size": 32,
+      "peft_rank": 16,
+      "seed": 1000,
+      "run_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/lora_runs/no_arrow_treatment_2026_08_19_13_08_20",
+      "launch_pid": null,
+      "trainer_pid": null,
+      "worker_pids": [],
+      "log": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/no_arrow_treatment_launch_2026_08_19_13_08_20.log",
+      "final_checkpoint_when_complete": "029190"
+    }
+  ],
+  "evaluations": [
+    {
+      "id": "all_arrows_epoch_15_eval_all_arrows",
+      "status": "complete",
+      "model_training_run": "all_arrows_lora_epoch_15_checkpoint",
+      "checkpoint": "029190",
+      "checkpoint_epoch": 15,
+      "trained_on": "all_arrows",
+      "evaluated_with": "all_arrows",
+      "tasks": {
+        "0": {"successes": 6, "episodes": 10},
+        "7": {"successes": 5, "episodes": 10}
+      },
+      "score": {"successes": 11, "episodes": 20, "success_rate": 0.55, "final": true},
+      "output_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/checkpoint_probe_029190_tasks_0_7_treatment"
+    },
+    {
+      "id": "frozen_base_eval_all_arrows",
+      "status": "complete",
+      "model_training_run": null,
+      "model": "frozen_base",
+      "trained_on": "not_finetuned",
+      "evaluated_with": "all_arrows",
+      "tasks": {
+        "0": {"successes": 0, "episodes": 10},
+        "7": {"successes": 0, "episodes": 10}
+      },
+      "score": {"successes": 0, "episodes": 20, "success_rate": 0.0, "final": true},
+      "output_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/checkpoint_probe_base_tasks_0_7",
+      "evidence": "visual_relation_audit.jsonl records condition=visual_arrows; this is not a no-arrow evaluation."
+    },
+    {
+      "id": "target_arrow_epoch_15_eval_target_arrow",
+      "status": "complete",
+      "model_training_run": "target_arrow_lora_15_epochs",
+      "checkpoint": "029190",
+      "checkpoint_epoch": 15,
+      "trained_on": "target_arrow",
+      "evaluated_with": "target_arrow",
+      "tasks": {
+        "0": {"successes": 4, "episodes": 10},
+        "7": {"successes": 1, "episodes": 10}
+      },
+      "score": {"successes": 5, "episodes": 20, "success_rate": 0.25, "final": true},
+      "pid": null,
+      "output_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/eval_outputs/target_arrow_epoch15_tasks_0_7",
+      "evidence": "visual_relation_audit.jsonl records visual_goal_arrow and exactly one bowl-to-plate relation."
+    },
+    {
+      "id": "all_arrows_epoch_15_eval_no_arrows",
+      "status": "complete",
+      "model_training_run": "all_arrows_lora_epoch_15_checkpoint",
+      "checkpoint": "029190",
+      "checkpoint_epoch": 15,
+      "trained_on": "all_arrows",
+      "evaluated_with": "no_arrows",
+      "tasks": {
+        "0": {"successes": 5, "episodes": 10},
+        "7": {"successes": 0, "episodes": 10}
+      },
+      "score": {"successes": 5, "episodes": 20, "success_rate": 0.25, "final": true},
+      "pid": null,
+      "output_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/checkpoint_probe_029190_tasks_0_7_treatment_no_arrows",
+      "evidence": "No visual_relation_audit.jsonl was created because VISUAL_CONDITION=none."
+    },
+    {
+      "id": "no_arrows_epoch_15_eval_no_arrows",
+      "status": "running",
+      "model_training_run": "no_arrows_lora_15_epochs",
+      "checkpoint": "029190",
+      "checkpoint_epoch": 15,
+      "trained_on": "no_arrows",
+      "evaluated_with": "no_arrows",
+      "pid": 56554,
+      "started_at_utc": "2026-08-20T10:11:17Z",
+      "tasks_planned": {"0": 10, "7": 10},
+      "score": null,
+      "output_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/eval_outputs/no_arrow_treatment_epoch15_tasks_0_7"
+    }
+  ],
+  "aborted_or_non_result_runs": [
+    {"id": "pair_2026_08_17_18_46_29", "kind": "training_attempt", "status": "empty_directory", "checkpoints": 0, "score": null},
+    {"id": "pair_2026_08_17_19_18_06", "kind": "paired_control_and_treatment_training_plan", "status": "plan_only", "checkpoints": 0, "score": null},
+    {
+      "id": "pair_2026_08_17_19_21_06",
+      "kind": "paired_control_and_treatment_training_attempt",
+      "status": "plan_and_pending_provenance_only",
+      "checkpoints": 0,
+      "score": null,
+      "important": "This may look like a no-arrow/control training run, but no adapter checkpoint was produced."
+    },
+    {"id": "treatment_2026_08_17_19_40_32", "kind": "all_arrows_training_attempt", "status": "training_plan_only", "checkpoints": 0, "score": null},
+    {"id": "intermediate_eval_029190_live_arrows", "kind": "evaluation_attempt", "status": "empty_audits_no_videos_no_eval_info", "score": null}
+  ],
+  "verified_missing_evaluation": {
+    "id": "frozen_base_eval_no_arrows",
+    "status": "not_run",
+    "model": "frozen_base",
+    "trained_on": "not_finetuned",
+    "evaluated_with": "no_arrows",
+    "score": null,
+    "note": "The tracked frozen-base 0/20 result used all_arrows during evaluation. No frozen-base/no-arrows eval_info.json exists on Lambda."
+  },
+  "handoff_rules": [
+    "Read EXPERIMENT_LEDGER.md and this tracker before answering any experiment question.",
+    "Run mandatory_update_protocol on every user update request and update both files before answering.",
+    "Always report model, trained_on, evaluated_with, checkpoint, per-task score, total score, and whether the score is final or partial.",
+    "Never use the word control by itself: say frozen_base or no-arrow LoRA.",
+    "Use eval_info.json as the authoritative final success record.",
+    "Keep analysis restricted to epoch 15 checkpoint 029190; do not add other checkpoints.",
+    "Preserve all raw Lambda artifacts unless the user explicitly authorizes deletion."
+  ],
+  "next_actions": [
+    "Monitor no_arrows_epoch_15_eval_no_arrows to completion and update partial counts and final score from eval_info.json once available.",
+    "Do not launch frozen_base_eval_no_arrows without an explicit user request."
+  ]
+}

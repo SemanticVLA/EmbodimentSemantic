@@ -174,9 +174,9 @@ python preview_visual_arrows.py
 
 This writes individual raw/overlaid images, `preview_audit.json`, and the
 `visual_arrows_first_frames.png` contact sheet under
-`visual_arrow_previews/`. Tasks 2 and 6 use `frontview` because their existing
-camera override maps that camera to the main `pixels/image` slot; matching
-front-view bboxes are used for those arrows.
+`visual_arrow_previews/`. Every task uses the fixed training camera pair:
+`agentview` and `robot0_eye_in_hand`; arrows are drawn on the main `agentview`
+policy image while the wrist image remains unchanged.
 
 Run the default SmolVLA visual ablation (ten tasks, four episodes each):
 
@@ -209,6 +209,69 @@ One-task CPU smoke run:
 python run_scene_graph_visual_ablation.py --tasks "[0]" --episodes 1 --max-videos 1 --device cpu
 ```
 
+### SmolVLA LoRA fine-tuning (Lambda GPU)
+
+The operator workflow is one command with explicit actions and profiles. The
+frozen `smolvla_libero` snapshot is the baseline; only the selected treatment
+adapter is trained. `treatment` uses baked-in arrows and `no-arrow` uses the
+arrow-free frames. These are distinct profiles, not a control/treatment adapter
+pair.
+
+The training environment is Python 3.12 with the pinned LeRobot source commit
+`d656da8ccca5989ff0a2207e81fbfa2c2d5bafb1` and its dataset, training, PEFT,
+SmolVLA, and LIBERO extras. Bootstrap also requires the LIBERO checkout at
+reviewed commit `8f1084e3132a39270c3a13ebe37270a43ece2a01`. On a clean Lambda
+GPU, from this directory:
+
+```bash
+bash run_smolvla_pipeline.sh setup --profile treatment
+```
+
+`prepare_lambda_data.sh` downloads the pinned `libero_spatial_v5.zip` source
+at dataset commit `a0dded49581dcbf5a109f8350305411d345c5d99`, checks the
+SHA256 `560fae66b5b41d2e383e6876b15052bbc105f4aae906cf1f630a2310b87a1fa9`, requires exactly ten expected LIBERO HDF5 files, then
+runs the profile-specific sealed conversion and verification:
+
+Use `--profile no-arrow` to prepare the arrow-free dataset.
+
+`prepare_base_snapshot.sh` stores the immutable local base snapshot at the
+revision `6721902bc4d61e50a3bfdb11dfb4cb626f05d102`. Do not train directly
+from a floating Hub name. The launcher requires both
+`lora_datasets/sealed_lora_pair_manifest.json` and the converter's
+`lora_datasets/sealed_lora_pair_verified.json` sentinel.
+
+Run the real preflight without writing a run directory, then an explicitly
+authorized two-step smoke run, then the sealed full run:
+
+```bash
+bash run_smolvla_pipeline.sh dry --profile treatment
+bash run_smolvla_pipeline.sh smoke --profile treatment --run-dir lora_runs/treatment_smoke
+bash run_smolvla_pipeline.sh full --profile treatment --run-dir lora_runs/treatment_full
+```
+
+`dry` performs the same preflight as a real launch and prints the one training
+command; it does not create a run directory or plan. `smoke` is exactly two
+steps. `full` is sealed to `EPOCHS=15`, `UPDATES_PER_EPOCH=1946`,
+`STEPS=29190`, and `SAVE_FREQ=1946`; ambient conflicting training variables
+are ignored. Every run writes immutable provenance and requires a non-empty
+adapter artifact. A safe resume requires an existing run directory, a
+contained checkpoint config, and compatible preserved provenance:
+
+```bash
+bash run_smolvla_pipeline.sh resume --profile treatment --run-dir lora_runs/treatment_full
+```
+
+Evaluation is explicit and treatment-only. It derives the frozen base,
+treatment adapter, and training manifest from the selected run; no evaluation
+is launched automatically after training. Evaluation uses the fixed training
+cameras (`agentview` and `robot0_eye_in_hand`):
+
+```bash
+bash run_smolvla_pipeline.sh eval --profile treatment \
+  --run-dir lora_runs/treatment_full --seeds 1000,1001 --episodes 50 \
+  --output-root eval_outputs/treatment_full
+```
+
 ---
 
 ## Configuration
@@ -221,13 +284,32 @@ SCENE_GRAPH_SUBJECT_FILTER = "akita_black_bowl_1"  # set None to include all obj
 
 BENCHMARK_NAME = "libero_spatial"
 SETTLE_STEPS_INIT = 100                        # physics steps after initial env reset
-SETTLE_STEPS_SWAP = 200                        # physics steps after each swap/move operation
+SETTLE_STEPS_SWAP = 200                        # physics steps after each swap operation
 ```
 
-`TASK_SWAP_CONFIG` defines the per-task scene randomization. Each entry is a list of operations applied in order:
+Randomization is multidimensional. A task is not considered unchanged merely
+because it has no swap operation. The sealed evaluator records and validates
+these dimensions per task and episode:
 
-- **Swap** `("obj_a", "obj_b")` — exchange full poses of two objects
-- **Move** `("obj_a", (dx, dy, dz))` — shift object by a relative offset
+- scene layout/object pose swaps (`TASK_SWAP_CONFIG`);
+- distractor removal from the task scene (`TASK_REMOVE_CONFIG`);
+- prompt variants (`TASK_PROMPT_OVERRIDE`) and any live semantic prompt suffix.
+
+Tasks 2, 4, 7, 8, and 9 each have one distractor-only pose swap and one safe
+distractor removal. Tasks 0, 1, 3, 5, and 6 are removal-only: their
+instruction-defining landmarks or target-support constraints leave no safe
+swap. All ten tasks have one validated prompt override, and every task
+realizes the `prompt_variant` dimension.
+Removal entries never target the target bowl, goal plate, or secondary black
+bowl (`akita_black_bowl_2`).
+LeRobot receives `agentview_image,robot0_eye_in_hand_image`; the underlying
+MuJoCo renderer is constructed with raw `agentview,robot0_eye_in_hand` names.
+
+`TASK_SWAP_CONFIG` is one component of the per-task scene randomization. Each
+configured entry is one safe swap operation; removal-only tasks intentionally
+have no layout entry:
+
+- **Swap** `("obj_a", "obj_b")` — exchange full poses of two distractor objects
 
 ---
 
@@ -239,7 +321,19 @@ SETTLE_STEPS_SWAP = 200                        # physics steps after each swap/m
 
 ### Scene randomization (`radomize_scenes.py`)
 
-Before each episode, object poses are rearranged via `TASK_SWAP_CONFIG`. Physics is settled after each operation. Controlled by `RANDOMIZE_SCENES` in `config.py`.
+Before each episode, enabled object-pose operations are applied via
+`TASK_SWAP_CONFIG`, after task-specific distractors have been removed from the
+BDDL. Physics is settled after each pose operation. Controlled by
+`RANDOMIZE_SCENES` in `config.py` and audited in
+`randomization_audit.jsonl`.
+The standalone `randomize_scenes_demo.py` replays the same first stored LIBERO
+init state on both sides of each before/after comparison and uses the same
+named-joint projection path as sealed evaluation for the filtered scene.
+For filtered tasks, evaluation briefly loads the canonical and filtered BDDL
+models, projects each `[time, qpos, qvel]` init state by retained joint name,
+and records projection evidence in the per-reset audit.
+The sealed evaluator requires `--batch-size 1` so each reset can be observed
+and audited independently.
 
 ### Semantic context (`libero_live_semantic_context.py`)
 

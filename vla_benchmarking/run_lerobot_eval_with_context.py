@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-import copy
+import hashlib
+import json
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 import lerobot.scripts.lerobot_eval as lerobot_eval
 from lerobot.envs import libero as lerobot_libero
 
-from bddl_utils import make_filtered_bddl
+from bddl_utils import extract_joint_schema, make_filtered_bddl, project_init_states_by_joint_name
 from config import (
     RANDOMIZE_SCENES, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP, SCENE_GRAPH_SUBJECT_FILTER,
-    TASK_GOAL_OBJECT_CONFIG, TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE, TASK_CAMERA_OVERRIDE,
+    LEROBOT_CAMERA_KEYS,
+    TASK_GOAL_OBJECT_CONFIG, TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE,
+    task_randomization_dimensions,
 )
 from libero_live_semantic_context import LiveSemanticContextGenerator
 from prompt_audit import PromptAuditLogger
@@ -33,6 +38,69 @@ from visual_scene_graph import (
 _FILTERED_BDDL_CACHE: dict[tuple[str, tuple[str, ...]], str] = {}
 
 
+class RandomizationAuditLogger:
+    """Write one JSONL record for each realized randomization observation."""
+
+    def __init__(self, output_dir):
+        self._fh = None
+        self._records: dict[tuple[int, int, int], dict] = {}
+        if output_dir:
+            path = Path(output_dir) / "randomization_audit.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._fh = path.open("a", encoding="utf-8", buffering=1)
+
+    def log(self, *, task_id, dimensions_enabled, dimensions_realized, details=None,
+            env_index=0, reset_sequence=0):
+        key = (int(task_id), int(env_index), int(reset_sequence))
+        record = self._records.setdefault(key, {
+            "task_id": int(task_id),
+            "env_index": int(env_index),
+            "reset_sequence": int(reset_sequence),
+            "dimensions_enabled": {},
+            "dimensions_realized": {},
+            "details": {},
+            "status": "pending",
+        })
+        record["dimensions_enabled"].update(dimensions_enabled or {})
+        record["dimensions_realized"].update(dimensions_realized or {})
+        if details:
+            record["details"].update(details)
+        if details and details.get("status"):
+            record["status"] = details["status"]
+
+    def update_prompt(self, *, task_id, env_index, reset_sequence, enabled, realized, details):
+        self.log(
+            task_id=task_id,
+            env_index=env_index,
+            reset_sequence=reset_sequence,
+            dimensions_enabled=enabled,
+            dimensions_realized=realized,
+            details=details,
+        )
+        key = (int(task_id), int(env_index), int(reset_sequence))
+        record = self._records[key]
+        complete = (
+            set(record["dimensions_enabled"]) == set(enabled)
+            and set(record["dimensions_realized"]) == set(enabled)
+            and all(
+                bool(record["dimensions_realized"].get(name)) == bool(is_enabled)
+                for name, is_enabled in enabled.items()
+            )
+        )
+        record["status"] = "ok" if complete else "failed_prompt_realization"
+        record["details"]["prompt_status"] = "ok" if complete else "failed"
+
+    def close(self):
+        pending = [key for key, record in self._records.items() if record.get("status") != "ok"]
+        if pending:
+            raise RuntimeError(f"randomization audit has unfinished reset records: {pending}")
+        if self._fh is not None:
+            for key in sorted(self._records):
+                self._fh.write(json.dumps(self._records[key], ensure_ascii=False) + "\n")
+            self._fh.close()
+            self._fh = None
+
+
 class TaskContextVecEnv:
     def __init__(
         self,
@@ -45,6 +113,7 @@ class TaskContextVecEnv:
         audit_logger=None,
         prompt_suffix="",
         prompt_suffix_by_task=None,
+        randomization_audit_logger=None,
     ):
         self.env = env
         self.live_generator = live_generator
@@ -55,10 +124,46 @@ class TaskContextVecEnv:
         self.audit_logger = audit_logger
         self.prompt_suffix = prompt_suffix.strip()
         self.prompt_suffix_by_task = prompt_suffix_by_task or {}
+        self.randomization_audit_logger = randomization_audit_logger
         self._debug_printed = False
 
     def __getattr__(self, name):
         return getattr(self.env, name)
+
+    def _audit_randomization(self, prompts, canonical_task_texts, effective_task_texts, sub_envs):
+        if self.randomization_audit_logger is None:
+            return
+        for prompt, canonical_task_text, effective_task_text, sub_env in zip(
+            prompts, canonical_task_texts, effective_task_texts, sub_envs
+        ):
+            task_id = getattr(sub_env, "task_id", None)
+            reset_sequence = int(getattr(sub_env, "_randomization_reset_sequence", 0))
+            if reset_sequence <= 0:
+                raise RuntimeError(f"task description observed before randomized reset for task {task_id}")
+            enabled = (
+                task_randomization_dimensions(task_id)
+                if task_id is not None
+                else {}
+            )
+            realized = {
+                "prompt_variant": bool(
+                    enabled.get("prompt_variant")
+                    and TASK_PROMPT_OVERRIDE.get(task_id) == effective_task_text
+                    and canonical_task_text != TASK_PROMPT_OVERRIDE.get(task_id)
+                ),
+            }
+            self.randomization_audit_logger.update_prompt(
+                task_id=task_id,
+                env_index=getattr(sub_env, "_randomization_env_index", 0),
+                reset_sequence=reset_sequence,
+                enabled=enabled,
+                realized=realized,
+                details={
+                    "effective_prompt_sha256": hashlib.sha256(
+                        prompt.encode("utf-8")
+                    ).hexdigest(),
+                },
+            )
 
     def call(self, name, *args, **kwargs):
         result = self.env.call(name, *args, **kwargs)
@@ -69,21 +174,22 @@ class TaskContextVecEnv:
         sub_envs = _resolve_envs(self.env)
 
         # Apply per-task prompt override before semantic context suffix
-        result = [
+        canonical_result = list(result)
+        effective_task_texts = [
             TASK_PROMPT_OVERRIDE.get(sub_env.task_id, task)
             for task, sub_env in zip(result, sub_envs)
         ]
-        task_texts = result
         final_result = []
-        for task, sub_env in zip(result, sub_envs):
+        for task, sub_env in zip(effective_task_texts, sub_envs):
             task_id = getattr(sub_env, "task_id", None)
             suffix = self.prompt_suffix_by_task.get(task_id, self.prompt_suffix).strip()
             final_result.append(f"{task} {suffix}" if suffix else task)
         result = final_result
 
         if self.live_generator is None:
+            self._audit_randomization(result, canonical_result, effective_task_texts, sub_envs)
             if self.audit_logger is not None:
-                for task, task_text, sub_env in zip(result, task_texts, sub_envs):
+                for task, task_text, sub_env in zip(result, effective_task_texts, sub_envs):
                     self.audit_logger.log(
                         prompt=task,
                         task_text=task_text,
@@ -122,6 +228,8 @@ class TaskContextVecEnv:
             print("\n===== DEBUG_SEMANTIC_CONTEXT =====")
             print(final[0][:self.max_chars])
             print("===== END DEBUG_SEMANTIC_CONTEXT =====\n")
+
+        self._audit_randomization(final, canonical_result, effective_task_texts, sub_envs)
 
         return final
 
@@ -190,10 +298,13 @@ def _append_default_lerobot_args() -> None:
     defaults = [
         (("--policy.path",), policy_path),
         (("--policy.device",), os.environ.get("DEVICE", "cuda")),
-        (("--policy.n_action_steps",), 10),
+        # Keep the historical 10-step override unless the sealed LoRA evaluator
+        # explicitly asks the policy checkpoint to supply its own value.
+        (("--policy.n_action_steps",), os.environ.get("N_ACTION_STEPS", "10")),
         (("--env.type",), os.environ.get("ENV_TYPE", "libero")),
         (("--env.task",), os.environ.get("ENV_TASK", "libero_spatial")),
         (("--env.task_ids",), os.environ.get("TASK_IDS", "[0,1,2,3,4,5,6,7,8,9]")),
+        (("--env.camera_name",), ",".join(LEROBOT_CAMERA_KEYS)),
         (("--env.max_parallel_tasks",), os.environ.get("MAX_PARALLEL_TASKS", "1")),
         (("--eval.n_episodes",), os.environ.get("N_EPISODES", "1")),
         (("--eval.batch_size",), os.environ.get("BATCH_SIZE", "1")),
@@ -205,100 +316,20 @@ def _append_default_lerobot_args() -> None:
         defaults.append((("--rename_map",), rename_map))
 
     for names, value in defaults:
+        if names == ("--policy.n_action_steps",) and str(value).strip().lower() == "checkpoint":
+            continue
         if not _has_cli_option(*names):
             sys.argv.append(f"{names[0]}={value}")
 
 
-def _normalize_task_ids(task_ids) -> list[int]:
-    if task_ids is None:
-        return []
-    if isinstance(task_ids, (list, tuple, set)):
-        return [int(task_id) for task_id in task_ids]
-    return [int(task_ids)]
-
-
 def _camera_name_mapping(camera_name: str) -> dict[str, str]:
-    cam_list = [c.strip() for c in camera_name.split(",") if c.strip()]
-    suffixes = [""] + [str(i + 2) for i in range(len(cam_list) - 1)]
+    """Map fixed LeRobot camera names to its ordered image observation keys."""
+    cameras = [item.strip() for item in camera_name.split(",") if item.strip()]
+    suffixes = [""] + [str(index + 2) for index in range(len(cameras) - 1)]
     return {
-        cam: f"image{suffix}"
-        for cam, suffix in zip(cam_list, suffixes)
+        camera: f"image{suffix}"
+        for camera, suffix in zip(cameras, suffixes)
     }
-
-
-def _normalize_lerobot_camera_name(camera_name: str | None) -> str | None:
-    if camera_name is None:
-        return None
-    cam_list = [c.strip() for c in camera_name.split(",") if c.strip()]
-    normalized = [
-        cam if cam.endswith("_image") else f"{cam}_image"
-        for cam in cam_list
-    ]
-    return ",".join(normalized)
-
-
-def _task_groups_by_camera(env_instance) -> list[tuple[str | None, list[int]]]:
-    task_ids = _normalize_task_ids(getattr(env_instance, "task_ids", None))
-    if not task_ids:
-        return [(_normalize_lerobot_camera_name(getattr(env_instance, "camera_name", None)), task_ids)]
-
-    default_camera = _normalize_lerobot_camera_name(getattr(env_instance, "camera_name", None))
-    grouped: dict[str | None, list[int]] = {}
-    ordered_keys: list[str | None] = []
-
-    for task_id in task_ids:
-        camera_name = _normalize_lerobot_camera_name(
-            TASK_CAMERA_OVERRIDE.get(task_id, default_camera)
-        )
-        if camera_name not in grouped:
-            grouped[camera_name] = []
-            ordered_keys.append(camera_name)
-        grouped[camera_name].append(task_id)
-
-    return [(camera_name, grouped[camera_name]) for camera_name in ordered_keys]
-
-
-def _clone_env_instance_for_tasks(env_instance, task_ids: list[int], camera_name: str | None):
-    cloned = copy.deepcopy(env_instance)
-    cloned.task_ids = list(task_ids)
-    cloned.camera_name = _normalize_lerobot_camera_name(getattr(cloned, "camera_name", None))
-
-    if task_ids and task_ids[0] in TASK_CAMERA_OVERRIDE and camera_name:
-        cloned.camera_name = camera_name
-        cloned.camera_name_mapping = _camera_name_mapping(camera_name)
-
-    return cloned
-
-
-def _merge_env_results(results: list):
-    if not results:
-        return {}
-    if len(results) == 1:
-        return results[0]
-
-    merged: dict = {}
-    for result in results:
-        if not isinstance(result, dict):
-            raise TypeError(
-                "Expected lerobot_eval.make_env to return a dict when splitting task-specific "
-                "camera overrides across multiple task groups."
-            )
-        for suite_name, suite_map in result.items():
-            if suite_name not in merged:
-                merged[suite_name] = suite_map
-                continue
-            if not isinstance(merged[suite_name], dict) or not isinstance(suite_map, dict):
-                raise TypeError(
-                    f"Cannot merge make_env result for suite '{suite_name}': expected dict values."
-                )
-            overlap = set(merged[suite_name]) & set(suite_map)
-            if overlap:
-                raise ValueError(
-                    f"Duplicate task ids while merging make_env results for suite '{suite_name}': "
-                    f"{sorted(overlap)}"
-                )
-            merged[suite_name].update(suite_map)
-    return merged
 
 
 def _filtered_bddl_path(source_path: str, remove_objects: list[str]) -> str:
@@ -335,6 +366,8 @@ def _patch_libero_env_bddl_selection(remove_config: dict[int, list[str]]) -> Non
         if not remove_objects:
             return
 
+        self._canonical_task_bddl_file = self._task_bddl_file
+        self._task_randomization_removed_objects = tuple(remove_objects)
         self._task_bddl_file = _filtered_bddl_path(self._task_bddl_file, remove_objects)
 
     patched_init._task_remove_config_patched = True
@@ -342,32 +375,90 @@ def _patch_libero_env_bddl_selection(remove_config: dict[int, list[str]]) -> Non
 
 
 def _patch_libero_env_camera_creation() -> None:
-    """Patch LeRobot's LiberoEnv so OffScreenRenderEnv is created with requested cameras.
+    """Pass LeRobot's configured fixed camera pair to OffScreenRenderEnv.
 
     Upstream LiberoEnv stores self.camera_name, but _ensure_env() creates OffScreenRenderEnv
-    without passing camera_names. That means raw_obs only contains LIBERO's default camera
-    keys, and task-specific camera overrides fail in _format_raw_obs() with KeyError.
+    without passing camera_names. Passing the configured names keeps the observation keys
+    aligned with LeRobot's fixed training-camera contract.
     """
 
     ensure_env_fn = lerobot_libero.LiberoEnv._ensure_env
-    if getattr(ensure_env_fn, "_camera_override_patched", False):
+    if getattr(ensure_env_fn, "_camera_creation_patched", False):
         return
 
     def patched_ensure_env(self) -> None:
         if self._env is not None:
             return
 
-        camera_names = [camera.removesuffix("_image") for camera in self.camera_name]
-        env = lerobot_libero.OffScreenRenderEnv(
-            bddl_file_name=self._task_bddl_file,
-            camera_names=camera_names,
-            camera_heights=self.observation_height,
-            camera_widths=self.observation_width,
-        )
-        env.reset()
+        configured_cameras = self.camera_name
+        if isinstance(configured_cameras, str):
+            configured_cameras = [item.strip() for item in configured_cameras.split(",") if item.strip()]
+        camera_names = [camera.removesuffix("_image") for camera in configured_cameras]
+        canonical_path = getattr(self, "_canonical_task_bddl_file", None)
+        projection_evidence = {
+            "required": bool(canonical_path),
+            "success": True,
+            "projected": False,
+            "removed_objects": list(getattr(self, "_task_randomization_removed_objects", ())),
+        }
+        canonical_env = None
+        if canonical_path:
+            canonical_env = lerobot_libero.OffScreenRenderEnv(
+                bddl_file_name=canonical_path,
+                camera_names=camera_names,
+                camera_heights=self.observation_height,
+                camera_widths=self.observation_width,
+            )
+            canonical_env.reset()
+        try:
+            env = lerobot_libero.OffScreenRenderEnv(
+                bddl_file_name=self._task_bddl_file,
+                camera_names=camera_names,
+                camera_heights=self.observation_height,
+                camera_widths=self.observation_width,
+            )
+            env.reset()
+        except Exception:
+            if canonical_env is not None:
+                close = getattr(canonical_env, "close", None)
+                if close is not None:
+                    close()
+            raise
+        if canonical_env is not None:
+            try:
+                source_schema = extract_joint_schema(canonical_env.sim.model)
+                target_schema = extract_joint_schema(env.sim.model)
+                states = getattr(self, "_init_states", None)
+                if states is not None:
+                    projected = project_init_states_by_joint_name(
+                        np.asarray(states), source_schema, target_schema
+                    )
+                    expected_width = 1 + target_schema.nq + target_schema.nv
+                    if projected.shape[-1] != expected_width:
+                        raise ValueError(
+                            f"projected init-state width {projected.shape[-1]} does not match "
+                            f"filtered schema width {expected_width}"
+                        )
+                    self._init_states = projected
+                    projection_evidence["projected"] = True
+                    projection_evidence["state_count"] = int(projected.shape[0]) if projected.ndim > 1 else 1
+                projection_evidence.update({
+                    "canonical_nq": source_schema.nq,
+                    "filtered_nq": target_schema.nq,
+                    "canonical_nv": source_schema.nv,
+                    "filtered_nv": target_schema.nv,
+                })
+            except Exception as exc:
+                projection_evidence.update({"success": False, "error": str(exc)})
+                raise
+            finally:
+                close = getattr(canonical_env, "close", None)
+                if close is not None:
+                    close()
         self._env = env
+        self._init_state_projection_evidence = projection_evidence
 
-    patched_ensure_env._camera_override_patched = True
+    patched_ensure_env._camera_creation_patched = True
     lerobot_libero.LiberoEnv._ensure_env = patched_ensure_env
 
 
@@ -385,6 +476,7 @@ def _wrap_task_vec_envs(
     visual_goal_objects,
     visual_prompt_suffix,
     visual_prompt_suffix_by_task,
+    randomization_audit_logger,
 ):
     if not isinstance(result, dict):
         return result
@@ -396,7 +488,12 @@ def _wrap_task_vec_envs(
             wrapped = vec_env
             if RANDOMIZE_SCENES:
                 wrapped = SceneRandomizerVecEnvWrapper(
-                    wrapped, task_id, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP
+                    wrapped,
+                    task_id,
+                    TASK_SWAP_CONFIG,
+                    SETTLE_STEPS_SWAP,
+                    audit_logger=randomization_audit_logger,
+                    removal_config=TASK_REMOVE_CONFIG,
                 )
             if visual_condition:
                 wrapped = VisualGraphVecEnvWrapper(
@@ -405,6 +502,8 @@ def _wrap_task_vec_envs(
                     condition=visual_condition,
                     goal_object=visual_goal_objects,
                     audit_logger=visual_audit_logger,
+                    line_width=int(os.environ.get("VISUAL_ARROW_WIDTH", "1")),
+                    head_length=int(os.environ.get("VISUAL_ARROW_HEAD_LENGTH", "8")),
                 )
             wrapped = TaskContextVecEnv(
                 wrapped,
@@ -416,6 +515,7 @@ def _wrap_task_vec_envs(
                 audit_logger,
                 visual_prompt_suffix,
                 visual_prompt_suffix_by_task,
+                randomization_audit_logger,
             )
             suite_map[task_id] = wrapped
 
@@ -460,7 +560,9 @@ def main() -> None:
     )
     visual_prompt_suffix = ""
     visual_prompt_suffix_by_task = {}
-    if visual_condition == VISUAL_GOAL_ARROW_CONDITION:
+    if visual_condition == VISUAL_GOAL_ARROW_CONDITION and not _env_flag(
+        "DISABLE_VISUAL_PROMPT_HINT"
+    ):
         explicit_hint = os.environ.get("VISUAL_PROMPT_HINT", "").strip()
         if explicit_hint:
             visual_prompt_suffix = explicit_hint
@@ -482,6 +584,7 @@ def main() -> None:
         output_dir,
         enabled=visual_condition is not None,
     )
+    randomization_audit_logger = RandomizationAuditLogger(output_dir)
 
     live_generator = None
     if use_live_context or visual_condition is not None:
@@ -509,15 +612,9 @@ def main() -> None:
             env_instance.render_mode = None if render_mode.lower() == "none" else render_mode
         else:
             env_instance.render_mode = None
-        task_groups = _task_groups_by_camera(env_instance)
-
-        results = []
-        for camera_name, group_task_ids in task_groups:
-            local_args = list(args)
-            local_args[0] = _clone_env_instance_for_tasks(env_instance, group_task_ids, camera_name)
-            results.append(original_make_env(*local_args, **kwargs))
-
-        result = _merge_env_results(results)
+        # All tasks intentionally share the training camera pair.  Keep one
+        # make_env call so hybrid scene perturbations remain task-config driven.
+        result = original_make_env(*args, **kwargs)
 
         return _wrap_task_vec_envs(
             result,
@@ -533,6 +630,7 @@ def main() -> None:
             visual_goal_objects,
             visual_prompt_suffix,
             visual_prompt_suffix_by_task,
+            randomization_audit_logger,
         )
 
     lerobot_eval.make_env = make_env_patched
@@ -542,6 +640,7 @@ def main() -> None:
     finally:
         audit_logger.close()
         visual_audit_logger.close()
+        randomization_audit_logger.close()
 
 
 if __name__ == "__main__":

@@ -22,7 +22,6 @@ from libero_live_semantic_context import get_bbox, _camera_name_for_mujoco
 from radomize_scenes import settle_physics, discover_objects
 from config import (
     BENCHMARK_NAME, CAMERA_HEIGHT, CAMERA_WIDTH, SETTLE_STEPS_INIT,
-    TASK_CAMERA_OVERRIDE,
 )
 
 COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6"]
@@ -68,9 +67,7 @@ def run_task(task_id):
     env.reset()
     settle_physics(env, max_steps=SETTLE_STEPS_INIT)
 
-    override_str = TASK_CAMERA_OVERRIDE.get(task_id, "")
-    override_cameras = [c.strip() for c in override_str.split(",") if c.strip()]
-    all_cameras = list(dict.fromkeys(["agentview"] + override_cameras))
+    all_cameras = ["agentview", "robot0_eye_in_hand"]
 
     n_cams = len(all_cameras)
     fig, axes = plt.subplots(1, n_cams, figsize=(6 * n_cams, 6))

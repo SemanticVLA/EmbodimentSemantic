@@ -1,12 +1,36 @@
 from __future__ import annotations
 
-import numpy as np
+import argparse
+import io
+import json
 
+import h5py
+import numpy as np
+from PIL import Image
+
+from config import TASK_PROMPT_OVERRIDE
 from hdf5_to_lerobot_dataset import (
     FEATURES,
+    SEALED_LORA_IMAGE_SIZE,
+    TARGET_ARROW_PAIR_KIND,
+    TARGET_ARROW_VARIANT,
+    assert_paired_frame_invariants,
     build_frame,
+    build_paired_frames,
+    expected_drawable_relations,
     filter_by_subject,
     flip180,
+    main_image_change_mask,
+    resize_rgb_image,
+    run_convert_pair,
+    run_verify,
+    sealed_pair_manifest_path,
+    sealed_pair_sentinel_path,
+    sealed_target_arrow_pair_manifest_path,
+    sealed_target_arrow_pair_sentinel_path,
+    scale_and_clamp_bboxes,
+    task_text_for,
+    validate_verified_pair,
 )
 
 
@@ -27,6 +51,17 @@ def _frame_kwargs(**overrides):
     )
     base.update(overrides)
     return base
+
+
+def test_task_text_for_uses_every_configured_prompt_override(tmp_path):
+    source = tmp_path / "task.hdf5"
+    with h5py.File(source, "w") as hdf5_file:
+        data = hdf5_file.create_group("data")
+        data.attrs["problem_info"] = json.dumps({"language_instruction": "canonical task"})
+
+    with h5py.File(source, "r") as hdf5_file:
+        for task_id, expected_prompt in TASK_PROMPT_OVERRIDE.items():
+            assert task_text_for(task_id, hdf5_file) == expected_prompt
 
 
 def test_flip180_rotates_both_axes():
@@ -69,8 +104,25 @@ def test_build_frame_action_dtype_and_shape():
 def test_build_frame_control_never_draws_arrows():
     kwargs = _frame_kwargs(agentview_rgb=np.zeros((128, 128, 3), dtype=np.uint8))
     frame = build_frame(**kwargs, variant="control")
-    # Control must be flip180(raw) and nothing else -- no arrow pixels introduced.
-    assert np.array_equal(frame["observation.images.image"], flip180(kwargs["agentview_rgb"]))
+    # Control must be resize+flip(raw) and nothing else -- no arrow pixels introduced.
+    assert np.array_equal(
+        frame["observation.images.image"],
+        flip180(resize_rgb_image(kwargs["agentview_rgb"])),
+    )
+
+
+def test_build_frame_seals_both_cameras_to_256_and_scales_clamps_bboxes():
+    source = np.zeros((128, 128, 3), dtype=np.uint8)
+    bboxes = {"a": [-10, 2, 64, 200], "b": [96, 32, 128, 64]}
+    assert scale_and_clamp_bboxes(bboxes) == {
+        "a": [0, 4, 128, 255],
+        "b": [192, 64, 255, 128],
+    }
+    frame = build_frame(**_frame_kwargs(agentview_rgb=source, eye_in_hand_rgb=source), variant="control")
+    assert frame["observation.images.image"].shape == (SEALED_LORA_IMAGE_SIZE,) * 2 + (3,)
+    assert frame["observation.images.image2"].shape == (SEALED_LORA_IMAGE_SIZE,) * 2 + (3,)
+    assert FEATURES["observation.images.image"]["dtype"] == "image"
+    assert FEATURES["observation.images.image2"]["dtype"] == "image"
 
 
 def test_build_frame_treatment_draws_arrows_only_for_target_subject():
@@ -94,6 +146,51 @@ def test_build_frame_treatment_draws_arrows_only_for_target_subject():
     assert control["task"] == treatment["task"]
 
 
+def test_target_arrow_treatment_draws_exactly_one_bowl_to_goal_arrow():
+    kwargs = _frame_kwargs(
+        agentview_rgb=np.zeros((128, 128, 3), dtype=np.uint8),
+        relations=[
+            ["akita_black_bowl_1", "is_left_of", "plate_1"],
+            ["akita_black_bowl_1", "is_behind", "cookies_1"],
+            ["cookies_1", "is_on_top_of", "plate_1"],
+        ],
+        bboxes={
+            "akita_black_bowl_1": [10, 10, 20, 20],
+            "cookies_1": [40, 40, 50, 50],
+            "plate_1": [80, 80, 100, 100],
+        },
+    )
+    control = build_frame(**kwargs, variant="control")
+    target = build_frame(**kwargs, variant=TARGET_ARROW_VARIANT)
+
+    assert expected_drawable_relations(
+        kwargs,
+        treatment_variant=TARGET_ARROW_VARIANT,
+        goal_object="plate_1",
+    ) == [("akita_black_bowl_1", "goal", "plate_1")]
+    assert not np.array_equal(
+        control["observation.images.image"], target["observation.images.image"]
+    )
+    assert np.array_equal(control["observation.images.image2"], target["observation.images.image2"])
+    assert np.array_equal(control["observation.state"], target["observation.state"])
+    assert np.array_equal(control["action"], target["action"])
+    assert control["task"] == target["task"]
+
+
+def test_target_arrow_profile_is_distinct_from_all_arrows_profile():
+    from hdf5_to_lerobot_dataset import _sealed_profile
+
+    all_arrows = _sealed_profile(False)
+    target_arrow = _sealed_profile(True)
+    assert target_arrow["pair_kind"] == TARGET_ARROW_PAIR_KIND
+    assert target_arrow["pair_kind"] != all_arrows["pair_kind"]
+    assert target_arrow["manifest_name"] != all_arrows["manifest_name"]
+    assert target_arrow["sentinel_name"] != all_arrows["sentinel_name"]
+    assert target_arrow["treatment_variant"] == TARGET_ARROW_VARIANT
+    assert target_arrow["variants"] == ("control", TARGET_ARROW_VARIANT)
+    assert target_arrow["visual_contract"]["relation_selection"] == "single_subject_to_task_goal"
+
+
 def test_build_frame_treatment_with_no_target_relations_matches_control():
     kwargs = _frame_kwargs(
         agentview_rgb=np.zeros((128, 128, 3), dtype=np.uint8),
@@ -102,6 +199,170 @@ def test_build_frame_treatment_with_no_target_relations_matches_control():
     control = build_frame(**kwargs, variant="control")
     treatment = build_frame(**kwargs, variant="treatment")
     assert np.array_equal(control["observation.images.image"], treatment["observation.images.image"])
+
+
+def test_paired_prewrite_invariants_reject_misplaced_arrow_pixels():
+    kwargs = _frame_kwargs(agentview_rgb=np.zeros((128, 128, 3), dtype=np.uint8))
+    control, treatment, expected_mask = build_paired_frames(**kwargs)
+    assert expected_mask.any()
+    assert_paired_frame_invariants(control, treatment, expected_arrow_mask=expected_mask)
+
+    bad_treatment = dict(treatment)
+    bad_main = treatment["observation.images.image"].copy()
+    bad_main[0, 0] = [255, 0, 0]
+    bad_treatment["observation.images.image"] = bad_main
+    try:
+        assert_paired_frame_invariants(
+            control,
+            bad_treatment,
+            expected_arrow_mask=expected_mask,
+            frame_label="tampered",
+        )
+    except AssertionError as exc:
+        assert "localized" in str(exc)
+    else:
+        raise AssertionError("expected verifier invariant rejection for misplaced pixel")
+
+
+def test_paired_mask_is_exactly_the_only_main_image_difference():
+    control, treatment, expected_mask = build_paired_frames(
+        **_frame_kwargs(agentview_rgb=np.zeros((128, 128, 3), dtype=np.uint8))
+    )
+    assert np.array_equal(
+        expected_mask,
+        main_image_change_mask(
+            control["observation.images.image"], treatment["observation.images.image"]
+        ),
+    )
+
+
+def test_pair_converter_verifier_rejects_tampered_stored_main_image(tmp_path):
+    """Exercise the lossless pair path and prove verify rejects misplaced pixels."""
+    source = tmp_path / "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo.hdf5"
+    with h5py.File(source, "w") as hdf5_file:
+        data = hdf5_file.create_group("data")
+        data.attrs["num_demos"] = 1
+        data.attrs["problem_info"] = json.dumps({"language_instruction": "test task"})
+        demo = data.create_group("demo_0")
+        obs = demo.create_group("obs")
+        obs.create_dataset("agentview_rgb", data=np.zeros((2, 128, 128, 3), dtype=np.uint8))
+        obs.create_dataset("eye_in_hand_rgb", data=np.full((2, 128, 128, 3), 7, dtype=np.uint8))
+        obs.create_dataset("ee_pos", data=np.zeros((2, 3), dtype=np.float32))
+        obs.create_dataset("ee_ori", data=np.zeros((2, 3), dtype=np.float32))
+        obs.create_dataset("gripper_states", data=np.zeros((2, 2), dtype=np.float32))
+        demo.create_dataset("actions", data=np.zeros((2, 7), dtype=np.float32))
+        bboxes = [
+            {"akita_black_bowl_1": [10, 10, 20, 20], "plate_1": [90, 90, 100, 100]},
+            {"akita_black_bowl_1": [20, 20, 30, 30], "plate_1": [90, 90, 100, 100]},
+        ]
+        relations = [["akita_black_bowl_1", "is_left_of", "plate_1"]]
+        obs.create_dataset("agentview_bboxes", data=json.dumps(bboxes), dtype=h5py.string_dtype())
+        obs.create_dataset(
+            "agentview_scene_graph",
+            data=json.dumps([relations, relations]),
+            dtype=h5py.string_dtype(),
+        )
+
+    args = argparse.Namespace(
+        data_dir=tmp_path,
+        output_root=tmp_path / "pair",
+        tasks=[0],
+        demos_per_task=1,
+        allow_subset=True,
+    )
+    args.output_root.mkdir()
+    sealed_pair_sentinel_path(args.output_root).write_text('{"stale": true}\n', encoding="utf-8")
+    run_convert_pair(args)
+    assert not sealed_pair_sentinel_path(args.output_root).exists()
+    run_verify(args)
+    assert sealed_pair_sentinel_path(args.output_root).is_file()
+    sentinel = validate_verified_pair(args.output_root, require_full_experiment=False)
+    assert sentinel["full_experiment_ready"] is False
+    assert sentinel["launch_eligibility"] == "subset_smoke_not_launchable"
+    assert sentinel["manifest_path"] == "sealed_lora_pair_manifest.json"
+    assert set(sentinel["dataset_fingerprints"]) == {"control", "treatment"}
+
+    target_args = argparse.Namespace(
+        data_dir=tmp_path,
+        output_root=tmp_path / "target_pair",
+        tasks=[0],
+        demos_per_task=1,
+        allow_subset=True,
+    )
+    target_args.output_root.mkdir()
+    run_convert_pair(target_args, target_arrow=True)
+    assert sealed_target_arrow_pair_manifest_path(target_args.output_root).is_file()
+    assert not sealed_target_arrow_pair_sentinel_path(target_args.output_root).exists()
+    run_verify(target_args, target_arrow=True)
+    assert sealed_target_arrow_pair_sentinel_path(target_args.output_root).is_file()
+    target_sentinel = validate_verified_pair(
+        target_args.output_root,
+        require_full_experiment=False,
+        target_arrow=True,
+    )
+    assert target_sentinel["manifest_path"] == "sealed_lora_target_arrow_pair_manifest.json"
+    assert set(target_sentinel["dataset_fingerprints"]) == {"control", TARGET_ARROW_VARIANT}
+    assert target_sentinel["pair_kind"] == TARGET_ARROW_PAIR_KIND
+    try:
+        validate_verified_pair(target_args.output_root, target_arrow=True)
+    except AssertionError as exc:
+        assert "subset smoke" in str(exc)
+    else:
+        raise AssertionError("one-task target-arrow sentinel must be rejected for launch")
+
+    try:
+        validate_verified_pair(args.output_root)
+    except AssertionError as exc:
+        assert "subset smoke" in str(exc)
+    else:
+        raise AssertionError("one-task sealed sentinel must be rejected for launch")
+
+    manifest_path = sealed_pair_manifest_path(args.output_root)
+    original_manifest = manifest_path.read_bytes()
+    manifest_path.write_bytes(original_manifest + b" ")
+    try:
+        validate_verified_pair(args.output_root, require_full_experiment=False)
+    except AssertionError as exc:
+        assert "manifest bytes" in str(exc)
+    else:
+        raise AssertionError("manifest edit must invalidate its verified sentinel")
+    manifest_path.write_bytes(original_manifest)
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    stored_main = args.output_root / "treatment" / "data" / "chunk-000" / "file-000.parquet"
+    table = pq.read_table(stored_main)
+    image_column = "observation.images.image"
+    image_entries = table[image_column].to_pylist()
+    with Image.open(io.BytesIO(image_entries[0]["bytes"])) as image:
+        tampered = np.asarray(image).copy()
+    tampered[0, 0] = [255, 0, 0]
+    encoded = io.BytesIO()
+    Image.fromarray(tampered).save(encoded, format="PNG")
+    image_entries[0]["bytes"] = encoded.getvalue()
+    image_type = table.schema.field(image_column).type
+    table = table.set_column(
+        table.schema.get_field_index(image_column),
+        image_column,
+        pa.array(image_entries, type=image_type),
+    )
+    pq.write_table(table, stored_main)
+
+    try:
+        validate_verified_pair(args.output_root, require_full_experiment=False)
+    except AssertionError as exc:
+        assert "fingerprint" in str(exc)
+    else:
+        raise AssertionError("dataset mutation must invalidate its verified sentinel")
+
+    try:
+        run_verify(args)
+    except AssertionError as exc:
+        assert "observation.images.image" in str(exc) or "main-image changes" in str(exc)
+    else:
+        raise AssertionError("expected source-grounded verifier rejection for tampered stored image")
+    assert not sealed_pair_sentinel_path(args.output_root).exists()
 
 
 def test_build_frame_rejects_unknown_variant():

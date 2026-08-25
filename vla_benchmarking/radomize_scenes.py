@@ -231,23 +231,6 @@ def apply_layout(
     return {"applied": applied, "skipped": skipped, "settle_info": settle_info}
 
 
-def move_object(
-    env: Any,
-    label: str,
-    delta_xyz: tuple | list | np.ndarray,
-    settle_steps: int = 0,
-    verbose: bool = True,
-) -> dict:
-    """Shift an object by (dx, dy, dz) from its current position, keeping its orientation."""
-    pose = get_object_pose(env, label)
-    if pose is None:
-        if verbose:
-            print(f"[move_object] cannot move: no pose for {label}")
-        return {"applied": [], "skipped": [(label, "no pose")]}
-    new_pose = np.concatenate([pose[:3] + np.array(delta_xyz, dtype=float), pose[3:]])
-    return apply_layout(env, {label: new_pose}, settle_steps=settle_steps, verbose=verbose)
-
-
 def swap_objects(
     env: Any,
     label_a: str,
@@ -329,38 +312,195 @@ class SceneRandomizerVecEnvWrapper:
         swap_config: dict,
         settle_steps: int = 0,
         verbose: bool = False,
+        audit_logger: Any | None = None,
+        removal_config: dict | None = None,
     ):
         self.env = env
-        self.swaps = swap_config.get(task_id, [])
+        self.task_id = int(task_id)
+        self.swaps = swap_config.get(self.task_id, [])
         self.settle_steps = settle_steps
         self.verbose = verbose
+        self.audit_logger = audit_logger
+        self.removal_config = removal_config or {}
+        self._reset_sequence = 0
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.env, name)
 
 
     def reset(self, id=None, **kwargs):
+        self._reset_sequence += 1
+        reset_sequence = self._reset_sequence
         result = self.env.reset(**kwargs) if id is None else self.env.reset(id=id, **kwargs)
         returns_info = isinstance(result, tuple) and len(result) == 2
         obs = result[0] if returns_info else result
         if not self.swaps:
+            envs = _resolve_envs(self.env)
+            ids = list(range(len(envs))) if id is None else ([id] if isinstance(id, int) else list(id))
+            reset_evidence = []
+            for env_index in ids:
+                lerobot_env = envs[env_index]
+                lerobot_env._randomization_env_index = env_index
+                lerobot_env._randomization_reset_sequence = reset_sequence
+                if self.audit_logger is not None:
+                    self.audit_logger.log(
+                        task_id=self.task_id,
+                        env_index=env_index,
+                        reset_sequence=reset_sequence,
+                        dimensions_enabled={"scene_layout": False, "object_removal": bool(self.removal_config.get(self.task_id))},
+                        dimensions_realized={},
+                        details={"status": "pending"},
+                    )
+                inner_env = lerobot_env._env
+                protected = self._snapshot_protected(inner_env)
+                removed = self._verify_removed(inner_env)
+                projection = self._projection_evidence(lerobot_env, inner_env)
+                if not projection.get("success", False) or (projection.get("required") and not projection.get("projected")):
+                    raise RuntimeError(f"task {self.task_id} init-state projection failed: {projection}")
+                inner_env.sim.forward()
+                self._verify_protected(inner_env, protected)
+                reset_evidence.append((env_index, removed, projection, protected))
+            if self.audit_logger is not None:
+                for env_index, removed, projection, protected in reset_evidence:
+                    self.audit_logger.log(
+                        task_id=self.task_id,
+                        env_index=env_index,
+                        reset_sequence=reset_sequence,
+                        dimensions_enabled={
+                            "scene_layout": False,
+                            "object_removal": bool(self.removal_config.get(self.task_id)),
+                        },
+                        dimensions_realized={
+                            "scene_layout": False,
+                            "object_removal": bool(self.removal_config.get(self.task_id)),
+                        },
+                        details={"swaps": [], "removed": removed, "projection": projection, "protected": self._protected_evidence(protected), "status": "environment_ok"},
+                    )
             return result
         envs = _resolve_envs(self.env)
         n = len(envs)
         ids = list(range(n)) if id is None else ([id] if isinstance(id, int) else list(id))
+        realized_layout: list[dict] = []
         for obs_index, env_index in enumerate(ids):
             lerobot_env = envs[env_index]
+            lerobot_env._randomization_env_index = env_index
+            lerobot_env._randomization_reset_sequence = reset_sequence
+            if self.audit_logger is not None:
+                self.audit_logger.log(
+                    task_id=self.task_id,
+                    env_index=env_index,
+                    reset_sequence=reset_sequence,
+                    dimensions_enabled={"scene_layout": True, "object_removal": bool(self.removal_config.get(self.task_id))},
+                    dimensions_realized={},
+                    details={"status": "pending"},
+                )
             inner_env = lerobot_env._env
-            self._apply_swaps(inner_env)
+            protected = self._snapshot_protected(inner_env)
+            removed = self._verify_removed(inner_env)
+            projection = self._projection_evidence(lerobot_env, inner_env)
+            if not projection.get("success", False) or (projection.get("required") and not projection.get("projected")):
+                raise RuntimeError(f"task {self.task_id} init-state projection failed: {projection}")
+            layout_results = self._apply_swaps(inner_env)
+            expected_labels = [label for swap in self.swaps for label in swap]
+            applied_labels = [label for result_item in layout_results for label in result_item.get("applied", [])]
+            skipped = [item for result_item in layout_results for item in result_item.get("skipped", [])]
+            if skipped or sorted(applied_labels) != sorted(expected_labels):
+                raise RuntimeError(
+                    f"task {self.task_id} layout was not fully applied: "
+                    f"expected={expected_labels}, applied={applied_labels}, skipped={skipped}"
+                )
+            self._restore_protected(inner_env, protected)
+            inner_env.sim.forward()
+            self._verify_protected(inner_env, protected)
+            realized_layout.append({
+                "configured": self.swaps,
+                "applied": [label for result in layout_results for label in result.get("applied", [])],
+                "skipped": [item for result in layout_results for item in result.get("skipped", [])],
+                "removed": removed,
+                "projection": projection,
+                "protected": self._protected_evidence(protected),
+            })
             inner_env.sim.forward()
             raw_obs = inner_env.env._get_observations(force_update=True)
             fresh_obs = lerobot_env._format_raw_obs(raw_obs)
             _replace_batched_observation_slot(obs, fresh_obs, obs_index)
+        if self.audit_logger is not None:
+            for env_index, evidence in zip(ids, realized_layout):
+                self.audit_logger.log(
+                    task_id=self.task_id,
+                    env_index=env_index,
+                    reset_sequence=reset_sequence,
+                    dimensions_enabled={"scene_layout": True, "object_removal": bool(self.removal_config.get(self.task_id))},
+                    dimensions_realized={"scene_layout": True, "object_removal": bool(self.removal_config.get(self.task_id))},
+                    details={
+                        "swaps": self.swaps,
+                        "layout": evidence,
+                        "removed": evidence["removed"],
+                        "projection": evidence["projection"],
+                        "protected": evidence["protected"],
+                        "status": "environment_ok",
+                    },
+                )
         return (obs, result[1]) if returns_info else obs
 
-    def _apply_swaps(self, inner_env: Any) -> None:
+    @staticmethod
+    def _projection_evidence(lerobot_env: Any, inner_env: Any) -> dict:
+        return getattr(
+            lerobot_env,
+            "_init_state_projection_evidence",
+            getattr(inner_env, "_init_state_projection_evidence", {"required": False, "success": True}),
+        )
+
+    def _verify_removed(self, inner_env: Any) -> list[str]:
+        configured = list(self.removal_config.get(self.task_id, []))
+        present = discover_objects(inner_env)
+        remaining = [label for label in configured if label in present]
+        if remaining:
+            raise RuntimeError(f"configured removed objects still present after reset: {remaining}")
+        return configured
+
+    @staticmethod
+    def _snapshot_protected(inner_env: Any) -> dict[str, np.ndarray]:
+        snapshot = {}
+        for label in ("akita_black_bowl_1", "plate_1"):
+            pose = get_object_pose(inner_env, label)
+            if pose is None:
+                raise RuntimeError(f"protected object missing before layout: {label}")
+            snapshot[label] = pose
+        return snapshot
+
+    @staticmethod
+    def _restore_protected(inner_env: Any, snapshot: dict[str, np.ndarray]) -> None:
+        for label, pose in snapshot.items():
+            if not set_object_pose(inner_env, label, pose):
+                raise RuntimeError(f"protected object missing while restoring layout: {label}")
+
+    @staticmethod
+    def _verify_protected(inner_env: Any, snapshot: dict[str, np.ndarray]) -> None:
+        for label, expected in snapshot.items():
+            actual = get_object_pose(inner_env, label)
+            if actual is None or not np.allclose(actual, expected, atol=1e-7, rtol=0):
+                raise RuntimeError(f"protected object pose changed during layout: {label}")
+
+    @staticmethod
+    def _protected_evidence(snapshot: dict[str, np.ndarray]) -> dict[str, bool]:
+        return {label: True for label in snapshot}
+
+    def _apply_swaps(self, inner_env: Any) -> list[dict]:
+        results = []
         for obj_a, obj_b in self.swaps:
-            if isinstance(obj_b, str):
-                swap_objects(inner_env, obj_a, obj_b, settle_steps=self.settle_steps, verbose=self.verbose)
-            else:
-                move_object(inner_env, obj_a, obj_b, settle_steps=self.settle_steps, verbose=self.verbose)
+            if not isinstance(obj_a, str) or not isinstance(obj_b, str):
+                raise TypeError(
+                    "TASK_SWAP_CONFIG entries must be string object-name pairs; "
+                    f"got ({obj_a!r}, {obj_b!r})"
+                )
+            results.append(
+                swap_objects(
+                    inner_env,
+                    obj_a,
+                    obj_b,
+                    settle_steps=self.settle_steps,
+                    verbose=self.verbose,
+                )
+            )
+        return results

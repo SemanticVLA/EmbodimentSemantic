@@ -1,4 +1,4 @@
-"""Visualize scene graph triplets for tasks 2 and 6, episode 0, step 0."""
+"""Visualize scene graph triplets from the fixed agentview camera."""
 import os
 import sys
 
@@ -22,7 +22,6 @@ from libero_live_semantic_context import get_bbox, generate_frame_graph, discove
 from radomize_scenes import settle_physics
 from config import (
     BENCHMARK_NAME, CAMERA_HEIGHT, CAMERA_WIDTH, SETTLE_STEPS_INIT,
-    TASK_CAMERA_OVERRIDE,
 )
 
 COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6"]
@@ -98,10 +97,8 @@ def run_task(task_id):
     world = get_world(env)
     triplets = generate_frame_graph(bboxes_agentview, world, object_filter=set(bboxes_agentview.keys()))
 
-    # Display on override cameras (or agentview if no override)
-    override_str = TASK_CAMERA_OVERRIDE.get(task_id, "")
-    override_cameras = [c.strip() for c in override_str.split(",") if c.strip()]
-    display_cameras = override_cameras if override_cameras else [GRAPH_CAMERA]
+    # Display on the fixed training scene-graph camera.
+    display_cameras = [GRAPH_CAMERA]
 
     n_cams = len(display_cameras)
     fig, axes = plt.subplots(1, n_cams, figsize=(7 * n_cams, 7))
@@ -144,8 +141,7 @@ def check_graph_consistency(task_id):
     settle_physics(env, max_steps=SETTLE_STEPS_INIT)
 
     world = get_world(env)
-    override_str = TASK_CAMERA_OVERRIDE.get(task_id, "")
-    all_cameras = [GRAPH_CAMERA] + [c.strip() for c in override_str.split(",") if c.strip()]
+    all_cameras = [GRAPH_CAMERA]
 
     graphs = {}
     for camera in all_cameras:
