@@ -11,3 +11,5 @@ CLAUDE.md
 .codex
 PROJECT_CONTEXT.md
 AGENTS.md
+.cursor/
+lambda_stage_*.tar.gz

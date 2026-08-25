@@ -10,3 +10,5 @@ slurm_train_*.out
 slurm_train_*.err
 .venv-lora/
 .cache/
+eval_outputs/
+visual_arrow_previews_prompt_validation/
