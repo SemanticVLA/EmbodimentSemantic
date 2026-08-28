@@ -635,6 +635,63 @@ def test_relative_paths_are_normalized_from_an_alternate_working_directory(tmp_p
     assert "dry run complete" in result.stdout
 
 
+def test_python_symlink_is_preserved_for_default_and_explicit_interpreters(tmp_path: Path) -> None:
+    """Path normalization must not replace a venv's executable symlink."""
+    script, env, _ = _runtime(tmp_path)
+    env.pop("LAMBDA_VENV", None)
+    marker = tmp_path / "python-invocations.log"
+    target = tmp_path / "python-target"
+    fake_site = tmp_path / "fake_site"
+    _executable(
+        target,
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$0\" >> {shlex.quote(_bash_path(marker))}\nPYTHONPATH={shlex.quote(_bash_path(fake_site))}${{PYTHONPATH:+:$PYTHONPATH}} exec /usr/bin/python3 \"$@\"\n",
+    )
+
+    def make_link(link: Path) -> None:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"ln -s -- {shlex.quote(_bash_path(target))} {shlex.quote(_bash_path(link))}",
+            ],
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    default_link = tmp_path / ".venv-lora" / "bin" / "python"
+    explicit_link = tmp_path / "explicit-venv" / "bin" / "python"
+    make_link(default_link)
+    make_link(explicit_link)
+
+    default_result = _run(
+        script,
+        ["smoke", "--profile", "treatment", "--run-dir", _bash_path(tmp_path / "default-run")],
+        env,
+    )
+    assert default_result.returncode == 0, default_result.stdout + default_result.stderr
+
+    explicit_result = _run(
+        script,
+        [
+            "smoke",
+            "--profile",
+            "treatment",
+            "--run-dir",
+            _bash_path(tmp_path / "explicit-run"),
+            "--python",
+            _bash_path(explicit_link),
+        ],
+        env,
+    )
+    assert explicit_result.returncode == 0, explicit_result.stdout + explicit_result.stderr
+
+    invocations = marker.read_text(encoding="utf-8").splitlines()
+    assert any(line.endswith("/.venv-lora/bin/python") for line in invocations)
+    assert any(line.endswith("/explicit-venv/bin/python") for line in invocations)
+
+
 def test_interrupted_resume_audits_are_append_only_and_bind_final_manifest(tmp_path: Path) -> None:
     script, env, trace = _runtime(tmp_path)
     revision = "6721902bc4d61e50a3bfdb11dfb4cb626f05d102"

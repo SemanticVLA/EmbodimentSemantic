@@ -32,6 +32,23 @@ abs_path() {
     realpath -m -- "$PWD/$value"
   fi
 }
+abs_executable_path() {
+  local value="$1"
+  local directory filename
+  if [[ "$value" == /* ]]; then
+    directory="${value%/*}"
+    filename="${value##*/}"
+  else
+    value="$PWD/$value"
+    directory="${value%/*}"
+    filename="${value##*/}"
+  fi
+  [[ -n "$directory" ]] || directory=/
+  # Canonicalize only the containing directory.  The final component may be
+  # an executable symlink (notably .venv-lora/bin/python), and resolving it
+  # here would bypass that environment's site-packages.
+  printf '%s/%s\n' "$(realpath -m -- "$directory")" "$filename"
+}
 
 usage() {
   echo "Usage: $0 <setup|dry|smoke|full|resume|eval> --profile <treatment|no-arrow> [--run-dir PATH] [--seeds LIST] [--output-root PATH]"
@@ -81,13 +98,13 @@ if [[ "$ACTION" == resume && -z "$RUN_DIR" ]]; then
 fi
 if [[ -n "${SEEN_OPTIONS[python]+seen}" ]]; then
   if [[ "$PYTHON" == */* ]]; then
-    PYTHON="$(abs_path "$PYTHON")"
+    PYTHON="$(abs_executable_path "$PYTHON")"
   else
     PYTHON="$(command -v "$PYTHON" 2>/dev/null || true)"
   fi
   [[ -n "$PYTHON" && -x "$PYTHON" ]] || { echo "explicit --python is not an executable: $PYTHON" >&2; exit 2; }
 else
-  PYTHON="$(abs_path "$PYTHON")"
+  PYTHON="$(abs_executable_path "$PYTHON")"
 fi
 if [[ -n "$RUN_DIR" ]]; then RUN_DIR="$(abs_path "$RUN_DIR")"; fi
 if [[ -n "$OUTPUT_ROOT" ]]; then OUTPUT_ROOT="$(abs_path "$OUTPUT_ROOT")"; fi
