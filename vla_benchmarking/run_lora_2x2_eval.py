@@ -34,10 +34,10 @@ TASK_IDS = tuple(range(10))
 TRAINING_CAMERAS = ",".join(LEROBOT_CAMERA_KEYS)
 RAW_TRAINING_CAMERAS = ",".join(DEFAULT_CAMERAS)
 CELL_IDS = (
-    "base_no_arrows",
-    "base_live_arrows",
-    "treatment_no_arrows",
     "treatment_live_arrows",
+    "treatment_no_arrows",
+    "base_live_arrows",
+    "base_no_arrows",
 )
 MANIFEST_FILENAME = "lora_2x2_manifest.json"
 SUMMARY_FILENAME = "lora_2x2_summary.csv"
@@ -176,10 +176,10 @@ def build_cells(
     cells: list[dict[str, Any]] = []
     for seed in seeds:
         for cell_id, checkpoint, arrows in (
-            ("base_no_arrows", base, False),
-            ("base_live_arrows", base, True),
-            ("treatment_no_arrows", treatment, False),
             ("treatment_live_arrows", treatment, True),
+            ("treatment_no_arrows", treatment, False),
+            ("base_live_arrows", base, True),
+            ("base_no_arrows", base, False),
         ):
             cell_dir = output_root / f"seed_{int(seed)}" / cell_id
             cells.append(

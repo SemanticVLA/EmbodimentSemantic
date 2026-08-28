@@ -94,6 +94,12 @@ def _training_manifest_fixture(tmp_path: Path, steps: list[int]):
 
 
 def test_manifest_contains_all_tasks_fixed_cameras_and_four_cells_per_seed(tmp_path):
+    assert CELL_IDS == (
+        "treatment_live_arrows",
+        "treatment_no_arrows",
+        "base_live_arrows",
+        "base_no_arrows",
+    )
     assert TRAINING_CAMERAS == "agentview_image,robot0_eye_in_hand_image"
     assert RAW_TRAINING_CAMERAS == "agentview,robot0_eye_in_hand"
     manifest = build_manifest(
@@ -114,6 +120,9 @@ def test_manifest_contains_all_tasks_fixed_cameras_and_four_cells_per_seed(tmp_p
     assert {(cell["seed"], cell["cell_id"]) for cell in manifest["cells"]} == {
         (seed, cell_id) for seed in (1000, 1001) for cell_id in CELL_IDS
     }
+    assert [cell["cell_id"] for cell in manifest["cells"]] == [
+        cell_id for _seed in (1000, 1001) for cell_id in CELL_IDS
+    ]
     assert {cell["checkpoint"] for cell in manifest["cells"] if cell["cell_id"].startswith("base")} == {
         "smolvla-libero"
     }
