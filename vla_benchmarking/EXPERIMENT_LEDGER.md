@@ -11,8 +11,10 @@ The always-applied startup rule enforcing this requirement is
 **Analysis scope:** epoch 15 checkpoints only (`029190`, 29,190 steps). Do not
 add any other checkpoints unless the user explicitly changes the scope.
 
-**Last Lambda audit represented in both files:** 2026-08-20 10:11:17 UTC.
-Anything marked running is a timestamped snapshot, not live state.
+**Last active-run audit represented in both files:** 2026-08-29 19:44:40 UTC.
+The active forward run is on PoliTO Legion. The last preserved Lambda-only audit
+is 2026-08-20 10:11:17 UTC; its process IDs are historical snapshots, not live
+state.
 
 ## Mandatory rule whenever the user asks for an update
 
@@ -20,7 +22,8 @@ Before answering any request such as "updates?", "where are we?", "how many?",
 "is it done?", or "results so far?", the active thread must complete this exact
 transaction:
 
-1. Connect to Lambda and refresh every running training and evaluation job.
+1. Connect to each active execution host and refresh every running training and
+   evaluation job. Current forward runs use Legion through the mp4 gateway.
 2. Inspect process state, the latest training log/checkpoints, completed episode
    artifacts, and `eval_info.json` when present.
 3. Update `evaluation_results_tracker.json`, including `audited_at_utc`, job
@@ -30,9 +33,9 @@ transaction:
 5. Parse the JSON and check both files for contradictory statuses or scores.
 6. Only after steps 1–5, answer the user with the new numbers.
 
-If Lambda cannot be reached, do not present this snapshot as current. Record and
-report that the refresh failed, retain the last successful audit timestamp, and
-label every shown count stale.
+If an active execution host cannot be reached, do not present its snapshot as
+current. Record and report that the refresh failed, retain the last successful
+audit timestamp, and label every shown count stale.
 
 ## Terminology that must not be mixed up
 
@@ -224,6 +227,47 @@ never be reported as results:
 Do not delete these or any other Lambda artifacts without explicit user
 authorization.
 
+## Active Legion no-arrow causal-control experiment
+
+Audit time: **2026-08-29 19:44:40 UTC**.
+
+### Training — `legion_no_arrow_lora_full_s1000_v1`
+
+- Status: **running** on PoliTO Legion.
+- SLURM job: `1910197` on `gpu_a40` (`compute-4-11` at this audit).
+- Source commit: `8579b62e58aad28e131a8b8da370b4c34f2fc013`.
+- Trained on: **no arrows**, using the control half of the exact sealed
+  `sealed_lora_control_treatment` pair.
+- Base revision: `6721902bc4d61e50a3bfdb11dfb4cb626f05d102`.
+- Schedule: 15 epochs, 29,190 steps, checkpoint every 1,946 steps, batch 32,
+  seed 1000, LoRA rank 16.
+- Planned final checkpoint: `029190`.
+- Scratch run:
+  `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197`
+- Durable archive:
+  `/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197`
+- Score: not available while training is running.
+
+The refreshed stage, no-arrow preflight, and two-step A40 smoke completed before
+this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
+
+### Evaluation — `legion_no_arrow_trained_live_vs_none_s1000_ep10_v1`
+
+- Status: **queued**, SLURM job `1910198` with dependency `afterok:1910197`.
+- It evaluates the same final no-arrow-trained adapter in exactly this order:
+  1. `no_arrow_trained_live_arrows` — trained on no arrows, evaluated with live
+     all-object arrows.
+  2. `no_arrow_trained_no_arrows` — trained on no arrows, evaluated without
+     arrows.
+- Coverage per cell: tasks 0–9, 10 episodes per task, seed 1000, batch size 1.
+- Randomization and prompt configuration: unchanged sealed current config.
+- No frozen-base or arrow-trained model enters this evaluation job.
+- Scratch evaluation root:
+  `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/eval/legion_no_arrow_trained_live_vs_none_s1000_ep10_v1_no_arrow_treatment_1910198`
+- Scores: not available until training and the dependent evaluation complete.
+- Complete or partial outputs are archived under
+  `/home/hjaber/EmbodimentSemantic_archive/eval/` by the job's EXIT trap.
+
 ## Permanent takeover checklist
 
 1. Read this ledger and `evaluation_results_tracker.json` before answering any
@@ -240,10 +284,14 @@ authorization.
 
 ## Next actions, in order
 
-1. Monitor the no-arrow-LoRA/no-arrow evaluation to completion and record final
-   `eval_info.json` counts when available.
-4. Do not launch the missing frozen-base/no-arrow evaluation unless the user
-   explicitly requests it.
+1. Monitor Legion training job `1910197` through checkpoint `029190` and verify
+   its final manifest and adapter hash.
+2. Monitor dependent evaluation job `1910198`; record each cell's per-task and
+   total results from `eval_info.json` when available.
+3. Verify the durable HOME archives match the scratch training/evaluation
+   outputs.
+4. Do not launch any additional baseline or seed unless the user explicitly
+   requests it.
 
 ## Current interpretation boundary
 

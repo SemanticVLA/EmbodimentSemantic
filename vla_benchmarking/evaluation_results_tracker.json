@@ -1,24 +1,24 @@
 {
   "schema_version": 2,
-  "audited_at_utc": "2026-08-20T10:11:17Z",
+  "audited_at_utc": "2026-08-29T19:44:40Z",
   "purpose": "Unambiguous ledger separating what a model was trained on from what it received during evaluation.",
   "persistent_update_rule": ".cursor/rules/smolvla-experiment-updates.mdc",
   "analysis_scope": "Epoch 15 checkpoints only (step 029190).",
   "mandatory_update_protocol": {
     "trigger": "Every user request for an update, progress, completion state, current score, or current results.",
     "steps": [
-      "Connect to Lambda and refresh every running training and evaluation job.",
+      "Connect to the active execution host and refresh every running training and evaluation job; current forward runs use Legion through the mp4 gateway.",
       "Inspect process state, latest training logs and checkpoints, completed episode artifacts, and eval_info.json when present.",
       "Update this JSON, including audited_at_utc, statuses, progress, PIDs, per-task counts, and partial-versus-final state.",
       "Update EXPERIMENT_LEDGER.md with the identical audit timestamp and facts.",
       "Parse this JSON and check both files for contradictory statuses or scores.",
       "Only then answer the user with the refreshed numbers."
     ],
-    "remote_failure_rule": "If Lambda is unreachable, retain the last successful audited_at_utc, label all displayed running counts stale, and explicitly report that refresh failed. Never present an old snapshot as current."
+    "remote_failure_rule": "If the active execution host is unreachable, retain the last successful audited_at_utc, label all displayed running counts stale, and explicitly report that refresh failed. Never present an old snapshot as current."
   },
   "status_freshness": {
     "snapshot_only": true,
-    "instruction": "Refresh every running job on Lambda before reporting current progress. Audited PIDs and partial counts are not live state."
+    "instruction": "Refresh every running job on its recorded execution host before reporting current progress. Audited job IDs and partial counts are not live state."
   },
   "terminology": {
     "trained_on": "Image condition in the LeRobot dataset used for LoRA fine-tuning.",
@@ -42,7 +42,14 @@
       "camera_selection": false
     },
     "canonical_libero_init_state_variation": true,
-    "static_prompt_overrides": true
+    "static_prompt_overrides": true,
+    "legion_no_arrow_causal_control": {
+      "tasks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      "episodes_per_task_per_cell": 10,
+      "seed": 1000,
+      "randomize_scenes": true,
+      "cells": ["no_arrow_trained_live_arrows", "no_arrow_trained_no_arrows"]
+    }
   },
   "dataset_definitions": [
     {
@@ -65,6 +72,7 @@
       "id": "no_arrows_dataset",
       "trained_on": "no_arrows",
       "root": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/lora_datasets/control",
+      "legion_root": "/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/vla_benchmarking/lora_datasets/control",
       "episodes": 500,
       "frames": 62250,
       "pair_kind": "sealed_lora_control_treatment"
@@ -118,6 +126,29 @@
       "worker_pids": [],
       "log": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/no_arrow_treatment_launch_2026_08_19_13_08_20.log",
       "final_checkpoint_when_complete": "029190"
+    },
+    {
+      "id": "legion_no_arrow_lora_full_s1000_v1",
+      "status": "running",
+      "execution_host": "polito_legion",
+      "slurm_job_id": 1910197,
+      "source_commit": "8579b62e58aad28e131a8b8da370b4c34f2fc013",
+      "trained_on": "no_arrows",
+      "dataset_variant": "control",
+      "dataset_pair_kind": "sealed_lora_control_treatment",
+      "base_model": "frozen_base",
+      "base_revision": "6721902bc4d61e50a3bfdb11dfb4cb626f05d102",
+      "epochs": 15,
+      "steps": 29190,
+      "save_frequency": 1946,
+      "batch_size": 32,
+      "peft_rank": 16,
+      "seed": 1000,
+      "started_at_utc": "2026-08-29T19:39:13Z",
+      "run_dir": "/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197",
+      "archive_dir": "/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197",
+      "final_checkpoint_when_complete": "029190",
+      "score": null
     }
   ],
   "evaluations": [
@@ -198,6 +229,38 @@
       "tasks_planned": {"0": 10, "7": 10},
       "score": null,
       "output_dir": "/home/ubuntu/EmbodimentSemantic/vla_benchmarking/eval_outputs/no_arrow_treatment_epoch15_tasks_0_7"
+    },
+    {
+      "id": "legion_no_arrow_trained_live_arrows_s1000_ep10_v1",
+      "status": "queued_after_training",
+      "execution_host": "polito_legion",
+      "slurm_job_id": 1910198,
+      "dependency": "afterok:1910197",
+      "cell_order": 1,
+      "model_training_run": "legion_no_arrow_lora_full_s1000_v1",
+      "checkpoint": "029190",
+      "checkpoint_epoch": 15,
+      "trained_on": "no_arrows",
+      "evaluated_with": "live_all_object_arrows",
+      "tasks_planned": {"0": 10, "1": 10, "2": 10, "3": 10, "4": 10, "5": 10, "6": 10, "7": 10, "8": 10, "9": 10},
+      "score": null,
+      "output_dir": "/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/eval/legion_no_arrow_trained_live_vs_none_s1000_ep10_v1_no_arrow_treatment_1910198/seed_1000/no_arrow_trained_live_arrows"
+    },
+    {
+      "id": "legion_no_arrow_trained_no_arrows_s1000_ep10_v1",
+      "status": "queued_after_training",
+      "execution_host": "polito_legion",
+      "slurm_job_id": 1910198,
+      "dependency": "afterok:1910197",
+      "cell_order": 2,
+      "model_training_run": "legion_no_arrow_lora_full_s1000_v1",
+      "checkpoint": "029190",
+      "checkpoint_epoch": 15,
+      "trained_on": "no_arrows",
+      "evaluated_with": "no_arrows",
+      "tasks_planned": {"0": 10, "1": 10, "2": 10, "3": 10, "4": 10, "5": 10, "6": 10, "7": 10, "8": 10, "9": 10},
+      "score": null,
+      "output_dir": "/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/eval/legion_no_arrow_trained_live_vs_none_s1000_ep10_v1_no_arrow_treatment_1910198/seed_1000/no_arrow_trained_no_arrows"
     }
   ],
   "aborted_or_non_result_runs": [
@@ -233,7 +296,7 @@
     "Preserve all raw Lambda artifacts unless the user explicitly authorizes deletion."
   ],
   "next_actions": [
-    "Monitor no_arrows_epoch_15_eval_no_arrows to completion and update partial counts and final score from eval_info.json once available.",
+    "Monitor Legion training job 1910197 and dependent two-cell evaluation job 1910198; update both cells from eval_info.json when available.",
     "Do not launch frozen_base_eval_no_arrows without an explicit user request."
   ]
 }
