@@ -19,6 +19,9 @@ case "$PROFILE" in
     DATASET_REPO_ID="local/libero_spatial_treatment"
     PREFLIGHT_VARIANT="treatment"
     DEFAULT_DATA_ROOT="$SCRIPT_DIR/lora_datasets"
+    EXPERIMENT_NAME="smolvla_lora_treatment_training"
+    TRAINED_VISUAL_CONDITION="arrows"
+    ADAPTER_KEY="treatment_adapter"
     ;;
   no_arrow_treatment)
     PAIR_MANIFEST_NAME="sealed_lora_pair_manifest.json"
@@ -29,6 +32,9 @@ case "$PROFILE" in
     DATASET_REPO_ID="local/libero_spatial_control"
     PREFLIGHT_VARIANT="no_arrow_treatment"
     DEFAULT_DATA_ROOT="$SCRIPT_DIR/lora_datasets"
+    EXPERIMENT_NAME="smolvla_lora_no_arrow_treatment_training"
+    TRAINED_VISUAL_CONDITION="no_arrows"
+    ADAPTER_KEY="no_arrow_treatment_adapter"
     ;;
   *) echo "unknown TRAINING_PROFILE: $PROFILE" >&2; exit 2 ;;
 esac
@@ -216,9 +222,9 @@ else
 fi
 
 if [[ "$MODE" != resume ]]; then
-"$PYTHON_VALUE" - "$RUN_PLAN_PENDING" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$DATA_ROOT_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "${PEFT_R:-16}" "${DEVICE:-cuda}" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$PROFILE" "$PAIR_KIND" "$OUTPUT_VALUE" "$RESUME_VALUE" "$RESUME_CONFIG_PATH_VALUE" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" <<'PY'
+"$PYTHON_VALUE" - "$RUN_PLAN_PENDING" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$DATA_ROOT_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "${PEFT_R:-16}" "${DEVICE:-cuda}" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$PROFILE" "$PAIR_KIND" "$OUTPUT_VALUE" "$RESUME_VALUE" "$RESUME_CONFIG_PATH_VALUE" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" "$EXPERIMENT_NAME" "$TRAINED_VISUAL_CONDITION" <<'PY'
 import hashlib, json, pathlib, sys
-out, pair_manifest, pair_sentinel, base_policy, revision, data_root, steps, save_freq, batch, seed, peft_r, device, dataset_repo_id, dataset_variant, variant, pair_kind, output_dir, resume, resume_config, libero_dir, libero_commit = sys.argv[1:]
+out, pair_manifest, pair_sentinel, base_policy, revision, data_root, steps, save_freq, batch, seed, peft_r, device, dataset_repo_id, dataset_variant, variant, pair_kind, output_dir, resume, resume_config, libero_dir, libero_commit, experiment, trained_visual_condition = sys.argv[1:]
 from importlib.metadata import PackageNotFoundError, version
 def sha(path):
     h = hashlib.sha256()
@@ -234,7 +240,7 @@ def _package_installed(name):
     return True
 payload = {
     "schema_version": 1,
-    "experiment": "smolvla_lora_treatment_training",
+    "experiment": experiment,
     "base_policy": str(pathlib.Path(base_policy).resolve()),
     "base_policy_revision": revision,
     "pair_manifest": str(pathlib.Path(pair_manifest).resolve()),
@@ -260,16 +266,23 @@ payload = {
     },
 }
 if variant == "no_arrow_treatment":
+    payload["trained_on_visual_condition"] = trained_visual_condition
     payload["evaluation_contract"] = {
-        "tasks": [0, 7],
+        "tasks": list(range(10)),
+        "cells": ["no_arrow_trained_live_arrows", "no_arrow_trained_no_arrows"],
         "episodes_per_task": 10,
         "eval_seed": 1000,
         "eval_batch_size": 1,
         "n_action_steps": "checkpoint",
-        "evaluation_entrypoint": "vla_benchmarking/run_lerobot_eval_with_context.py",
-        "evaluation_script": "vla_benchmarking/run_lerobot_eval_with_context.py",
-        "visual_condition": "none",
-        "arrows_rendered": False,
+        "evaluation_entrypoint": "vla_benchmarking/run_lora_no_arrow_pair_eval.py",
+        "evaluation_script": "vla_benchmarking/run_lora_no_arrow_pair_eval.py",
+        "evaluation_experiment": "smolvla_lora_no_arrow_trained_live_vs_none_2cell",
+        "evaluation_manifest_filename": "no_arrow_trained_arrow_pair_manifest.json",
+        "evaluation_summary_filename": "no_arrow_trained_arrow_pair_summary.csv",
+        "visual_conditions": {
+            "no_arrow_trained_live_arrows": "visual_arrows",
+            "no_arrow_trained_no_arrows": "none",
+        },
         "context_mode": "standard",
         "context_format": "standard",
         "visual_prompt_hint": "disabled",
@@ -284,13 +297,8 @@ if variant == "no_arrow_treatment":
         "observation_size": [256, 256],
         "eval_use_async_envs": False,
         "render_mode": "rgb_array",
-        "base_checkpoint": {
-            "path": str(pathlib.Path(base_policy).resolve()),
-            "revision": revision,
-        },
-        "adapter_checkpoint_template": str(
-            pathlib.Path(output_dir).resolve() / "checkpoints" / "{steps}" / "pretrained_model"
-        ),
+        "adapter_key": "no_arrow_treatment_adapter",
+        "contrast": "live_arrow_effect_pp",
     }
 training_argv = [
     "run_lerobot_train.py",
@@ -333,12 +341,12 @@ steps = int(sys.argv[1])
 print(f"{steps:0{max(6, len(str(steps)))}d}")
 PY
 )"
-treatment_adapter="$RUN_ROOT/checkpoints/$checkpoint_id/pretrained_model/adapter_model.safetensors"
-[[ -s "$treatment_adapter" ]] || { echo "treatment adapter artifact is missing: $treatment_adapter" >&2; exit 1; }
+adapter_path="$RUN_ROOT/checkpoints/$checkpoint_id/pretrained_model/adapter_model.safetensors"
+[[ -s "$adapter_path" ]] || { echo "adapter artifact is missing: $adapter_path" >&2; exit 1; }
 
-"$PYTHON_VALUE" - "$RUN_ROOT/training_manifest.json" "$RUN_ROOT/training_plan.json" "$treatment_adapter" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "$checkpoint_id" "$PROFILE" "$PAIR_KIND" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" "$RUN_ROOT/resume_audits" <<'PY'
+"$PYTHON_VALUE" - "$RUN_ROOT/training_manifest.json" "$RUN_ROOT/training_plan.json" "$adapter_path" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "${PEFT_R:-16}" "$checkpoint_id" "$PROFILE" "$PAIR_KIND" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" "$RUN_ROOT/resume_audits" "$EXPERIMENT_NAME" "$TRAINED_VISUAL_CONDITION" "$ADAPTER_KEY" <<'PY'
 import hashlib, json, pathlib, sys
-out, plan, treatment, pair_manifest, pair_sentinel, base_policy, revision, steps, save_freq, batch, seed, checkpoint_id, variant, pair_kind, dataset_repo_id, dataset_variant, libero_dir, libero_commit, audit_dir = sys.argv[1:]
+out, plan, treatment, pair_manifest, pair_sentinel, base_policy, revision, steps, save_freq, batch, seed, peft_r, checkpoint_id, variant, pair_kind, dataset_repo_id, dataset_variant, libero_dir, libero_commit, audit_dir, experiment, trained_visual_condition, adapter_key = sys.argv[1:]
 def sha(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -362,7 +370,7 @@ for index, record in enumerate(audit_records, 1):
 chain_digest=hashlib.sha256((json.dumps([r['record_sha256'] for r in audit_records],sort_keys=True,separators=(',',':'))).encode('utf-8')).hexdigest()
 payload = {
     "schema_version": 1,
-    "experiment": "smolvla_lora_treatment_training",
+    "experiment": experiment,
     "base_policy": str(pathlib.Path(base_policy).resolve()),
     "base_policy_revision": revision,
     "training_plan": str(pathlib.Path(plan).resolve()),
@@ -383,8 +391,11 @@ payload = {
     "pair_kind": pair_kind,
     "final_checkpoint_id": checkpoint_id,
     "flags": {"steps": int(steps), "save_freq": int(save_freq), "batch_size": int(batch), "seed": int(seed)},
-    "treatment_adapter": {"path": str(pathlib.Path(treatment).resolve()), "sha256": sha(treatment)},
 }
+if variant == "no_arrow_treatment":
+    payload["trained_on_visual_condition"] = trained_visual_condition
+    payload["flags"]["peft_r"] = int(peft_r)
+payload[adapter_key] = {"path": str(pathlib.Path(treatment).resolve()), "sha256": sha(treatment)}
 p = pathlib.Path(out)
 encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
 if p.exists() and p.read_text(encoding="utf-8") != encoded:
@@ -393,16 +404,17 @@ if not p.exists():
     p.write_text(encoded, encoding="utf-8")
 PY
 
-"$PYTHON_VALUE" - "$treatment_adapter" <<'PY'
+"$PYTHON_VALUE" - "$adapter_path" "$ADAPTER_KEY" <<'PY'
 import sys
 from pathlib import Path
 from peft import PeftConfig
 from safetensors import safe_open
 adapter = Path(sys.argv[1])
+adapter_key = sys.argv[2]
 PeftConfig.from_pretrained(adapter.parent)
 with safe_open(str(adapter), framework="pt", device="cpu") as handle:
     if not list(handle.keys()):
         raise SystemExit("adapter safetensors has no tensors")
-print(f"treatment adapter reload smoke OK: {adapter.parent}")
+print(f"{adapter_key} reload smoke OK: {adapter.parent}")
 PY
 printf '[%s] %s launcher finished in %s\n' "$(date +'%F %T')" "$PROFILE" "$RUN_ROOT"

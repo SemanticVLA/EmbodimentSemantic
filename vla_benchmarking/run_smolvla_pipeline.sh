@@ -90,9 +90,6 @@ fi
 if [[ "$ACTION" == setup && -n "${SEEN_OPTIONS[run-dir]+seen}" ]]; then
   echo "--run-dir is not used by setup" >&2; exit 2
 fi
-if [[ "$ACTION" == eval && "$PROFILE_CANONICAL" != treatment ]]; then
-  echo "eval is treatment-only" >&2; exit 2
-fi
 if [[ "$ACTION" == resume && -z "$RUN_DIR" ]]; then
   echo "resume requires --run-dir" >&2; exit 2
 fi
@@ -144,6 +141,7 @@ case "$ACTION" in
     [[ -n "$SEEDS" ]] || { echo "eval requires explicit --seeds" >&2; exit 2; }
     [[ -f "$RUN_DIR/training_manifest.json" ]] || { echo "training_manifest.json missing: $RUN_DIR" >&2; exit 1; }
     [[ -n "$OUTPUT_ROOT" ]] || OUTPUT_ROOT="$RUN_DIR/eval"
+    if [[ "$PROFILE_CANONICAL" == treatment ]]; then
     mapfile -t values < <("$PYTHON" - "$RUN_DIR/training_manifest.json" <<'PY'
 import hashlib, json, pathlib, sys
 d=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
@@ -177,5 +175,34 @@ PY
     eval_args=(--base-checkpoint "${values[0]}" --treatment-checkpoint "${values[1]}" --training-manifest "$RUN_DIR/training_manifest.json" --seeds "$SEEDS" --episodes "$EPISODES" --batch-size "$BATCH_SIZE" --device "$DEVICE" --output-root "$OUTPUT_ROOT" --max-videos "$MAX_VIDEOS")
     [[ "$VIDEOS" == true ]] && eval_args+=(--videos) || eval_args+=(--no-videos)
     "$PYTHON" "$SCRIPT_DIR/run_lora_2x2_eval.py" "${eval_args[@]}"
+    else
+    mapfile -t adapter_values < <("$PYTHON" - "$RUN_DIR/training_manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+if data.get("experiment") != "smolvla_lora_no_arrow_treatment_training":
+    raise SystemExit("evaluation requires a no-arrow training manifest")
+if data.get("training_variant") != "no_arrow_treatment" or data.get("dataset_variant") != "control":
+    raise SystemExit("evaluation requires the no-arrow control dataset lineage")
+if data.get("trained_on_visual_condition") != "no_arrows":
+    raise SystemExit("evaluation requires no_arrows training provenance")
+if "treatment_adapter" in data:
+    raise SystemExit("no-arrow manifest must not contain treatment_adapter")
+adapter = data.get("no_arrow_treatment_adapter", {}).get("path")
+if not adapter:
+    raise SystemExit("manifest lacks no_arrow_treatment_adapter.path")
+adapter_path = pathlib.Path(adapter).expanduser()
+adapter_dir = adapter_path.parent if adapter_path.name == "adapter_model.safetensors" else adapter_path
+artifact = adapter_dir / "adapter_model.safetensors"
+if not adapter_dir.is_dir() or adapter_dir.name != "pretrained_model" or not artifact.is_file():
+    raise SystemExit(f"no-arrow pretrained_model adapter directory is missing: {adapter_dir}")
+print(str(adapter_dir.resolve()))
+PY
+    )
+    [[ "${#adapter_values[@]}" -eq 1 ]] || { echo "could not derive no-arrow adapter checkpoint" >&2; exit 1; }
+    eval_args=(--adapter-checkpoint "${adapter_values[0]}" --training-manifest "$RUN_DIR/training_manifest.json" --seeds "$SEEDS" --episodes "$EPISODES" --batch-size "$BATCH_SIZE" --device "$DEVICE" --output-root "$OUTPUT_ROOT" --max-videos "$MAX_VIDEOS")
+    [[ "$VIDEOS" == true ]] && eval_args+=(--videos) || eval_args+=(--no-videos)
+    "$PYTHON" "$SCRIPT_DIR/run_lora_no_arrow_pair_eval.py" "${eval_args[@]}"
+    fi
     ;;
 esac
