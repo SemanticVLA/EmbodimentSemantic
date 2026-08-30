@@ -248,16 +248,23 @@ module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/
 export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG
 export BASE_POLICY_REVISION BASE_POLICY GRAPH_BASE_POLICY DATA_ROOT LIBERO_DATA_DIR LIBERO_DIR LIBERO_COMMIT PAIR_MANIFEST="\$DATA_ROOT/sealed_lora_graph_pair_manifest.json" PAIR_SENTINEL="\$DATA_ROOT/sealed_lora_graph_pair_verified.json"
 "\$PYTHON" -m py_compile "\$REPO/vla_benchmarking/run_lora_graph_pair_eval.py" "\$REPO/vla_benchmarking/prompt_audit.py" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py"
-"\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode verify --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
-[[ -s "\$DATA_ROOT/sealed_lora_pair_verified.json" ]] || die 'historical pair verification did not produce its sentinel'
 graph_artifact_count=0
 for p in "\$DATA_ROOT/graph_treatment" "\$DATA_ROOT/arrow_graph_treatment" "\$DATA_ROOT/sealed_lora_graph_pair_manifest.json" "\$DATA_ROOT/sealed_lora_graph_pair_verified.json"; do [[ -e "\$p" ]] && graph_artifact_count=\$((graph_artifact_count + 1)); done
 case "\$graph_artifact_count" in
   0)
+    # The first conversion needs to materialize and verify the historical
+    # pair before the graph manifest can bind to its sentinel.
+    "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode verify --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
+    [[ -s "\$DATA_ROOT/sealed_lora_pair_verified.json" ]] || die 'historical pair verification did not produce its sentinel'
     "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode convert-graph-pair --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
     "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode verify-graph --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
     ;;
   4)
+    # A historical `verify` pass rewrites its timestamped sentinel and would
+    # invalidate the immutable graph manifest binding.  Preflight validates
+    # the existing historical sentinel without changing its bytes; the graph
+    # verifier then rechecks source-grounded frames and both dataset pairs.
+    "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode preflight --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
     "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode verify-graph --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
     ;;
   *)

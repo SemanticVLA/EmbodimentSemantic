@@ -42,6 +42,7 @@ def test_graph_pilot_submitter_has_sealed_chain_and_no_arrow_graph_run():
     assert "29190/pretrained_model" in text
     assert "--mode convert-graph-pair" in text
     assert "--mode verify-graph" in text
+    assert "--mode preflight --data-dir" in text
     assert text.index("--mode verify --data-dir") < text.index("--mode convert-graph-pair")
     assert text.index("--mode convert-graph-pair") < text.index("--mode verify-graph")
     setup_start = text.index('for p in "\\$LIBERO_DATA_DIR"')
