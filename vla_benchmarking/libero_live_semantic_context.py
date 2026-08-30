@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 import numpy as np
 from robosuite.utils import camera_utils as CU
+from graph_relation_extractor import generate_frame_graph as _canonical_generate_frame_graph
 
 from scene_graph_formats import (
     LEGACY_FORMAT,
@@ -198,58 +199,13 @@ def generate_frame_graph(
     is_drawer_task=False,
     subject_filter=None,
 ):
-    if object_filter is not None:
-        objects = sorted([o for o in bboxes.keys() if o in object_filter])
-    else:
-        objects = sorted(list(bboxes.keys()))
-
-    triplets = []
-
-    subjects = objects if subject_filter is None else [subject_filter]
-    for A in subjects:
-        if A not in objects:
-            continue
-        if A not in world: continue
-        pos_a = np.array(world[A]['pos'])
-        for B in objects:
-            if A == B: continue
-            if B not in world: continue
-            pos_b = np.array(world[B]['pos'])
-
-            is_stacked = False
-            if A in bboxes and B in bboxes:
-                tx1,ty1,tx2,ty2 = bboxes[A]
-                bx1,by1,bx2,by2 = bboxes[B]
-                ix1,iy1 = max(tx1,bx1), max(ty1,by1)
-                ix2,iy2 = min(tx2,bx2), min(ty2,by2)
-                if ix2 > ix1 and iy2 > iy1:
-                    inter = (ix2-ix1)*(iy2-iy1)
-                    a_area = (tx2-tx1)*(ty2-ty1)
-                    b_area = (bx2-bx1)*(by2-by1)
-                    io_min = inter / min(a_area, b_area)
-                    if io_min > CONTAINMENT_THRESH and ("bowl" in A or "bowl" in B):
-                        is_stacked = True
-                        pair = {A, B} == {"akita_black_bowl_1", "wooden_cabinet_1"}
-                        if is_drawer_task and pair:
-                            if pos_a[2] >= pos_b[2]:
-                                triplets.append((A, "is_inside", B))
-                            else:
-                                triplets.append((A, "contains", B))
-                        else:
-                            if pos_a[2] >= pos_b[2]:
-                                triplets.append((A, "is_on_top_of", B))
-                            else:
-                                triplets.append((A, "is_below_of", B))
-            if is_stacked: continue
-
-            dx = pos_a[0] - pos_b[0]
-            dy = pos_a[1] - pos_b[1]
-            if abs(dx) >= abs(dy):
-                triplets.append((A, "is_in_front_of" if dx > 0 else "is_behind", B))
-            else:
-                triplets.append((A, "is_left_of" if dy > 0 else "is_right_of", B))
-
-    return triplets
+    return _canonical_generate_frame_graph(
+        bboxes,
+        world,
+        object_filter=object_filter,
+        is_drawer_task=is_drawer_task,
+        subject_filter=subject_filter,
+    )
 
 @dataclass
 class LiveSemanticContextGenerator:

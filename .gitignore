@@ -1,5 +1,7 @@
 .cache/
 .pytest_cache/
+.pytest_*/
+.pytest-local*/
 __pycache__/
 *.py[cod]
 pytest.ini

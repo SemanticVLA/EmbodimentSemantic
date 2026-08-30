@@ -38,6 +38,20 @@ from visual_scene_graph import (
 _FILTERED_BDDL_CACHE: dict[tuple[str, tuple[str, ...]], str] = {}
 
 
+def _assert_graph_relations_not_removed(
+    relations: list[tuple[str, str, str]],
+    removed_objects: set[str] | tuple[str, ...] | list[str],
+    *,
+    task_id: int | None,
+) -> None:
+    removed = set(removed_objects)
+    stale = [relation for relation in relations if relation[0] in removed or relation[2] in removed]
+    if stale:
+        raise RuntimeError(
+            f"graph prompt contains removed objects after reset for task {task_id}: {stale}"
+        )
+
+
 class RandomizationAuditLogger:
     """Write one JSONL record for each realized randomization observation."""
 
@@ -130,12 +144,12 @@ class TaskContextVecEnv:
     def __getattr__(self, name):
         return getattr(self.env, name)
 
-    def _audit_randomization(self, prompts, canonical_task_texts, effective_task_texts, sub_envs):
+    def _audit_randomization(self, prompts, canonical_task_texts, effective_task_texts, sub_envs, relations_by_env=None):
         if self.randomization_audit_logger is None:
             return
-        for prompt, canonical_task_text, effective_task_text, sub_env in zip(
+        for index, (prompt, canonical_task_text, effective_task_text, sub_env) in enumerate(zip(
             prompts, canonical_task_texts, effective_task_texts, sub_envs
-        ):
+        )):
             task_id = getattr(sub_env, "task_id", None)
             reset_sequence = int(getattr(sub_env, "_randomization_reset_sequence", 0))
             if reset_sequence <= 0:
@@ -145,6 +159,13 @@ class TaskContextVecEnv:
                 if task_id is not None
                 else {}
             )
+            if relations_by_env is not None:
+                retained = relations_by_env[index]
+                _assert_graph_relations_not_removed(
+                    retained,
+                    getattr(sub_env, "_task_randomization_removed_objects", ()),
+                    task_id=task_id,
+                )
             realized = {
                 "prompt_variant": bool(
                     enabled.get("prompt_variant")
@@ -152,17 +173,37 @@ class TaskContextVecEnv:
                     and canonical_task_text != TASK_PROMPT_OVERRIDE.get(task_id)
                 ),
             }
+            details = {
+                "effective_prompt_sha256": hashlib.sha256(
+                    prompt.encode("utf-8")
+                ).hexdigest(),
+            }
+            compensation = getattr(sub_env, "_paired_reset_compensation", None)
+            if compensation is not None:
+                if not isinstance(compensation, dict) or compensation.get("detected") is not True:
+                    raise RuntimeError("paired reset compensation evidence is malformed")
+                if compensation.get("restored_to") != compensation.get("counter_before"):
+                    raise RuntimeError("paired reset compensation did not restore the pre-step counter")
+                details["terminal_reset_compensation"] = dict(compensation)
+            if relations_by_env is not None:
+                triplets = [list(item) for item in relations_by_env[index]]
+                details.update({
+                    "triplets": triplets,
+                    "triplet_sha256": hashlib.sha256(
+                        json.dumps(triplets, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest(),
+                    "reset_identity": {
+                        "env_index": getattr(sub_env, "_randomization_env_index", 0),
+                        "reset_sequence": reset_sequence,
+                    },
+                })
             self.randomization_audit_logger.update_prompt(
                 task_id=task_id,
                 env_index=getattr(sub_env, "_randomization_env_index", 0),
                 reset_sequence=reset_sequence,
                 enabled=enabled,
                 realized=realized,
-                details={
-                    "effective_prompt_sha256": hashlib.sha256(
-                        prompt.encode("utf-8")
-                    ).hexdigest(),
-                },
+                details=details,
             )
 
     def call(self, name, *args, **kwargs):
@@ -199,10 +240,12 @@ class TaskContextVecEnv:
                         env_step=getattr(sub_env, "_elapsed_steps", None),
                         relations_generated=0,
                         relations_retained=0,
+                        reset_sequence=getattr(sub_env, "_randomization_reset_sequence", None),
                     )
             return result
 
         final = []
+        relation_lists = []
         for task, sub_env in zip(result, sub_envs):
             prompt, relations, retained_count = self.live_generator.build_prompt(
                 sub_env,
@@ -211,6 +254,8 @@ class TaskContextVecEnv:
                 self.context_format,
             )
             final.append(prompt)
+            effective_relations = list(dict.fromkeys(relations))
+            relation_lists.append(effective_relations)
             if self.audit_logger is not None:
                 self.audit_logger.log(
                     prompt=prompt,
@@ -221,6 +266,8 @@ class TaskContextVecEnv:
                     env_step=getattr(sub_env, "_elapsed_steps", None),
                     relations_generated=len(relations),
                     relations_retained=retained_count,
+                    relations=effective_relations,
+                    reset_sequence=getattr(sub_env, "_randomization_reset_sequence", None),
                 )
 
         if self.debug and not self._debug_printed:
@@ -229,13 +276,21 @@ class TaskContextVecEnv:
             print(final[0][:self.max_chars])
             print("===== END DEBUG_SEMANTIC_CONTEXT =====\n")
 
-        self._audit_randomization(final, canonical_result, effective_task_texts, sub_envs)
+        self._audit_randomization(
+            final,
+            canonical_result,
+            effective_task_texts,
+            sub_envs,
+            relations_by_env=relation_lists,
+        )
 
         return final
 
 
 def _is_augmented_mode() -> bool:
-    mode = os.environ.get("CONTEXT_MODE", "standard").strip().lower()
+    profile = os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower()
+    default_mode = "scene_graph" if profile in {"graph_treatment", "arrow_graph_treatment"} else "standard"
+    mode = os.environ.get("CONTEXT_MODE", default_mode).strip().lower()
     valid_modes = {
         "standard",
         "scene_graph",
@@ -251,7 +306,21 @@ def _is_augmented_mode() -> bool:
 
 
 def _visual_condition() -> str | None:
+    profile = os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower()
+    # The graph treatment evaluation cell is deliberately text-only.  Keep
+    # this guard at the low-level wrapper so callers cannot bypass the sealed
+    # graph evaluator by setting VISUAL_ARROWS/VISUAL_CONDITION directly.
+    if profile == "arrow_graph_treatment":
+        raise SystemExit(
+            "ERROR: arrow_graph_treatment is prepare-only and cannot be evaluated"
+        )
     condition = os.environ.get("VISUAL_CONDITION", "").strip().lower()
+    if profile == "graph_treatment":
+        if _env_flag("VISUAL_ARROWS") or condition not in {"", "none"}:
+            raise SystemExit(
+                "ERROR: graph_treatment evaluation is sealed to no visual arrows"
+            )
+        return None
     if not condition:
         return "visual_arrows" if _env_flag("VISUAL_ARROWS") else None
     if condition == "none":
@@ -286,7 +355,9 @@ def _append_default_lerobot_args() -> None:
     """Allow this wrapper to be run directly, not only via the matrix shell script."""
     script_dir = Path(__file__).resolve().parent
 
-    mode = os.environ.get("CONTEXT_MODE", "standard").strip().lower()
+    profile = os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower()
+    default_mode = "scene_graph" if profile in {"graph_treatment", "arrow_graph_treatment"} else "standard"
+    mode = os.environ.get("CONTEXT_MODE", default_mode).strip().lower()
     time_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     policy_path = os.environ.get("MODELS", "lerobot/pi0_libero_base")
     policy_tag = policy_path.split('/')[-1]
@@ -372,6 +443,87 @@ def _patch_libero_env_bddl_selection(remove_config: dict[int, list[str]]) -> Non
 
     patched_init._task_remove_config_patched = True
     lerobot_libero.LiberoEnv.__init__ = patched_init
+
+
+def _patch_libero_env_terminal_reset_compensation() -> None:
+    """Prevent terminal ``LiberoEnv.step`` implementations from consuming a row.
+
+    Some pinned LeRobot releases reset inside ``LiberoEnv.step`` when an
+    episode terminates, while newer releases return the terminal observation
+    and leave reset ownership to the caller.  The former makes paired cells
+    outcome-dependent because only successful rollouts consume an extra init
+    state.  We compensate exactly one observed internal reset and fail closed
+    on any other counter mutation.  Vector autoreset is disabled separately
+    so the explicit outer reset remains the only reset that advances the
+    schedule and applies scene randomization.
+    """
+    step_fn = lerobot_libero.LiberoEnv.step
+    if getattr(step_fn, "_terminal_reset_compensation_patched", False):
+        return
+
+    def counter_attrs(env):
+        return [name for name in ("init_state_id", "_init_state_id") if hasattr(env, name)]
+
+    def terminal(value) -> bool:
+        array = np.asarray(value)
+        return bool(array.all()) if array.ndim else bool(array)
+
+    def patched_step(self, *args, **kwargs):
+        attrs = counter_attrs(self)
+        before = {attr: getattr(self, attr) for attr in attrs}
+        result = step_fn(self, *args, **kwargs)
+        after = {attr: getattr(self, attr) for attr in attrs}
+        if not attrs:
+            return result
+        try:
+            deltas = {attr: int(after[attr]) - int(before[attr]) for attr in attrs}
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("LiberoEnv init-state counter became non-integral during step") from exc
+        ended = len(result) >= 3 and terminal(result[2])
+        stride = int(getattr(self, "_reset_stride", 1) or 1)
+        if all(delta == 0 for delta in deltas.values()):
+            return result
+        if ended and all(delta in (0, stride) for delta in deltas.values()) and any(deltas.values()):
+            for attr, delta in deltas.items():
+                if delta == stride:
+                    setattr(self, attr, before[attr])
+            self._paired_reset_compensation = {
+                "detected": True,
+                "counter_attributes": attrs,
+                "counter_before": {attr: int(value) for attr, value in before.items()},
+                "counter_after": {attr: int(value) for attr, value in after.items()},
+                "restored_to": {attr: int(value) for attr, value in before.items()},
+                "stride": stride,
+            }
+            return result
+        raise RuntimeError(
+            "LiberoEnv changed init-state counter unexpectedly during step "
+            f"(before={before}, after={after}, terminated={ended}, stride={stride})"
+        )
+
+    patched_step._terminal_reset_compensation_patched = True
+    lerobot_libero.LiberoEnv.step = patched_step
+
+
+def _disable_vector_autoreset(vec_env) -> None:
+    """Require explicit vector resets for the paired graph evaluation."""
+    mode = getattr(vec_env, "autoreset_mode", None)
+    if mode is None:
+        raise RuntimeError(
+            "graph paired evaluation cannot prove explicit-reset semantics: vector env lacks autoreset_mode"
+        )
+    try:
+        from gymnasium.vector.vector_env import AutoresetMode
+        disabled = AutoresetMode.DISABLED
+    except (ImportError, AttributeError) as exc:  # pragma: no cover - runtime dependency
+        raise RuntimeError("graph paired evaluation requires gymnasium AutoresetMode.DISABLED") from exc
+    try:
+        setattr(vec_env, "autoreset_mode", disabled)
+    except Exception as exc:  # pragma: no cover - runtime dependency
+        raise RuntimeError("graph paired evaluation could not disable vector autoreset") from exc
+    if getattr(vec_env, "autoreset_mode", None) != disabled:
+        raise RuntimeError("graph paired evaluation failed to disable vector autoreset")
+    vec_env._paired_explicit_reset_mode = True
 
 
 def _patch_libero_env_camera_creation() -> None:
@@ -485,6 +637,8 @@ def _wrap_task_vec_envs(
         if not isinstance(suite_map, dict):
             continue
         for task_id, vec_env in list(suite_map.items()):
+            if os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower() == "graph_treatment":
+                _disable_vector_autoreset(vec_env)
             wrapped = vec_env
             if RANDOMIZE_SCENES:
                 wrapped = SceneRandomizerVecEnvWrapper(
@@ -548,8 +702,28 @@ def _patch_max_episodes_rendered() -> None:
 def main() -> None:
     _append_default_lerobot_args()
 
-    context_mode = os.environ.get("CONTEXT_MODE", "standard").strip().lower()
-    context_format = normalize_context_format(os.environ.get("CONTEXT_FORMAT", LEGACY_FORMAT))
+    profile = os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower()
+    graph_profile = profile in {"graph_treatment", "arrow_graph_treatment"}
+    context_mode = os.environ.get("CONTEXT_MODE", "scene_graph" if graph_profile else "standard").strip().lower()
+    context_format = normalize_context_format(
+        os.environ.get("CONTEXT_FORMAT", "target_natural_v1" if graph_profile else LEGACY_FORMAT)
+    )
+    if graph_profile:
+        os.environ.setdefault("TOKENIZER_MAX_LENGTH", "96")
+        os.environ.setdefault("TOKEN_AUDIT", "1")
+        os.environ.setdefault("PROMPT_AUDIT", "1")
+        if profile == "arrow_graph_treatment":
+            raise SystemExit(
+                "ERROR: arrow_graph_treatment is prepare-only and cannot be evaluated"
+            )
+        else:
+            # Set explicitly after checking the ambient value, so a stale
+            # launcher variable cannot turn the graph cell into an arrow cell.
+            if os.environ.get("VISUAL_CONDITION", "").strip().lower() not in {"", "none"}:
+                raise SystemExit("ERROR: graph_treatment evaluation is sealed to no visual arrows")
+            if _env_flag("VISUAL_ARROWS"):
+                raise SystemExit("ERROR: graph_treatment evaluation is sealed to no visual arrows")
+            os.environ["VISUAL_CONDITION"] = "none"
     use_live_context = _is_augmented_mode()
     visual_condition = _visual_condition()
     visual_goal_override = os.environ.get("VISUAL_GOAL_OBJECT", "").strip()
@@ -594,6 +768,9 @@ def main() -> None:
 
     if TASK_REMOVE_CONFIG:
         _patch_libero_env_bddl_selection(TASK_REMOVE_CONFIG)
+
+    if graph_profile:
+        _patch_libero_env_terminal_reset_compensation()
 
     _patch_libero_env_camera_creation()
     _patch_max_episodes_rendered()

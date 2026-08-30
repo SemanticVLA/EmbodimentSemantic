@@ -446,6 +446,10 @@ def validate_existing_outputs(output_root: Path, manifest: dict[str, Any]) -> No
 
 def validate_randomization_audit(cell_output: Path, manifest: dict[str, Any]) -> None:
     """Require one complete observed reset record per task episode."""
+    strict_reset_state = (
+        manifest.get("training_variant") == "graph_treatment"
+        or "graph" in str(manifest.get("experiment", ""))
+    )
     audit_path = cell_output / "randomization_audit.jsonl"
     if not audit_path.exists():
         raise ValueError(f"missing randomization audit: {audit_path}")
@@ -497,6 +501,18 @@ def validate_randomization_audit(cell_output: Path, manifest: dict[str, Any]) ->
         details = record["details"]
         if not isinstance(details, dict) or "removed" not in details or "projection" not in details:
             raise ValueError(f"randomization audit lacks observed removal/projection evidence for task {task_id}")
+        if strict_reset_state:
+            state_hash = details.get("sim_state_sha256")
+            init_state = details.get("init_state")
+            if not isinstance(state_hash, str) or len(state_hash) != 64:
+                raise ValueError(f"graph randomization audit lacks final simulator-state evidence for task {task_id}")
+            if (
+                not isinstance(init_state, dict)
+                or not isinstance(init_state.get("selected_index"), int)
+                or not isinstance(init_state.get("selected_row_sha256"), str)
+                or len(init_state["selected_row_sha256"]) != 64
+            ):
+                raise ValueError(f"graph randomization audit lacks selected init-state evidence for task {task_id}")
         expected_config = manifest["randomization_config"]
         expected_removed = expected_config["remove"][str(task_id)]
         if details["removed"] != expected_removed:

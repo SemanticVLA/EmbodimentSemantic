@@ -3,20 +3,29 @@ from __future__ import annotations
 import argparse
 import io
 import json
+from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 from PIL import Image
 
 from config import TASK_PROMPT_OVERRIDE
 from hdf5_to_lerobot_dataset import (
     FEATURES,
+    GRAPH_CONTRACT,
+    GRAPH_EXTRACTOR_PATH,
+    GRAPH_PAIR_KIND,
+    REPO_ROOT,
     SEALED_LORA_IMAGE_SIZE,
+    SEALED_LORA_VISUAL_CONTRACT,
     TARGET_ARROW_PAIR_KIND,
     TARGET_ARROW_VARIANT,
     assert_paired_frame_invariants,
     build_frame,
+    build_graph_paired_frames,
     build_paired_frames,
+    sha256_file,
     expected_drawable_relations,
     filter_by_subject,
     flip180,
@@ -31,6 +40,9 @@ from hdf5_to_lerobot_dataset import (
     scale_and_clamp_bboxes,
     task_text_for,
     validate_verified_pair,
+    _load_sealed_manifest,
+    _assert_episode_expectations,
+    _full_experiment_ready,
 )
 
 
@@ -201,6 +213,162 @@ def test_build_frame_treatment_with_no_target_relations_matches_control():
     assert np.array_equal(control["observation.images.image"], treatment["observation.images.image"])
 
 
+def test_graph_profiles_preserve_historical_arrow_and_control_pixels():
+    kwargs = _frame_kwargs()
+    control = build_frame(**kwargs, variant="control")
+    treatment = build_frame(**kwargs, variant="treatment")
+    graph, arrow_graph, expected_mask, _ = build_graph_paired_frames(**kwargs)
+    assert np.array_equal(graph["observation.images.image"], control["observation.images.image"])
+    assert np.array_equal(arrow_graph["observation.images.image"], treatment["observation.images.image"])
+    assert np.any(expected_mask)
+
+
+def test_graph_pair_changes_only_main_image_and_keeps_text_actions_state_wrist_identical():
+    kwargs = _frame_kwargs(
+        bboxes={
+            "akita_black_bowl_1": [10, 10, 20, 20],
+            "akita_black_bowl_2": [35, 10, 45, 20],
+            "plate_1": [80, 80, 100, 100],
+            "cookies_1": [60, 20, 70, 30],
+        },
+        relations=[
+            ("akita_black_bowl_1", "is_left_of", "akita_black_bowl_2"),
+            ("akita_black_bowl_1", "is_left_of", "plate_1"),
+            ("akita_black_bowl_1", "is_behind", "cookies_1"),
+        ],
+    )
+    graph, arrow_graph, expected_mask, relations = build_graph_paired_frames(**kwargs)
+    assert relations == [
+        ("akita_black_bowl_1", "is_left_of", "akita_black_bowl_2"),
+        ("akita_black_bowl_1", "is_left_of", "plate_1"),
+        ("akita_black_bowl_1", "is_behind", "cookies_1"),
+    ]
+    assert graph["task"] == arrow_graph["task"]
+    assert np.array_equal(graph["action"], arrow_graph["action"])
+    assert np.array_equal(graph["observation.state"], arrow_graph["observation.state"])
+    assert np.array_equal(graph["observation.images.image2"], arrow_graph["observation.images.image2"])
+    assert np.array_equal(
+        graph["observation.images.image"],
+        build_frame(**kwargs, variant="control")["observation.images.image"],
+    )
+    assert np.count_nonzero(expected_mask) > 0
+
+
+def test_graph_pair_drops_relations_to_objects_absent_from_the_source_frame():
+    kwargs = _frame_kwargs(
+        bboxes={"akita_black_bowl_1": [10, 10, 20, 20], "plate_1": [80, 80, 100, 100]},
+        relations=[
+            ("akita_black_bowl_1", "is_left_of", "plate_1"),
+            ("akita_black_bowl_1", "is_left_of", "removed_cookie_box"),
+        ],
+    )
+    graph, arrow_graph, _mask, relations = build_graph_paired_frames(**kwargs)
+    assert relations == [("akita_black_bowl_1", "is_left_of", "plate_1")]
+    assert "removed_cookie_box" not in graph["task"]
+    assert graph["task"] == arrow_graph["task"]
+
+
+def test_graph_pair_recomputes_relations_from_bbox_world_and_rejects_stored_mismatch():
+    """Offline graph supervision must agree with the canonical live extractor."""
+    kwargs = _frame_kwargs(
+        bboxes={
+            "akita_black_bowl_1": [10, 10, 20, 20],
+            "plate_1": [80, 80, 100, 100],
+        },
+        relations=[("akita_black_bowl_1", "is_left_of", "plate_1")],
+    )
+    world = {
+        "akita_black_bowl_1": {"pos": [0.0, 0.0, 0.0]},
+        "plate_1": {"pos": [0.0, -1.0, 0.0]},
+    }
+    _graph, _arrow_graph, _mask, relations = build_graph_paired_frames(**kwargs, world=world)
+    assert relations == [("akita_black_bowl_1", "is_left_of", "plate_1")]
+
+    tampered = dict(kwargs)
+    tampered["relations"] = [("akita_black_bowl_1", "is_right_of", "plate_1")]
+    with pytest.raises(AssertionError, match="canonical.*extractor"):
+        build_graph_paired_frames(**tampered, world=world)
+
+
+def test_graph_manifest_records_extractor_digest_and_verifier_rechecks_live_file():
+    """A graph pair must be invalidated if the canonical extractor source drifts."""
+    converter = Path(__file__).resolve().parents[1] / "hdf5_to_lerobot_dataset.py"
+    source = converter.read_text(encoding="utf-8")
+    assert '"graph_extractor_sha256": sha256_file(GRAPH_EXTRACTOR_PATH)' in source
+    verify_start = source.index("def _load_sealed_manifest")
+    verify_end = source.index("def validate_verified_pair", verify_start)
+    verifier = source[verify_start:verify_end]
+    assert "manifest.get(\"graph_extractor_sha256\")" in verifier
+    assert "sha256_file(GRAPH_EXTRACTOR_PATH)" in verifier
+
+
+def test_graph_episode_frame_metadata_mutation_is_rejected():
+    kwargs = _frame_kwargs()
+    graph, arrow_graph, _mask, _relations = build_graph_paired_frames(**kwargs)
+    graph["episode_index"] = np.asarray(0)
+    graph["frame_index"] = np.asarray(0)
+    arrow_graph["episode_index"] = np.asarray(0)
+    arrow_graph["frame_index"] = np.asarray(0)
+    graph["episode_index"] = np.asarray(99)
+    with pytest.raises(AssertionError, match="episode_index mismatch"):
+        _assert_episode_expectations(
+            graph,
+            arrow_graph,
+            episode_index=0,
+            frame_index=0,
+            frame_label="graph-tampered",
+        )
+
+
+def test_graph_manifest_rejects_noncanonical_tokenizer_contract(tmp_path):
+    """A verified graph pair must not silently downgrade its 96-token budget."""
+    from hdf5_to_lerobot_dataset import FPS, _source_snapshot_identity
+
+    manifest = {
+        "schema_version": 1,
+        "pair_kind": GRAPH_PAIR_KIND,
+        "visual_contract": SEALED_LORA_VISUAL_CONTRACT,
+        "graph_contract": GRAPH_CONTRACT,
+        "graph_formatter_sha256": sha256_file(REPO_ROOT / "scene_graph_formats.py"),
+        "graph_extractor_sha256": sha256_file(GRAPH_EXTRACTOR_PATH),
+        "storage_contract": {"image_dtype": "image", "use_videos": False, "fps": FPS},
+        "source_snapshot_identity": _source_snapshot_identity([]),
+        "full_experiment_ready": False,
+        "launch_eligibility": "subset_smoke_not_launchable",
+        "task_ids": [],
+        "tasks": [],
+        "total_episodes": 0,
+        "total_frames": 0,
+        "tokenizer_contract": {
+            "model_id": "HuggingFaceTB/SmolVLM2-500M-Instruct",
+            "max_length": 48,
+            "truncation_allowed": False,
+            "task_instruction_must_be_retained": True,
+        },
+    }
+    path = tmp_path / "sealed_lora_graph_pair_manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(AssertionError, match="tokenizer"):
+        _load_sealed_manifest(tmp_path, graph=True)
+
+
+def test_full_graph_manifest_requires_nonempty_source_grounded_frames():
+    """500 empty demos must not satisfy the launchable full-experiment gate."""
+    manifest = {
+        "task_ids": list(range(10)),
+        "total_episodes": 500,
+        "total_frames": 0,
+        "tasks": [
+            {
+                "task_id": task_id,
+                "demos": [{"frame_count": 0} for _ in range(50)],
+            }
+            for task_id in range(10)
+        ],
+    }
+    assert not _full_experiment_ready(manifest)
+
+
 def test_paired_prewrite_invariants_reject_misplaced_arrow_pixels():
     kwargs = _frame_kwargs(agentview_rgb=np.zeros((128, 128, 3), dtype=np.uint8))
     control, treatment, expected_mask = build_paired_frames(**kwargs)
@@ -260,6 +428,20 @@ def test_pair_converter_verifier_rejects_tampered_stored_main_image(tmp_path):
         obs.create_dataset(
             "agentview_scene_graph",
             data=json.dumps([relations, relations]),
+            dtype=h5py.string_dtype(),
+        )
+        obs.create_dataset(
+            "agentview_world_coords",
+            data=json.dumps([
+                {
+                    "akita_black_bowl_1": {"pos": [0.0, 0.0, 0.0]},
+                    "plate_1": {"pos": [0.0, -1.0, 0.0]},
+                },
+                {
+                    "akita_black_bowl_1": {"pos": [0.1, 0.1, 0.0]},
+                    "plate_1": {"pos": [0.0, -1.0, 0.0]},
+                },
+            ]),
             dtype=h5py.string_dtype(),
         )
 

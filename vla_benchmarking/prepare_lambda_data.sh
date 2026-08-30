@@ -6,9 +6,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="${PYTHON:-python}"
 PROFILE="${1:-${TRAINING_PROFILE:-treatment}}"
 case "$PROFILE" in
-  treatment) DATA_MODE="convert-pair"; DEFAULT_OUTPUT_ROOT="$SCRIPT_DIR/lora_datasets" ;;
-  no_arrow_treatment) DATA_MODE="convert-pair"; DEFAULT_OUTPUT_ROOT="$SCRIPT_DIR/lora_datasets" ;;
-  *) echo "usage: $0 <treatment|no_arrow_treatment>" >&2; exit 2 ;;
+  treatment) DATA_MODE="convert-pair"; VERIFY_MODE="verify"; PREFLIGHT_MODE="preflight"; DEFAULT_OUTPUT_ROOT="$SCRIPT_DIR/lora_datasets" ;;
+  no_arrow_treatment) DATA_MODE="convert-pair"; VERIFY_MODE="verify"; PREFLIGHT_MODE="preflight"; DEFAULT_OUTPUT_ROOT="$SCRIPT_DIR/lora_datasets" ;;
+  graph_treatment|arrow_graph_treatment) DATA_MODE="convert-graph-pair"; VERIFY_MODE="verify-graph"; PREFLIGHT_MODE="preflight-graph"; DEFAULT_OUTPUT_ROOT="$SCRIPT_DIR/lora_datasets" ;;
+  *) echo "usage: $0 <treatment|no_arrow_treatment|graph_treatment|arrow_graph_treatment>" >&2; exit 2 ;;
 esac
 DATA_ROOT="${DATA_ROOT:-$DEFAULT_OUTPUT_ROOT}"
 LIBERO_DATA_DIR="${LIBERO_DATA_DIR:-$REPO_ROOT/vlm_benchmarking/data/libero_spatial_v5}"
@@ -75,8 +76,8 @@ PY
 
 "$PYTHON" "$SCRIPT_DIR/hdf5_to_lerobot_dataset.py" --mode "$DATA_MODE" \
   --data-dir "$LIBERO_DATA_DIR" --output-root "$DATA_ROOT"
-"$PYTHON" "$SCRIPT_DIR/hdf5_to_lerobot_dataset.py" --mode verify \
+"$PYTHON" "$SCRIPT_DIR/hdf5_to_lerobot_dataset.py" --mode "$VERIFY_MODE" \
   --data-dir "$LIBERO_DATA_DIR" --output-root "$DATA_ROOT"
-"$PYTHON" "$SCRIPT_DIR/hdf5_to_lerobot_dataset.py" --mode preflight \
+"$PYTHON" "$SCRIPT_DIR/hdf5_to_lerobot_dataset.py" --mode "$PREFLIGHT_MODE" \
   --data-dir "$LIBERO_DATA_DIR" --output-root "$DATA_ROOT"
 echo "prepare_lambda_data: sealed $PROFILE pair converted under $DATA_ROOT"

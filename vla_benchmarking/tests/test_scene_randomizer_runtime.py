@@ -47,6 +47,9 @@ class _Sim:
     def forward(self):
         return None
 
+    def get_state(self):
+        return np.concatenate((self.data.qpos, self.data.qvel))
+
 
 class _Inner:
     def __init__(self):
@@ -60,6 +63,8 @@ class _Inner:
 class _LeRobotEnv:
     def __init__(self):
         self._env = _Inner()
+        self._init_state_id = 0
+        self._init_states = np.zeros((1, 4), dtype=np.float64)
 
     def _format_raw_obs(self, raw):
         return raw

@@ -36,6 +36,32 @@ case "$PROFILE" in
     TRAINED_VISUAL_CONDITION="no_arrows"
     ADAPTER_KEY="no_arrow_treatment_adapter"
     ;;
+  graph_treatment)
+    PAIR_MANIFEST_NAME="sealed_lora_graph_pair_manifest.json"
+    PAIR_SENTINEL_NAME="sealed_lora_graph_pair_verified.json"
+    PAIR_KIND="sealed_lora_graph_treatment_arrow_graph_treatment"
+    DATASET_VARIANT="graph_treatment"
+    EXPECTED_DATASET_VARIANT="graph_treatment"
+    DATASET_REPO_ID="local/libero_spatial_graph_treatment"
+    PREFLIGHT_VARIANT="graph_treatment"
+    DEFAULT_DATA_ROOT="$SCRIPT_DIR/lora_datasets"
+    EXPERIMENT_NAME="smolvla_lora_graph_treatment_training"
+    TRAINED_VISUAL_CONDITION="no_arrows"
+    ADAPTER_KEY="graph_treatment_adapter"
+    ;;
+  arrow_graph_treatment)
+    PAIR_MANIFEST_NAME="sealed_lora_graph_pair_manifest.json"
+    PAIR_SENTINEL_NAME="sealed_lora_graph_pair_verified.json"
+    PAIR_KIND="sealed_lora_graph_treatment_arrow_graph_treatment"
+    DATASET_VARIANT="arrow_graph_treatment"
+    EXPECTED_DATASET_VARIANT="arrow_graph_treatment"
+    DATASET_REPO_ID="local/libero_spatial_arrow_graph_treatment"
+    PREFLIGHT_VARIANT="arrow_graph_treatment"
+    DEFAULT_DATA_ROOT="$SCRIPT_DIR/lora_datasets"
+    EXPERIMENT_NAME="smolvla_lora_arrow_graph_treatment_training"
+    TRAINED_VISUAL_CONDITION="arrows"
+    ADAPTER_KEY="arrow_graph_treatment_adapter"
+    ;;
   *) echo "unknown TRAINING_PROFILE: $PROFILE" >&2; exit 2 ;;
 esac
 case "$MODE" in dry|smoke|full|resume) ;; *) echo "usage: $0 [profile] <dry|smoke|full|resume>" >&2; exit 2 ;; esac
@@ -59,6 +85,25 @@ LIBERO_DIR_VALUE="${LIBERO_DIR:-$SCRIPT_DIR/LIBERO}"
 LIBERO_COMMIT_VALUE="8f1084e3132a39270c3a13ebe37270a43ece2a01"
 RESUME_VALUE="${RESUME:-false}"
 RESUME_CONFIG_PATH_VALUE="${RESUME_CONFIG_PATH:-}"
+
+if [[ "$PROFILE" == graph_treatment || "$PROFILE" == arrow_graph_treatment ]]; then
+  # Graph cells are sealed: ambient values cannot change their training
+  # condition when this operator is invoked directly.
+  PEFT_R=16
+  BATCH_SIZE=32
+  SEED=1000
+fi
+
+# ``policy.path`` makes LeRobot load the serialized policy_preprocessor.json.
+# Prepare the graph-only 96-token snapshot before any preflight/training-plan
+# logic; the historical base snapshot remains untouched at 48 tokens.
+if [[ "$PROFILE" == graph_treatment || "$PROFILE" == arrow_graph_treatment ]]; then
+  GRAPH_BASE_POLICY_VALUE="${GRAPH_BASE_POLICY:-$SCRIPT_DIR/base_models/smolvla_libero-$BASE_POLICY_REVISION_VALUE-graph96}"
+  if [[ "$BASE_POLICY_VALUE" == "$SCRIPT_DIR/base_models/smolvla_libero-$BASE_POLICY_REVISION_VALUE" ]]; then
+    "$PYTHON_VALUE" "$SCRIPT_DIR/prompt_audit.py" --prepare-graph-policy "$BASE_POLICY_VALUE" "$GRAPH_BASE_POLICY_VALUE"
+    BASE_POLICY_VALUE="$GRAPH_BASE_POLICY_VALUE"
+  fi
+fi
 COMMON_ENV=("PAIR_MANIFEST=$PAIR_MANIFEST_VALUE"
   "PAIR_SENTINEL=$PAIR_SENTINEL_VALUE"
   "DATA_ROOT=$DATA_ROOT_VALUE"
@@ -98,9 +143,91 @@ if [[ "$MODE" == resume ]]; then
     RESUME_CONFIG_PATH_VALUE="$(find "$RUN_ROOT/checkpoints" -type f -name train_config.json -print 2>/dev/null | sort | tail -n 1)"
   fi
   [[ -f "$RESUME_CONFIG_PATH_VALUE" ]] || { echo "resume checkpoint train_config.json is required" >&2; exit 1; }
+  [[ "$(basename "$RESUME_CONFIG_PATH_VALUE")" == "train_config.json" ]] || { echo "resume config must be checkpoints/<step>/pretrained_model/train_config.json" >&2; exit 1; }
+  resume_checkpoint_dir="$(cd "$(dirname "$RESUME_CONFIG_PATH_VALUE")" && pwd -P)"
+  [[ "$(basename "$resume_checkpoint_dir")" == "pretrained_model" ]] || { echo "resume config must be under a pretrained_model checkpoint directory" >&2; exit 1; }
+  resume_checkpoint_root="$(cd "$resume_checkpoint_dir/.." && pwd -P)"
+  resume_checkpoint_name="$(basename "$resume_checkpoint_root")"
+  [[ "$resume_checkpoint_name" =~ ^[0-9]+$ ]] || { echo "resume checkpoint directory must be numeric" >&2; exit 1; }
+  resume_checkpoint_step=$((10#$resume_checkpoint_name))
+  (( resume_checkpoint_step > 0 && resume_checkpoint_step < 29190 && resume_checkpoint_step % 1946 == 0 )) || {
+    echo "resume checkpoint must be an ordinary saved step in (0,29190) on the 1946-step schedule" >&2; exit 1;
+  }
   run_root_abs="$(cd "$RUN_ROOT" && pwd -P)"
+  expected_checkpoint_root="$run_root_abs/checkpoints/$resume_checkpoint_name"
+  [[ "$resume_checkpoint_root" == "$expected_checkpoint_root" ]] || {
+    echo "resume checkpoint must resolve exactly to $expected_checkpoint_root" >&2; exit 1;
+  }
   config_abs="$(cd "$(dirname "$RESUME_CONFIG_PATH_VALUE")" && pwd -P)/$(basename "$RESUME_CONFIG_PATH_VALUE")"
-  case "$config_abs" in "$run_root_abs"/*) ;; *) echo "resume config must be contained by run directory" >&2; exit 1 ;; esac
+  case "$config_abs" in
+    "$run_root_abs"/*) ;;
+    *) echo "resume config must be contained by run directory" >&2; exit 1 ;;
+  esac
+  [[ -d "$resume_checkpoint_root/training_state" ]] || { echo "resume checkpoint lacks training_state required for optimizer/scheduler/RNG restore" >&2; exit 1; }
+  [[ -n "$(find "$resume_checkpoint_root/training_state" -type f -print -quit 2>/dev/null)" ]] || { echo "resume checkpoint training_state is empty" >&2; exit 1; }
+  "$PYTHON_VALUE" - "$resume_checkpoint_root/training_state" <<'PY'
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+files = [path for path in root.rglob('*') if path.is_file()]
+if not files or any(path.is_symlink() for path in files):
+    raise SystemExit('resume training_state must contain regular files only')
+names = {path.name.lower() for path in files}
+required = {
+    'optimizer': any(re.search(r'(^|[._-])optimizer([._-]|$)', name) for name in names),
+    'scheduler': any(re.search(r'(^|[._-])scheduler([._-]|$)', name) for name in names),
+    'rng': any(('random_state' in name or 'rng' in name) for name in names),
+}
+if not all(required.values()):
+    missing = ', '.join(key for key, present in required.items() if not present)
+    raise SystemExit(f'resume training_state is missing required state artifacts: {missing}')
+PY
+  expected_inventory_path="$RUN_ROOT/expected_adapter_inventory.json"
+  expected_inventory_pending="${RUN_ROOT}.expected_adapter_inventory.pending.json"
+  if [[ -f "$expected_inventory_path" && -f "$expected_inventory_pending" ]]; then
+    "$PYTHON_VALUE" - "$expected_inventory_path" "$expected_inventory_pending" <<'PY'
+import sys
+from pathlib import Path
+if Path(sys.argv[1]).read_bytes() != Path(sys.argv[2]).read_bytes():
+    raise SystemExit('final and pending expected LoRA inventories differ')
+PY
+  fi
+  if [[ ! -f "$expected_inventory_path" && -f "$expected_inventory_pending" ]]; then
+    PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_VALUE" - "$PLAN_SOURCE" "$expected_inventory_pending" "$expected_inventory_path" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" <<'PY'
+import json, os, pathlib, sys
+plan_path = pathlib.Path(sys.argv[1]); pending_path = pathlib.Path(sys.argv[2]); final_path = pathlib.Path(sys.argv[3])
+base_policy = pathlib.Path(sys.argv[4]); revision = sys.argv[5]
+plan = json.loads(plan_path.read_text(encoding='utf-8'))
+if pathlib.Path(plan.get('base_policy', '')).expanduser().resolve() != base_policy.expanduser().resolve() or plan.get('base_policy_revision') != revision:
+    raise SystemExit('resume plan does not authenticate the pending expected LoRA inventory base')
+flags = plan.get('flags', {})
+if any(int(flags.get(key, -1)) != value for key, value in {'seed': 1000, 'peft_r': 16, 'batch_size': 32}.items()):
+    raise SystemExit('resume plan LoRA constants are not sealed')
+try:
+    from adapter_audit import load_expected_inventory
+    inventory = load_expected_inventory(pending_path)
+except Exception as exc:
+    raise SystemExit(f'pending expected LoRA inventory is invalid: {exc}')
+if inventory.get('base_policy') != str(pathlib.Path(base_policy).expanduser().resolve()):
+    raise SystemExit('pending expected LoRA inventory belongs to a different base policy')
+if inventory.get('base_policy_revision') != revision:
+    raise SystemExit('pending expected LoRA inventory belongs to a different base revision')
+if final_path.exists():
+    if final_path.read_bytes() != pending_path.read_bytes():
+        raise SystemExit('final and pending expected LoRA inventories differ')
+else:
+    os.replace(pending_path, final_path)
+PY
+  fi
+  [[ -f "$expected_inventory_path" ]] || { echo "resume requires expected_adapter_inventory.json" >&2; exit 1; }
+  if [[ "$PROFILE" == graph_treatment || "$PROFILE" == arrow_graph_treatment ]]; then
+    [[ -f "$resume_checkpoint_dir/policy_preprocessor.json" ]] || { echo "graph resume checkpoint lacks policy_preprocessor.json" >&2; exit 1; }
+    [[ -d "$resume_checkpoint_dir/tokenizer" ]] || cp -a "$BASE_POLICY_VALUE/tokenizer" "$resume_checkpoint_dir/tokenizer" || { echo "could not restore graph checkpoint tokenizer" >&2; exit 1; }
+    [[ -f "$resume_checkpoint_dir/tokenizer_provenance.json" ]] || cp "$BASE_POLICY_VALUE/tokenizer_provenance.json" "$resume_checkpoint_dir/tokenizer_provenance.json" || { echo "could not restore graph checkpoint tokenizer provenance" >&2; exit 1; }
+    PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_VALUE" "$SCRIPT_DIR/prompt_audit.py" --retarget-graph-checkpoint "$resume_checkpoint_dir" || { echo "could not retarget graph resume preprocessor" >&2; exit 1; }
+  fi
+  "$PYTHON_VALUE" "$SCRIPT_DIR/adapter_audit.py" --checkpoint "$resume_checkpoint_dir" \
+    --expected-inventory "$expected_inventory_path" \
+    || { echo "resume checkpoint failed the action-side LoRA audit" >&2; exit 1; }
   provenance_path="${RUN_ROOT}/run_provenance.json"
   [[ -f "$provenance_path" ]] || provenance_path="${RUN_ROOT}.run_provenance.pending.json"
   [[ -f "$provenance_path" ]] || { echo "resume requires preserved run_provenance.json or pending provenance" >&2; exit 1; }
@@ -144,10 +271,11 @@ if manifest_path.is_file():
     if manifest.get('training_variant') != profile or manifest.get('base_policy_revision') != str(revision):
         raise SystemExit('resume training manifest is incompatible with requested profile/base revision')
 PY
-  "$PYTHON_VALUE" - "$PLAN_SOURCE" "$RESUME_CONFIG_PATH_VALUE" "$RUN_ROOT/resume_audits" "$PROFILE" "$EXPECTED_DATASET_VARIANT" "$DATASET_REPO_ID" <<'PY'
+  "$PYTHON_VALUE" - "$PLAN_SOURCE" "$RESUME_CONFIG_PATH_VALUE" "$RUN_ROOT/resume_audits" "$PROFILE" "$EXPECTED_DATASET_VARIANT" "$DATASET_REPO_ID" "$resume_checkpoint_dir" <<'PY'
 import hashlib, json, pathlib, sys
 plan_path, config_path, audit_dir = map(pathlib.Path, sys.argv[1:4])
-profile, expected_dataset, expected_repo = sys.argv[4:]
+profile, expected_dataset, expected_repo = sys.argv[4:7]
+checkpoint_dir = pathlib.Path(sys.argv[7]).resolve()
 def load(path):
     try: return json.loads(path.read_text(encoding='utf-8'))
     except (OSError, json.JSONDecodeError) as exc: raise SystemExit(f'unreadable resume evidence: {path}') from exc
@@ -156,6 +284,11 @@ def sha(path):
     with path.open('rb') as fh:
         for block in iter(lambda: fh.read(1048576), b''): h.update(block)
     return h.hexdigest()
+def tree_sha(root):
+    entries=[]
+    for path in sorted(root.rglob('*')):
+        if path.is_file(): entries.append((path.relative_to(root).as_posix(), sha(path)))
+    return hashlib.sha256(json.dumps(entries,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 plan=load(plan_path); config=load(config_path)
 def get(data, *keys):
     cur=data
@@ -176,6 +309,10 @@ for key, wanted in expected.items():
     actual=values[key]
     if actual is None or (str(actual) != str(wanted) and not (isinstance(wanted,int) and int(actual) == wanted)):
         raise SystemExit(f'resume train_config mismatch: {key}')
+if profile in ('graph_treatment', 'arrow_graph_treatment'):
+    policy = config.get('policy', {})
+    if int(policy.get('tokenizer_max_length', -1)) != 96:
+        raise SystemExit('resume train_config tokenizer_max_length is not sealed to 96 for graph profile')
 config_digest=sha(config_path)
 audit_dir.mkdir(parents=True, exist_ok=True)
 records=[]
@@ -198,15 +335,30 @@ step_index=checkpoint_indexes[-1]+1
 if step_index >= len(checkpoint_parts) or not checkpoint_parts[step_index].isdigit():
     raise SystemExit('resume train_config path lacks a numeric checkpoints/<step> component')
 checkpoint_step=int(checkpoint_parts[step_index])
+if not (0 < checkpoint_step < 29190 and checkpoint_step % 1946 == 0):
+    raise SystemExit('resume checkpoint is outside the sealed ordinary save schedule')
 config_sha=config_digest
+adapter_evidence={
+    'adapter_config_sha256': sha(checkpoint_dir/'adapter_config.json'),
+    'adapter_weights_sha256': sha(checkpoint_dir/'adapter_model.safetensors'),
+    'adapter_audit_sha256': sha(checkpoint_dir/'adapter_audit.json'),
+    'checkpoint_tree_sha256': tree_sha(checkpoint_dir),
+    'checkpoint_root_tree_sha256': tree_sha(checkpoint_dir.parent),
+    'checkpoint_root_inventory': {
+        path.relative_to(checkpoint_dir.parent).as_posix(): sha(path)
+        for path in sorted(checkpoint_dir.parent.rglob('*')) if path.is_file()
+    },
+    'expected_adapter_inventory_sha256': sha(checkpoint_dir.parents[2] / 'expected_adapter_inventory.json'),
+}
 for path, record in records:
     if record.get('train_config_sha256') == config_sha:
         if record.get('train_config_path') != str(config_path.resolve()): raise SystemExit('same resume config hash has a different path')
+        if record.get('adapter_evidence') != adapter_evidence: raise SystemExit('resume adapter/config/preprocessor evidence drifted')
         raise SystemExit(0)
 if records and checkpoint_step <= int(records[-1][1].get('checkpoint_step', -1)):
     raise SystemExit('resume rollback or non-newer checkpoint is not allowed')
 chain_index=len(records)+1
-record={'schema_version':1,'chain_index':chain_index,'train_config_path':str(config_path.resolve()),'train_config_sha256':config_sha,'checkpoint_step':checkpoint_step,'profile':profile,'dataset_variant':expected_dataset,'previous_record_sha256':records[-1][1]['record_sha256'] if records else None}
+record={'schema_version':1,'chain_index':chain_index,'train_config_path':str(config_path.resolve()),'train_config_sha256':config_sha,'checkpoint_step':checkpoint_step,'profile':profile,'dataset_variant':expected_dataset,'adapter_evidence':adapter_evidence,'previous_record_sha256':records[-1][1]['record_sha256'] if records else None}
 record['record_sha256']=hashlib.sha256((json.dumps(record,indent=2,sort_keys=True)+'\n').encode('utf-8')).hexdigest()
 path=audit_dir/f'{chain_index:06d}.json'
 if path.exists(): raise SystemExit(f'resume audit record already exists: {path}')
@@ -256,6 +408,7 @@ payload = {
     "flags": {"peft_r": int(peft_r), "steps": int(steps), "save_freq": int(save_freq), "batch_size": int(batch), "seed": int(seed), "device": device,
                "epochs": 15 if int(steps) == 29190 else None, "updates_per_epoch": 1946 if int(steps) == 29190 else None},
     "output_dir": str(pathlib.Path(output_dir).resolve()),
+    "expected_adapter_inventory": {"path": str((pathlib.Path(output_dir).resolve() / "expected_adapter_inventory.json"))},
     "libero_commit": libero_commit,
     "libero_dir": str(pathlib.Path(libero_dir).resolve()),
     "libero_worktree_status": "clean",
@@ -300,6 +453,45 @@ if variant == "no_arrow_treatment":
         "adapter_key": "no_arrow_treatment_adapter",
         "contrast": "live_arrow_effect_pp",
     }
+elif variant in ("graph_treatment", "arrow_graph_treatment"):
+    payload["trained_on_visual_condition"] = trained_visual_condition
+    payload["trained_on_text_condition"] = "target_natural_v1"
+    adapter_key = {
+        "graph_treatment": "graph_treatment_adapter",
+        "arrow_graph_treatment": "arrow_graph_treatment_adapter",
+    }[variant]
+    payload["evaluation_contract"] = {
+        "status": "pilot_prepared_not_launchable",
+        "confirmatory_required_for_paper_claims": True,
+        "pilot_contract": {
+            "paired_reset_states": True,
+            "eval_seed": 1000,
+            "episodes_per_task": 10,
+            "task_stratified_results": True,
+            "evaluation_cells": ["graph_context_no_arrows", "standard_no_arrows"],
+            "visual_condition": "none",
+        },
+        "future_confirmatory_requirements": {
+            "paired_reset_states": True,
+            "training_seeds": [1000, 1001, 1002],
+            "eval_master_seeds": list(range(2000, 2050)),
+            "minimum_episodes_per_task": 50,
+            "minimum_independent_training_seeds": 3,
+            "task_stratified_results": True,
+            "interaction_effect_and_95_percent_ci": True,
+            "launch_requires_explicit_four_cell_evaluator": True,
+        },
+        "tasks": list(range(10)),
+        "episodes_per_task": 10,
+        "eval_seed": 1000,
+        "eval_batch_size": 1,
+        "context_mode": "scene_graph",
+        "context_format": "target_natural_v1",
+        "tokenizer_max_length": 96,
+        "visual_condition": "visual_arrows" if variant == "arrow_graph_treatment" else "none",
+        "adapter_key": adapter_key,
+        "graph_pair_kind": "sealed_lora_graph_treatment_arrow_graph_treatment",
+    }
 training_argv = [
     "run_lerobot_train.py",
     "--policy.push_to_hub=false",
@@ -318,6 +510,8 @@ if resume == "true":
     training_argv.extend([f"--config_path={pathlib.Path(resume_config).resolve()}", "--resume=true"])
 else:
     training_argv.append(f"--policy.path={pathlib.Path(base_policy).resolve()}")
+if variant in ("graph_treatment", "arrow_graph_treatment"):
+    training_argv.append("--policy.tokenizer_max_length=96")
 payload["training_argv"] = training_argv
 p = pathlib.Path(out)
 encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -344,9 +538,9 @@ PY
 adapter_path="$RUN_ROOT/checkpoints/$checkpoint_id/pretrained_model/adapter_model.safetensors"
 [[ -s "$adapter_path" ]] || { echo "adapter artifact is missing: $adapter_path" >&2; exit 1; }
 
-"$PYTHON_VALUE" - "$RUN_ROOT/training_manifest.json" "$RUN_ROOT/training_plan.json" "$adapter_path" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "${PEFT_R:-16}" "$checkpoint_id" "$PROFILE" "$PAIR_KIND" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" "$RUN_ROOT/resume_audits" "$EXPERIMENT_NAME" "$TRAINED_VISUAL_CONDITION" "$ADAPTER_KEY" <<'PY'
+"$PYTHON_VALUE" - "$RUN_ROOT/training_manifest.json" "$RUN_ROOT/training_plan.json" "$adapter_path" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "${PEFT_R:-16}" "$checkpoint_id" "$PROFILE" "$PAIR_KIND" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" "$RUN_ROOT/resume_audits" "$EXPERIMENT_NAME" "$TRAINED_VISUAL_CONDITION" "$ADAPTER_KEY" "$RUN_ROOT/graph_tokenizer_audit.json" "$RUN_ROOT/expected_adapter_inventory.json" <<'PY'
 import hashlib, json, pathlib, sys
-out, plan, treatment, pair_manifest, pair_sentinel, base_policy, revision, steps, save_freq, batch, seed, peft_r, checkpoint_id, variant, pair_kind, dataset_repo_id, dataset_variant, libero_dir, libero_commit, audit_dir, experiment, trained_visual_condition, adapter_key = sys.argv[1:]
+out, plan, treatment, pair_manifest, pair_sentinel, base_policy, revision, steps, save_freq, batch, seed, peft_r, checkpoint_id, variant, pair_kind, dataset_repo_id, dataset_variant, libero_dir, libero_commit, audit_dir, experiment, trained_visual_condition, adapter_key, graph_audit_path, expected_inventory_path = sys.argv[1:]
 def sha(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -396,6 +590,70 @@ if variant == "no_arrow_treatment":
     payload["trained_on_visual_condition"] = trained_visual_condition
     payload["flags"]["peft_r"] = int(peft_r)
 payload[adapter_key] = {"path": str(pathlib.Path(treatment).resolve()), "sha256": sha(treatment)}
+payload["trained_on_visual_condition"] = trained_visual_condition
+payload["trained_on_text_condition"] = (
+    "target_natural_v1" if variant in ("graph_treatment", "arrow_graph_treatment") else "none"
+)
+if variant in ("graph_treatment", "arrow_graph_treatment"):
+    payload["flags"]["peft_r"] = int(peft_r)
+    payload["flags"]["tokenizer_max_length"] = 96
+    graph_manifest = json.loads(pathlib.Path(pair_manifest).read_text(encoding="utf-8"))
+    payload["graph_contract_sha256"] = graph_manifest.get("graph_contract_sha256")
+    payload["graph_formatter_sha256"] = graph_manifest.get("graph_formatter_sha256")
+    payload["graph_extractor_sha256"] = graph_manifest.get("graph_extractor_sha256")
+    payload["tokenizer_contract_sha256"] = graph_manifest.get("tokenizer_contract_sha256")
+    payload["graph_oracle_disclosure"] = (graph_manifest.get("graph_contract") or {}).get("oracle_disclosure")
+    payload["comparability_contract"] = graph_manifest.get("comparability_contract")
+    audit = pathlib.Path(graph_audit_path)
+    if not audit.is_file():
+        raise SystemExit(f"graph tokenizer audit evidence is missing: {audit}")
+    payload["graph_tokenizer_audit"] = {
+        "path": str(audit.resolve()),
+        "sha256": sha(audit),
+    }
+adapter_dir = pathlib.Path(treatment).resolve().parent
+adapter_audit = adapter_dir / "adapter_audit.json"
+if not adapter_audit.is_file():
+    raise SystemExit(f"action-side LoRA audit evidence is missing: {adapter_audit}")
+payload["adapter_audit"] = {
+    "path": str(adapter_audit),
+    "sha256": sha(adapter_audit),
+}
+adapter_audit_record = json.loads(adapter_audit.read_text(encoding="utf-8"))
+checkpoint_root = adapter_dir.parent
+if not (checkpoint_root / "training_state").is_dir():
+    raise SystemExit(f"checkpoint training_state is missing: {checkpoint_root / 'training_state'}")
+state_files = [path for path in (checkpoint_root / "training_state").rglob("*") if path.is_file()]
+if not state_files or any(path.is_symlink() for path in state_files):
+    raise SystemExit("checkpoint training_state must contain regular files only")
+state_names = {path.name.lower() for path in state_files}
+required_state = {
+    "optimizer": any("optimizer" in name for name in state_names),
+    "scheduler": any("scheduler" in name for name in state_names),
+    "rng": any("random_state" in name or "rng" in name for name in state_names),
+}
+if not all(required_state.values()):
+    missing = ", ".join(key for key, present in required_state.items() if not present)
+    raise SystemExit(f"checkpoint training_state is missing required state artifacts: {missing}")
+payload["checkpoint_root_tree_sha256"] = hashlib.sha256(
+    json.dumps({path.relative_to(checkpoint_root).as_posix(): sha(path) for path in sorted(checkpoint_root.rglob("*")) if path.is_file()}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+payload["checkpoint_root_inventory"] = {
+    path.relative_to(checkpoint_root).as_posix(): sha(path)
+    for path in sorted(checkpoint_root.rglob("*")) if path.is_file()
+}
+expected_inventory = pathlib.Path(expected_inventory_path)
+if not expected_inventory.is_file():
+    raise SystemExit(f"expected live-policy LoRA inventory is missing: {expected_inventory}")
+payload["expected_adapter_inventory"] = {
+    "path": str(expected_inventory.resolve()),
+    "sha256": sha(expected_inventory),
+}
+if adapter_audit_record.get("expected_inventory_sha256") != json.loads(expected_inventory.read_text(encoding="utf-8")).get("inventory_sha256"):
+    raise SystemExit("checkpoint adapter audit is not bound to the expected live-policy inventory")
+payload["checkpoint_tree_sha256"] = adapter_audit_record.get("checkpoint_tree_sha256")
+payload["checkpoint_inventory"] = adapter_audit_record.get("checkpoint_inventory")
+payload["adapter_config_sha256"] = sha(adapter_dir / "adapter_config.json")
 p = pathlib.Path(out)
 encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
 if p.exists() and p.read_text(encoding="utf-8") != encoded:

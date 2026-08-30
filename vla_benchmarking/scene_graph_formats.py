@@ -6,6 +6,29 @@ from collections.abc import Iterable
 
 
 TARGET_OBJECT = "akita_black_bowl_1"
+OTHER_BLACK_BOWL = "akita_black_bowl_2"
+
+# This is a versioned contract used by the graph-training profiles.  Keep the
+# wording deterministic: it is part of the model input and therefore part of
+# the experiment provenance.
+TARGET_NATURAL_FORMAT = "target_natural_v1"
+GRAPH_TOKENIZER_CONTRACT = {
+    "model_id": "HuggingFaceTB/SmolVLM2-500M-Instruct",
+    # Pinned immutable Hub revision.  Graph runs must stage this tokenizer
+    # locally before training; floating Hub resolution is not acceptable.
+    "revision": "7b375e1b73b11138ff12fe22c8f2822d8fe03467",
+    "max_length": 96,
+    "truncation_allowed": False,
+    "task_instruction_must_be_retained": True,
+    "newline_processor": "smolvla_new_line_processor",
+    # SmolVLA's saved LeRobot processor uses dynamic longest padding; preserve
+    # that historical behavior while extending only the token ceiling.
+    "padding": "longest",
+    "padding_side": "right",
+    "truncation": True,
+}
+# Stable public name for launch/preflight code and downstream audit tools.
+TOKENIZER_CONTRACT = GRAPH_TOKENIZER_CONTRACT
 
 STAGE_A_FORMATS = (
     "standard",
@@ -39,7 +62,7 @@ DEFAULT_ABLATION_FORMATS = (
     "natural_compact_context_first",
 )
 
-SUPPORTED_CONTEXT_FORMATS = STAGE_A_FORMATS + (LEGACY_FORMAT,) + EXTENDED_FORMATS
+SUPPORTED_CONTEXT_FORMATS = STAGE_A_FORMATS + (LEGACY_FORMAT,) + EXTENDED_FORMATS + (TARGET_NATURAL_FORMAT,)
 
 FORMAT_ALIASES = {
     "existing_triplets": LEGACY_FORMAT,
@@ -55,6 +78,15 @@ OBJECT_NAME_MAP = {
     "wooden_cabinet_1": "wooden cabinet",
     "flat_stove_1": "stove",
 }
+
+
+def target_natural_object_name(object_id: str) -> str:
+    """Return unambiguous names for the target-centric graph contract."""
+    if object_id == TARGET_OBJECT:
+        return "target black bowl"
+    if object_id == OTHER_BLACK_BOWL:
+        return "other black bowl"
+    return human_object_name(object_id)
 
 RELATION_NAME_MAP = {
     "is_left_of": "left of",
@@ -163,6 +195,46 @@ def _compact_unlabeled_line(relations: list[tuple[str, str, str]]) -> str:
     return f"The {subject_name} {relation_text}."
 
 
+def _target_natural_relation_phrase(relation: str, obj: str) -> str:
+    object_name = target_natural_object_name(obj)
+    relation_name = human_relation_name(relation)
+    if relation == "contains":
+        return f"contains the {object_name}"
+    return f"is {relation_name} the {object_name}"
+
+
+def format_target_natural_v1(
+    task_text: str,
+    target_relations: Iterable[tuple[str, str, str]],
+    *,
+    target_subject: str = TARGET_OBJECT,
+) -> str:
+    """Serialize the live target-filtered graph as one natural-language fact.
+
+    Only edges whose subject is the target are admitted.  This is deliberate:
+    it prevents stale full-graph/removed-object relations from leaking into a
+    graph prompt and makes the graph contract identical offline and online.
+    """
+    relations = dedupe_relations(
+        tuple(relation) for relation in target_relations if len(relation) == 3 and relation[0] == target_subject
+    )
+    # Stable ordering makes prompt bytes independent of dict/set iteration.
+    relations.sort(key=lambda item: (item[1], item[2]))
+    subject_name = target_natural_object_name(target_subject)
+    if not relations:
+        fact = f"The {subject_name} has no known spatial relation to another object."
+    else:
+        phrases = [_target_natural_relation_phrase(relation, obj) for _, relation, obj in relations]
+        if len(phrases) == 1:
+            relation_text = phrases[0]
+        elif len(phrases) == 2:
+            relation_text = f"{phrases[0]} and {phrases[1]}"
+        else:
+            relation_text = ", ".join(phrases[:-1]) + f", and {phrases[-1]}"
+        fact = f"The {subject_name} {relation_text}."
+    return f"Task: {task_text}\nSpatial relations: {fact}"
+
+
 def format_scene_context(
     task_text: str,
     target_relations: list[tuple[str, str, str]],
@@ -180,6 +252,9 @@ def format_scene_context(
 
     if normalized == "standard":
         return task_text
+
+    if normalized == TARGET_NATURAL_FORMAT:
+        return format_target_natural_v1(task_text, relations)
 
     if normalized == "triplet_published":
         lines = ["Current Scene graph:", "", f"Task: {task_text}"]

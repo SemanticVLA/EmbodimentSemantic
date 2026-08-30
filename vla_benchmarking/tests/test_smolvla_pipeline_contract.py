@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import adapter_audit
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,6 +27,56 @@ def _executable(path: Path, content: str) -> None:
     path.chmod(path.stat().st_mode | 0o111)
 
 
+def _seed_resume_checkpoint(pretrained: Path) -> None:
+    """Materialize the minimum real checkpoint-root shape for shell tests."""
+    pretrained.mkdir(parents=True, exist_ok=True)
+    (pretrained / "adapter_model.safetensors").write_bytes(b"adapter")
+    (pretrained / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (pretrained / "adapter_audit.json").write_text(
+        json.dumps({"expected_inventory_sha256": "fake-inventory"}), encoding="utf-8"
+    )
+    state = pretrained.parent / "training_state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "optimizer.pt").write_bytes(b"optimizer")
+    (state / "scheduler.pt").write_bytes(b"scheduler")
+    (state / "random_states_0.pkl").write_bytes(b"rng")
+
+
+def _expected_inventory_fixture(base_policy: str) -> dict:
+    modules = sorted(adapter_audit.REQUIRED_ACTION_MODULES | {
+        "model.vlm_with_expert.lm_expert.layers.0.q_proj",
+        "model.vlm_with_expert.lm_expert.layers.0.v_proj",
+    })
+    names = sorted(
+        [f"{module}.lora_A.default.weight" for module in modules]
+        + [f"{module}.lora_B.default.weight" for module in modules]
+    )
+    value = {
+        "schema_version": 1,
+        "base_policy": base_policy,
+        "base_policy_revision": adapter_audit.PINNED_BASE_POLICY_REVISION,
+        "target_regex": adapter_audit.ACTION_SIDE_TARGET_REGEX,
+        "peft_type": "LORA",
+        "rank": 16,
+        "modules_to_save": [],
+        "effective_peft_config": {
+            "peft_type": "LORA",
+            "r": 16,
+            "target_modules": adapter_audit.ACTION_SIDE_TARGET_REGEX,
+            "modules_to_save": [],
+        },
+        "matched_module_names": modules,
+        "trainable_parameter_names": names,
+        "trainable_parameter_count": len(names),
+        "total_parameter_count": len(names) + 1,
+        "trainable_parameter_numel": len(names),
+        "total_parameter_numel": len(names) + 1,
+        "no_vision_backbone_trainables": True,
+    }
+    value["inventory_sha256"] = adapter_audit.inventory_sha256(value)
+    return value
+
+
 def _runtime(tmp_path: Path, *, real_launcher: bool = True) -> tuple[Path, dict[str, str], Path]:
     """Create a no-network operator sandbox with a traceable launcher boundary."""
     shutil.copy2(ROOT / "run_smolvla_pipeline.sh", tmp_path / "run_smolvla_pipeline.sh")
@@ -36,14 +88,33 @@ def _runtime(tmp_path: Path, *, real_launcher: bool = True) -> tuple[Path, dict[
             f"#!/usr/bin/env bash\nset -eu\nprintf 'launcher\\n' >> \"{_bash_path(tmp_path / 'trace.log')}\"\n",
         )
 
+    # Resume preflight invokes the adapter-audit boundary before training. A
+    # deterministic test double keeps these operator tests dependency-free
+    # while exercising the real launch ordering and arguments.
+    (tmp_path / "adapter_audit.py").write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "def load_expected_inventory(path):\n"
+        "    value = json.loads(Path(path).read_text(encoding='utf-8'))\n"
+        "    if not value.get('inventory_sha256') or value.get('base_policy_revision') != '6721902bc4d61e50a3bfdb11dfb4cb626f05d102': raise ValueError('invalid fixture inventory')\n"
+        "    return value\n"
+        "if '--checkpoint' in sys.argv: raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+
     trace = tmp_path / "trace.log"
+    fixture_base = _bash_path(tmp_path / "base-policy")
+    expected_fixture = _expected_inventory_fixture(fixture_base)
+    (tmp_path / "expected_inventory_fixture.json").write_text(
+        json.dumps(expected_fixture, sort_keys=True) + "\n", encoding="utf-8"
+    )
     _executable(
         tmp_path / "lambda_preflight.sh",
         f"#!/usr/bin/env bash\nset -eu\nprintf 'preflight:%s:%s:%s\\n' \"$1\" \"${{STEPS_VALUE-}}\" \"${{SAVE_FREQ_VALUE-}}\" >> \"{_bash_path(trace)}\"\n",
     )
     _executable(
         tmp_path / "train_lora.sh",
-        f"#!/usr/bin/env bash\nset -eu\nprintf 'train:%s:%s:%s:%s\\n' \"${{STEPS-}}\" \"${{SAVE_FREQ-}}\" \"${{SEED-}}\" \"${{PEFT_R-}}\" >> \"{_bash_path(trace)}\"\nif [[ -f \"$(dirname \"$0\")/resume_fail.flag\" && \"${{TRAINING_MODE-}}\" == resume ]]; then exit 42; fi\ncheckpoint_id=$(printf '%06d' \"$STEPS\")\nmkdir -p \"$OUTPUT_DIR/checkpoints/$checkpoint_id/pretrained_model\"\nprintf 'stub adapter' > \"$OUTPUT_DIR/checkpoints/$checkpoint_id/pretrained_model/adapter_model.safetensors\"\n",
+        f"#!/usr/bin/env bash\nset -eu\nprintf 'train:%s:%s:%s:%s\\n' \"${{STEPS-}}\" \"${{SAVE_FREQ-}}\" \"${{SEED-}}\" \"${{PEFT_R-}}\" >> \"{_bash_path(trace)}\"\nif [[ -f \"$(dirname \"$0\")/resume_fail.flag\" && \"${{TRAINING_MODE-}}\" == resume ]]; then exit 42; fi\ncheckpoint_id=$(printf '%06d' \"$STEPS\")\nmkdir -p \"$OUTPUT_DIR/checkpoints/$checkpoint_id/pretrained_model\" \"$OUTPUT_DIR/checkpoints/$checkpoint_id/training_state\"\nprintf 'stub adapter' > \"$OUTPUT_DIR/checkpoints/$checkpoint_id/pretrained_model/adapter_model.safetensors\"\nprintf '{{}}' > \"$OUTPUT_DIR/checkpoints/$checkpoint_id/pretrained_model/adapter_config.json\"\nprintf '{{\"expected_inventory_sha256\":\"{expected_fixture['inventory_sha256']}\"}}' > \"$OUTPUT_DIR/checkpoints/$checkpoint_id/pretrained_model/adapter_audit.json\"\nprintf 'optimizer' > \"$OUTPUT_DIR/checkpoints/$checkpoint_id/training_state/optimizer.pt\"\nprintf 'scheduler' > \"$OUTPUT_DIR/checkpoints/$checkpoint_id/training_state/scheduler.pt\"\nprintf 'rng' > \"$OUTPUT_DIR/checkpoints/$checkpoint_id/training_state/random_states_0.pkl\"\ncp \"$(dirname \"$0\")/expected_inventory_fixture.json\" \"$OUTPUT_DIR/expected_adapter_inventory.json\"\n",
     )
 
     # Keep the default launcher paths populated as well: the operator passes a
@@ -142,14 +213,103 @@ def test_training_schedule_is_sealed_and_data_profiles_are_explicit() -> None:
     assert "TRAINING_MODE" in train
     assert "convert-target-arrow-pair" not in data
     assert "verify-target-arrow" not in data
-    assert "--mode preflight" in data
-    assert "--mode preflight-target-arrow" not in data
+    assert 'treatment) DATA_MODE="convert-pair"; VERIFY_MODE="verify"; PREFLIGHT_MODE="preflight"' in data
+    assert 'no_arrow_treatment) DATA_MODE="convert-pair"; VERIFY_MODE="verify"; PREFLIGHT_MODE="preflight"' in data
+    assert 'PREFLIGHT_MODE="preflight-target-arrow"' not in data
     assert "a0dded49581dcbf5a109f8350305411d345c5d99" in data
     assert "560fae66b5b41d2e383e6876b15052bbc105f4aae906cf1f630a2310b87a1fa9" in data
     assert 'REQUIRED_PAIR_VARIANT="target_arrow_treatment"' not in preflight
     assert 'git -C "$LIBERO_DIR" status --porcelain --untracked-files=no' in train
     assert 'LIBERO_COMMIT="${LIBERO_COMMIT:-8f1084e3132a39270c3a13ebe37270a43ece2a01}"' in train
     assert '"libero_worktree_status": "clean"' in train
+
+
+def test_graph_profiles_are_explicitly_separated_and_use_the_sealed_graph_contract() -> None:
+    launch = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    train = (ROOT / "train_lora.sh").read_text(encoding="utf-8")
+    preflight = (ROOT / "lambda_preflight.sh").read_text(encoding="utf-8")
+    prepare = (ROOT / "prepare_lambda_data.sh").read_text(encoding="utf-8")
+
+    for profile in ("graph_treatment", "arrow_graph_treatment"):
+        assert profile in launch
+        assert profile in train
+        assert profile in preflight
+        assert profile in prepare
+    assert 'DATASET_VARIANT="graph_treatment"' in launch
+    assert 'DATASET_VARIANT="arrow_graph_treatment"' in launch
+    assert 'ADAPTER_KEY="graph_treatment_adapter"' in launch
+    assert 'ADAPTER_KEY="arrow_graph_treatment_adapter"' in launch
+    assert 'PAIR_KIND="sealed_lora_graph_treatment_arrow_graph_treatment"' in launch
+    assert 'PREFLIGHT_VARIANT="graph_treatment"' in launch
+    assert 'PREFLIGHT_VARIANT="arrow_graph_treatment"' in launch
+    assert 'TRAINING_MODE' in launch
+    assert 'TRAIN_ARGS+=(--policy.tokenizer_max_length=96)' in train
+    assert 'CONVERTER_MODE="preflight-graph"' in preflight
+    assert 'DATA_MODE="convert-graph-pair"' in prepare
+    assert 'VERIFY_MODE="verify-graph"' in prepare
+
+
+def test_graph_evaluation_routes_to_the_sealed_two_cell_evaluator() -> None:
+    pipeline = (ROOT / "run_smolvla_pipeline.sh").read_text(encoding="utf-8")
+    assert "run_lora_graph_pair_eval.py" in pipeline
+    assert "arrow_graph_treatment is prepare-only and has no evaluation cell" in pipeline
+    assert "PROFILE_CANONICAL" in pipeline
+    assert 'PROFILE_CANONICAL" == graph_treatment' in pipeline
+
+
+def test_graph_pilot_is_explicitly_non_confirmatory_and_preserves_paper_gate() -> None:
+    evaluator = (ROOT / "run_lora_graph_pair_eval.py").read_text(encoding="utf-8")
+    launcher = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    assert '"pilot": True, "confirmatory": False' in evaluator
+    assert '"confirmatory_required_for_paper_claims": True' in evaluator
+    assert '"status": "pilot_prepared_not_launchable"' in launcher
+    assert '"confirmatory_required_for_paper_claims": True' in launcher
+
+
+def test_lower_level_eval_rejects_graph_visual_arrow_bypasses() -> None:
+    """The low-level wrapper must preserve the graph text-only contract."""
+    evaluator = (ROOT / "run_lerobot_eval_with_context.py").read_text(encoding="utf-8")
+    assert "graph_treatment evaluation is sealed to no visual arrows" in evaluator
+    assert "arrow_graph_treatment is prepare-only and cannot be evaluated" in evaluator
+    assert "graph_profile" in evaluator
+
+
+def test_historical_profiles_do_not_inherit_graph_tokenizer_or_adapter_metadata() -> None:
+    train = (ROOT / "train_lora.sh").read_text(encoding="utf-8")
+    launch = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    assert 'if [[ "$VARIANT" == graph_treatment || "$VARIANT" == arrow_graph_treatment ]]; then' in train
+    assert 'if variant in ("graph_treatment", "arrow_graph_treatment"):' in launch
+    # The 96-token override must be guarded by the graph-only branch, not a
+    # global default that would silently alter treatment/no-arrow runs.
+    graph_guard = 'if [[ "$VARIANT" == graph_treatment || "$VARIANT" == arrow_graph_treatment ]]; then'
+    assert train.index(graph_guard) < train.index('TRAIN_ARGS+=(--policy.tokenizer_max_length=96)')
+    assert 'tokenizer_max_length": 96' not in launch[: launch.index('if variant in ("graph_treatment", "arrow_graph_treatment"):')]
+
+
+def test_graph_pair_verification_recomputes_the_current_formatter_digest() -> None:
+    """A stored formatter hash is evidence only if verification re-hashes source."""
+    converter = (ROOT / "hdf5_to_lerobot_dataset.py").read_text(encoding="utf-8")
+    start = converter.index("def _load_sealed_manifest")
+    end = converter.index("def validate_verified_pair", start)
+    verifier = converter[start:end]
+    assert "graph_formatter_sha256" in verifier
+    assert "sha256_file(formatter_path)" in verifier
+
+
+def test_resume_binds_the_complete_scheduled_checkpoint_root() -> None:
+    launch = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    train = (ROOT / "train_lora.sh").read_text(encoding="utf-8")
+    for source in (launch, train):
+        assert "pretrained_model" in source
+        assert "training_state" in source
+        assert "optimizer" in source and "scheduler" in source
+        assert "random_state" in source or "rng" in source
+        assert "1946" in source and "29190" in source
+    assert "checkpoint_root_tree_sha256" in launch
+    assert "checkpoint_root_inventory" in launch
+    assert "expected_adapter_inventory.pending.json" in launch
+    assert 'resume_checkpoint_root" == "$expected_checkpoint_root"' in launch
+    assert 'resume_checkpoint_root" == "$resume_root/checkpoints/$resume_checkpoint_name"' in train
 
 
 def test_active_training_and_eval_surfaces_have_no_target_arrow_profile() -> None:
@@ -334,7 +494,7 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
     assert not trace.exists() or "train:" not in trace.read_text(encoding="utf-8")
 
     run_dir = tmp_path / "interrupted"
-    (run_dir / "checkpoints" / "000002").mkdir(parents=True)
+    (run_dir / "checkpoints" / "001946").mkdir(parents=True)
     plan = {
         "training_variant": "treatment",
         "base_policy_revision": "6721902bc4d61e50a3bfdb11dfb4cb626f05d102",
@@ -377,8 +537,9 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
     incompatible_plan = dict(plan)
     incompatible_plan["training_variant"] = "no_arrow_treatment"
     (run_dir / "training_plan.json").write_text(json.dumps(incompatible_plan), encoding="utf-8")
-    inside = run_dir / "checkpoints" / "000002" / "pretrained_model" / "train_config.json"
+    inside = run_dir / "checkpoints" / "001946" / "pretrained_model" / "train_config.json"
     inside.parent.mkdir(parents=True, exist_ok=True)
+    _seed_resume_checkpoint(inside.parent)
     inside.write_text("{}", encoding="utf-8")
     incompatible = _run(script, ["resume", "--profile", "treatment", "--run-dir", _bash_path(run_dir)], env)
     assert incompatible.returncode != 0
@@ -389,9 +550,10 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
     assert completed.returncode != 0
 
     compatible = tmp_path / "compatible"
-    (compatible / "checkpoints" / "000002" / "pretrained_model").mkdir(parents=True)
+    (compatible / "checkpoints" / "001946" / "pretrained_model").mkdir(parents=True)
+    _seed_resume_checkpoint(compatible / "checkpoints" / "001946" / "pretrained_model")
     plan["output_dir"] = _bash_path(compatible)
-    (compatible / "checkpoints" / "000002" / "pretrained_model" / "train_config.json").write_text(
+    (compatible / "checkpoints" / "001946" / "pretrained_model" / "train_config.json").write_text(
         json.dumps(
             {
                 "dataset": {"repo_id": "local/libero_spatial_treatment", "root": _bash_path(data_root / "treatment")},
@@ -407,6 +569,9 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
     )
     pending = compatible.with_name(compatible.name + ".training_plan.pending.json")
     pending.write_text(json.dumps(plan), encoding="utf-8")
+    (compatible.with_name(compatible.name + ".expected_adapter_inventory.pending.json")).write_text(
+        json.dumps(_expected_inventory_fixture(_bash_path(base_policy))), encoding="utf-8"
+    )
     pending_payload = pending.read_text(encoding="utf-8")
     (compatible.with_name(compatible.name + ".run_provenance.pending.json")).write_text(
         json.dumps(
@@ -437,10 +602,11 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
     assert not pending.exists()
 
     bad_provenance = tmp_path / "bad-preserved-provenance"
-    (bad_provenance / "checkpoints" / "000002" / "pretrained_model").mkdir(parents=True)
+    (bad_provenance / "checkpoints" / "001946" / "pretrained_model").mkdir(parents=True)
+    _seed_resume_checkpoint(bad_provenance / "checkpoints" / "001946" / "pretrained_model")
     bad_plan = dict(plan)
     bad_plan["output_dir"] = _bash_path(bad_provenance)
-    (bad_provenance / "checkpoints" / "000002" / "pretrained_model" / "train_config.json").write_text(
+    (bad_provenance / "checkpoints" / "001946" / "pretrained_model" / "train_config.json").write_text(
         json.dumps(
             {
                 "dataset": {"repo_id": "local/libero_spatial_treatment", "root": _bash_path(data_root / "treatment")},
@@ -484,7 +650,8 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
     assert trace_after_bad.count("train:") == trace_before_bad.count("train:")
 
     mismatched_config = tmp_path / "mismatched-train-config"
-    (mismatched_config / "checkpoints" / "000002" / "pretrained_model").mkdir(parents=True)
+    (mismatched_config / "checkpoints" / "001946" / "pretrained_model").mkdir(parents=True)
+    _seed_resume_checkpoint(mismatched_config / "checkpoints" / "001946" / "pretrained_model")
     mismatched_plan = dict(plan)
     mismatched_plan["output_dir"] = _bash_path(mismatched_config)
     (mismatched_config / "training_plan.json").write_text(json.dumps(mismatched_plan), encoding="utf-8")
@@ -506,7 +673,7 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
         ),
         encoding="utf-8",
     )
-    (mismatched_config / "checkpoints" / "000002" / "pretrained_model" / "train_config.json").write_text(
+    (mismatched_config / "checkpoints" / "001946" / "pretrained_model" / "train_config.json").write_text(
         json.dumps(
             {
                 "dataset": {"repo_id": "local/libero_spatial_treatment", "root": _bash_path(data_root / "treatment")},
@@ -718,6 +885,9 @@ def test_interrupted_resume_audits_are_append_only_and_bind_final_manifest(tmp_p
         "flags": {"seed": 1000, "peft_r": 16, "batch_size": 32, "steps": 29190, "save_freq": 1946},
     }
     (run_dir / "checkpoints").mkdir(parents=True)
+    (run_dir / "expected_adapter_inventory.json").write_text(
+        json.dumps(_expected_inventory_fixture(_bash_path(base_policy))), encoding="utf-8"
+    )
     (run_dir / "training_plan.json").write_text(json.dumps(plan), encoding="utf-8")
     (run_dir / "run_provenance.json").write_text(
         json.dumps(
@@ -741,6 +911,16 @@ def test_interrupted_resume_audits_are_append_only_and_bind_final_manifest(tmp_p
     def config_for(step: int, *, seed: int = 1000) -> Path:
         config = run_dir / "checkpoints" / f"{step:06d}" / "pretrained_model" / "train_config.json"
         config.parent.mkdir(parents=True, exist_ok=True)
+        state = config.parent.parent / "training_state"
+        state.mkdir(parents=True, exist_ok=True)
+        (config.parent / "adapter_model.safetensors").write_bytes(b"adapter")
+        (config.parent / "adapter_config.json").write_text("{}", encoding="utf-8")
+        (config.parent / "adapter_audit.json").write_text(
+            json.dumps({"expected_inventory_sha256": "fake-inventory"}), encoding="utf-8"
+        )
+        (state / "optimizer.pt").write_bytes(b"optimizer")
+        (state / "scheduler.pt").write_bytes(b"scheduler")
+        (state / "random_states_0.pkl").write_bytes(b"rng")
         config.write_text(
             json.dumps(
                 {
@@ -760,7 +940,7 @@ def test_interrupted_resume_audits_are_append_only_and_bind_final_manifest(tmp_p
 
     fail_flag = tmp_path / "resume_fail.flag"
     fail_flag.write_text("fail interrupted attempts", encoding="utf-8")
-    step2 = config_for(2)
+    step2 = config_for(1946)
     first = _run(script, ["resume", "--profile", "treatment", "--run-dir", _bash_path(run_dir), "--python", _bash_path(tmp_path / "python_stub")], env)
     assert first.returncode != 0
     audit_dir = run_dir / "resume_audits"
@@ -772,12 +952,12 @@ def test_interrupted_resume_audits_are_append_only_and_bind_final_manifest(tmp_p
     assert [p.name for p in audit_dir.glob("*.json")] == ["000001.json"]
     assert (audit_dir / "000001.json").read_text(encoding="utf-8") == first_record
 
-    rollback = config_for(1)
+    rollback = config_for(1000)
     rollback_result = _run(script, ["resume", "--profile", "treatment", "--run-dir", _bash_path(run_dir), "--resume-config", _bash_path(rollback), "--python", _bash_path(tmp_path / "python_stub")], env)
     assert rollback_result.returncode != 0
     assert [p.name for p in audit_dir.glob("*.json")] == ["000001.json"]
 
-    step4 = config_for(4)
+    step4 = config_for(3892)
     newer = _run(script, ["resume", "--profile", "treatment", "--run-dir", _bash_path(run_dir), "--resume-config", _bash_path(step4), "--python", _bash_path(tmp_path / "python_stub")], env)
     assert newer.returncode != 0
     assert sorted(p.name for p in audit_dir.glob("*.json")) == ["000001.json", "000002.json"], newer.stdout + newer.stderr

@@ -51,7 +51,7 @@ abs_executable_path() {
 }
 
 usage() {
-  echo "Usage: $0 <setup|dry|smoke|full|resume|eval> --profile <treatment|no-arrow> [--run-dir PATH] [--seeds LIST] [--output-root PATH]"
+  echo "Usage: $0 <setup|dry|smoke|full|resume|eval> --profile <treatment|no-arrow|graph|arrow-graph> [--run-dir PATH] [--seeds LIST] [--output-root PATH]"
 }
 [[ -n "$ACTION" ]] || { usage; exit 2; }
 case "$ACTION" in setup|dry|smoke|full|resume|eval) ;; -h|--help) usage; exit 0 ;; *) usage >&2; exit 2 ;; esac
@@ -75,8 +75,16 @@ done
 case "$PROFILE" in
   treatment) PROFILE_CANONICAL=treatment ;;
   no-arrow) PROFILE_CANONICAL=no_arrow_treatment ;;
-  *) echo "--profile must be treatment or no-arrow" >&2; exit 2 ;;
+  graph) PROFILE_CANONICAL=graph_treatment ;;
+  arrow-graph) PROFILE_CANONICAL=arrow_graph_treatment ;;
+  graph_treatment) PROFILE_CANONICAL=graph_treatment ;;
+  arrow_graph_treatment) PROFILE_CANONICAL=arrow_graph_treatment ;;
+  *) echo "--profile must be treatment, no-arrow, graph, or arrow-graph" >&2; exit 2 ;;
 esac
+if [[ "$PROFILE_CANONICAL" == arrow_graph_treatment && "$ACTION" != setup ]]; then
+  echo "arrow_graph_treatment is prepare-only; training/evaluation is intentionally blocked" >&2
+  exit 2
+fi
 if [[ "$ACTION" != resume && -n "$RESUME_CONFIG_PATH" ]]; then
   echo "--resume-config is valid only with resume" >&2; exit 2
 fi
@@ -117,9 +125,26 @@ export PYTHON
 case "$ACTION" in
   setup)
     bash "$SCRIPT_DIR/bootstrap_lambda_runtime.sh"
-    PYTHON="$PYTHON" bash "$SCRIPT_DIR/prepare_lambda_data.sh" "$PROFILE_CANONICAL"
-    PYTHON="$PYTHON" bash "$SCRIPT_DIR/prepare_base_snapshot.sh"
-    PYTHON="$PYTHON" bash "$SCRIPT_DIR/lambda_preflight.sh" "$PROFILE_CANONICAL"
+    if [[ "$PROFILE_CANONICAL" == graph_treatment || "$PROFILE_CANONICAL" == arrow_graph_treatment ]]; then
+      # Graph preparation is downstream of the historical pair: it must carry
+      # the same source HDF5/provenance contract before adding graph context.
+      PYTHON="$PYTHON" bash "$SCRIPT_DIR/prepare_lambda_data.sh" treatment
+      PYTHON="$PYTHON" bash "$SCRIPT_DIR/prepare_lambda_data.sh" "$PROFILE_CANONICAL"
+    else
+      PYTHON="$PYTHON" bash "$SCRIPT_DIR/prepare_lambda_data.sh" "$PROFILE_CANONICAL"
+    fi
+    BASE_POLICY_REVISION="${BASE_POLICY_REVISION:-6721902bc4d61e50a3bfdb11dfb4cb626f05d102}"
+    BASE_POLICY_PATH="${BASE_POLICY:-$SCRIPT_DIR/base_models/smolvla_libero-$BASE_POLICY_REVISION}"
+    PYTHON="$PYTHON" BASE_POLICY_REVISION="$BASE_POLICY_REVISION" BASE_POLICY_SNAPSHOT="$BASE_POLICY_PATH" \
+      bash "$SCRIPT_DIR/prepare_base_snapshot.sh"
+    if [[ "$PROFILE_CANONICAL" == graph_treatment || "$PROFILE_CANONICAL" == arrow_graph_treatment ]]; then
+      GRAPH_BASE_POLICY_PATH="${GRAPH_BASE_POLICY:-$SCRIPT_DIR/base_models/smolvla_libero-$BASE_POLICY_REVISION-graph96}"
+      "$PYTHON" "$SCRIPT_DIR/prompt_audit.py" --prepare-graph-policy "$BASE_POLICY_PATH" "$GRAPH_BASE_POLICY_PATH"
+      "$PYTHON" "$SCRIPT_DIR/prompt_audit.py" --verify-graph-policy "$GRAPH_BASE_POLICY_PATH"
+      BASE_POLICY="$GRAPH_BASE_POLICY_PATH" PYTHON="$PYTHON" bash "$SCRIPT_DIR/lambda_preflight.sh" "$PROFILE_CANONICAL"
+    else
+      BASE_POLICY="$BASE_POLICY_PATH" PYTHON="$PYTHON" bash "$SCRIPT_DIR/lambda_preflight.sh" "$PROFILE_CANONICAL"
+    fi
     ;;
   dry|smoke|full|resume)
     if [[ "$ACTION" == dry ]]; then
@@ -141,7 +166,36 @@ case "$ACTION" in
     [[ -n "$SEEDS" ]] || { echo "eval requires explicit --seeds" >&2; exit 2; }
     [[ -f "$RUN_DIR/training_manifest.json" ]] || { echo "training_manifest.json missing: $RUN_DIR" >&2; exit 1; }
     [[ -n "$OUTPUT_ROOT" ]] || OUTPUT_ROOT="$RUN_DIR/eval"
-    if [[ "$PROFILE_CANONICAL" == treatment ]]; then
+    if [[ "$PROFILE_CANONICAL" == arrow_graph_treatment ]]; then
+      echo "arrow_graph_treatment is prepare-only and has no evaluation cell" >&2
+      exit 2
+    elif [[ "$PROFILE_CANONICAL" == graph_treatment ]]; then
+    [[ "$SEEDS" == "1000" || "$SEEDS" == "[1000]" ]] || { echo "graph pilot evaluation is sealed to --seeds 1000" >&2; exit 2; }
+    mapfile -t graph_values < <("$PYTHON" - "$RUN_DIR/training_manifest.json" <<'PY'
+import json, pathlib, sys
+data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if data.get("experiment") != "smolvla_lora_graph_treatment_training":
+    raise SystemExit("evaluation requires a graph_treatment training manifest")
+if data.get("training_variant") != "graph_treatment" or data.get("dataset_variant") != "graph_treatment":
+    raise SystemExit("evaluation requires graph_treatment dataset lineage")
+if data.get("trained_on_visual_condition") != "no_arrows":
+    raise SystemExit("graph evaluation requires no-arrows training provenance")
+adapter = data.get("graph_treatment_adapter", {}).get("path")
+if not adapter:
+    raise SystemExit("manifest lacks graph_treatment_adapter.path")
+adapter_path = pathlib.Path(adapter).expanduser()
+adapter_dir = adapter_path.parent if adapter_path.name == "adapter_model.safetensors" else adapter_path
+artifact = adapter_dir / "adapter_model.safetensors"
+if not adapter_dir.is_dir() or adapter_dir.name != "pretrained_model" or not artifact.is_file():
+    raise SystemExit(f"graph pretrained_model adapter directory is missing: {adapter_dir}")
+print(str(adapter_dir.resolve()))
+PY
+    )
+    [[ "${#graph_values[@]}" -eq 1 ]] || { echo "could not derive graph adapter checkpoint" >&2; exit 1; }
+    graph_eval_args=(--adapter-checkpoint "${graph_values[0]}" --training-manifest "$RUN_DIR/training_manifest.json" --output-root "$OUTPUT_ROOT" --seeds "$SEEDS" --episodes "$EPISODES" --batch-size "$BATCH_SIZE" --device "$DEVICE" --max-videos "$MAX_VIDEOS")
+    [[ "$VIDEOS" == true ]] && graph_eval_args+=(--videos) || graph_eval_args+=(--no-videos)
+    "$PYTHON" "$SCRIPT_DIR/run_lora_graph_pair_eval.py" "${graph_eval_args[@]}"
+    elif [[ "$PROFILE_CANONICAL" == treatment ]]; then
     mapfile -t values < <("$PYTHON" - "$RUN_DIR/training_manifest.json" <<'PY'
 import hashlib, json, pathlib, sys
 d=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))

@@ -31,6 +31,24 @@ case "$VARIANT" in
     PAIR_KIND="sealed_lora_control_treatment"
     CONVERTER_MODE="preflight"
     ;;
+  graph_treatment)
+    DATASET_VARIANT="graph_treatment"
+    REQUIRED_PAIR_VARIANT="arrow_graph_treatment"
+    DATASET_REPO_ID="local/libero_spatial_graph_treatment"
+    PAIR_MANIFEST_NAME="sealed_lora_graph_pair_manifest.json"
+    PAIR_SENTINEL_NAME="sealed_lora_graph_pair_verified.json"
+    PAIR_KIND="sealed_lora_graph_treatment_arrow_graph_treatment"
+    CONVERTER_MODE="preflight-graph"
+    ;;
+  arrow_graph_treatment)
+    DATASET_VARIANT="arrow_graph_treatment"
+    REQUIRED_PAIR_VARIANT="graph_treatment"
+    DATASET_REPO_ID="local/libero_spatial_arrow_graph_treatment"
+    PAIR_MANIFEST_NAME="sealed_lora_graph_pair_manifest.json"
+    PAIR_SENTINEL_NAME="sealed_lora_graph_pair_verified.json"
+    PAIR_KIND="sealed_lora_graph_treatment_arrow_graph_treatment"
+    CONVERTER_MODE="preflight-graph"
+    ;;
   *) fail() { echo "LAMBDA PREFLIGHT FAILED: unsupported profile $VARIANT" >&2; exit 2; }; fail ;;
 esac
 REVISION="${BASE_POLICY_REVISION:-6721902bc4d61e50a3bfdb11dfb4cb626f05d102}"
@@ -70,7 +88,15 @@ for name, expected in data.get("files", {}).items():
     if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
         raise SystemExit(f"base snapshot file hash mismatch: {name}")
 PY
-[[ -d "$DATA_ROOT/control" && -d "$DATA_ROOT/$REQUIRED_PAIR_VARIANT" ]] || fail "control and $REQUIRED_PAIR_VARIANT datasets are required under $DATA_ROOT"
+if [[ "$VARIANT" == graph_treatment || "$VARIANT" == arrow_graph_treatment ]]; then
+  "$PYTHON" "$SCRIPT_DIR/prompt_audit.py" --verify-graph-policy "$BASE" \
+    || fail "graph base snapshot is not sealed to the effective 96-token LeRobot preprocessor"
+fi
+if [[ "$VARIANT" == graph_treatment || "$VARIANT" == arrow_graph_treatment ]]; then
+  [[ -d "$DATA_ROOT/$DATASET_VARIANT" && -d "$DATA_ROOT/$REQUIRED_PAIR_VARIANT" ]] || fail "$DATASET_VARIANT and $REQUIRED_PAIR_VARIANT graph datasets are required under $DATA_ROOT"
+else
+  [[ -d "$DATA_ROOT/control" && -d "$DATA_ROOT/$REQUIRED_PAIR_VARIANT" ]] || fail "control and $REQUIRED_PAIR_VARIANT datasets are required under $DATA_ROOT"
+fi
 [[ -d "$LIBERO_DATA_DIR" ]] || fail "LIBERO HDF5 source directory missing: $LIBERO_DATA_DIR"
 [[ -d "$LIBERO_DIR/libero/libero/assets" ]] || fail "LIBERO assets missing: $LIBERO_DIR/libero/libero/assets"
 [[ -d "$LIBERO_DIR/libero/libero/bddl_files" ]] || fail "LIBERO BDDL assets missing: $LIBERO_DIR/libero/libero/bddl_files"

@@ -7,11 +7,69 @@ both interactive notebooks and the lerobot eval wrapper.
 
 from __future__ import annotations
 
+import hashlib
 import numpy as np
 from typing import Any
 
 EXCLUDE_PREFIXES = ("robot0", "gripper")
 SETTLE_VEL_THRESHOLD = 0.01  # m/s — below this, an object is considered settled
+
+
+def sim_state_sha256(sim: Any) -> str:
+    """Hash the actual post-randomization simulator state deterministically."""
+    getter = getattr(sim, "get_state", None)
+    if not callable(getter):
+        raise RuntimeError("simulator does not expose get_state(); reset state cannot be audited")
+    state = getter()
+    chunks: list[tuple[str, np.ndarray]] = []
+    if isinstance(state, np.ndarray):
+        chunks.append(("state", state))
+    else:
+        for name in ("time", "qpos", "qvel", "act", "udd_state"):
+            value = getattr(state, name, None)
+            if value is None or isinstance(value, (dict, list)) and name == "udd_state":
+                continue
+            try:
+                array = np.asarray(value)
+            except Exception:
+                continue
+            if array.dtype == object:
+                continue
+            chunks.append((name, array))
+    if not chunks:
+        raise RuntimeError("simulator get_state returned no hashable numeric state")
+    digest = hashlib.sha256()
+    for name, array in chunks:
+        contiguous = np.ascontiguousarray(array)
+        digest.update(name.encode("utf-8") + b"\0")
+        digest.update(str(contiguous.dtype).encode("ascii") + b"\0")
+        digest.update(repr(tuple(contiguous.shape)).encode("ascii") + b"\0")
+        digest.update(contiguous.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def init_state_evidence(env: Any) -> dict[str, Any]:
+    """Capture the exact projected init-state row selected by the next reset."""
+    index = getattr(env, "_init_state_id", getattr(env, "init_state_id", None))
+    states = getattr(env, "_init_states", None)
+    if index is None or states is None:
+        raise RuntimeError("environment lacks init_state_id/_init_states for reset audit")
+    array = np.asarray(states)
+    if array.ndim == 0 or len(array) == 0:
+        raise RuntimeError("environment init-state table is empty")
+    try:
+        selected_index = int(index) % len(array)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("environment init_state_id is invalid") from exc
+    selected = np.asarray(array[selected_index])
+    if selected.dtype == object:
+        raise RuntimeError("selected init-state row is not numeric")
+    contiguous = np.ascontiguousarray(selected)
+    digest = hashlib.sha256()
+    digest.update(str(contiguous.dtype).encode("ascii") + b"\0")
+    digest.update(repr(tuple(contiguous.shape)).encode("ascii") + b"\0")
+    digest.update(contiguous.tobytes(order="C"))
+    return {"selected_index": selected_index, "selected_row_sha256": digest.hexdigest()}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -331,6 +389,22 @@ class SceneRandomizerVecEnvWrapper:
     def reset(self, id=None, **kwargs):
         self._reset_sequence += 1
         reset_sequence = self._reset_sequence
+        # Capture the row that LeRobot is about to select before reset
+        # increments its init_state_id. This is required for paired-cell
+        # evaluation and is deliberately fail-closed.
+        envs_before = _resolve_envs(self.env)
+        # LeRobot's lazy wrapper materializes the underlying environment (and
+        # its projected _init_states table) before reset.  This does not select
+        # or increment a row; reset still owns that operation below.
+        for env_before in envs_before:
+            ensure_env = getattr(env_before, "_ensure_env", None)
+            if callable(ensure_env):
+                ensure_env()
+        ids_before = list(range(len(envs_before))) if id is None else ([id] if isinstance(id, int) else list(id))
+        init_evidence = {
+            env_index: init_state_evidence(envs_before[env_index])
+            for env_index in ids_before
+        }
         result = self.env.reset(**kwargs) if id is None else self.env.reset(id=id, **kwargs)
         returns_info = isinstance(result, tuple) and len(result) == 2
         obs = result[0] if returns_info else result
@@ -359,9 +433,10 @@ class SceneRandomizerVecEnvWrapper:
                     raise RuntimeError(f"task {self.task_id} init-state projection failed: {projection}")
                 inner_env.sim.forward()
                 self._verify_protected(inner_env, protected)
-                reset_evidence.append((env_index, removed, projection, protected))
+                state_hash = sim_state_sha256(inner_env.sim)
+                reset_evidence.append((env_index, removed, projection, protected, state_hash, init_evidence[env_index]))
             if self.audit_logger is not None:
-                for env_index, removed, projection, protected in reset_evidence:
+                for env_index, removed, projection, protected, state_hash, init_state in reset_evidence:
                     self.audit_logger.log(
                         task_id=self.task_id,
                         env_index=env_index,
@@ -374,7 +449,7 @@ class SceneRandomizerVecEnvWrapper:
                             "scene_layout": False,
                             "object_removal": bool(self.removal_config.get(self.task_id)),
                         },
-                        details={"swaps": [], "removed": removed, "projection": projection, "protected": self._protected_evidence(protected), "status": "environment_ok"},
+                        details={"swaps": [], "removed": removed, "projection": projection, "protected": self._protected_evidence(protected), "sim_state_sha256": state_hash, "init_state": init_state, "status": "environment_ok"},
                     )
             return result
         envs = _resolve_envs(self.env)
@@ -412,6 +487,7 @@ class SceneRandomizerVecEnvWrapper:
             self._restore_protected(inner_env, protected)
             inner_env.sim.forward()
             self._verify_protected(inner_env, protected)
+            state_hash = sim_state_sha256(inner_env.sim)
             realized_layout.append({
                 "configured": self.swaps,
                 "applied": [label for result in layout_results for label in result.get("applied", [])],
@@ -419,6 +495,8 @@ class SceneRandomizerVecEnvWrapper:
                 "removed": removed,
                 "projection": projection,
                 "protected": self._protected_evidence(protected),
+                "sim_state_sha256": state_hash,
+                "init_state": init_evidence[env_index],
             })
             inner_env.sim.forward()
             raw_obs = inner_env.env._get_observations(force_update=True)
@@ -438,6 +516,8 @@ class SceneRandomizerVecEnvWrapper:
                         "removed": evidence["removed"],
                         "projection": evidence["projection"],
                         "protected": evidence["protected"],
+                        "sim_state_sha256": evidence["sim_state_sha256"],
+                        "init_state": evidence["init_state"],
                         "status": "environment_ok",
                     },
                 )
