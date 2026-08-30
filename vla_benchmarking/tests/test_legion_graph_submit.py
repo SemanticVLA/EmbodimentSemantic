@@ -29,6 +29,10 @@ def test_graph_pilot_submitter_has_sealed_chain_and_no_arrow_graph_run():
     assert "--dependency=afterok:$train_job_id" in text
     assert "setup-only" not in text.lower() or "setup/smoke" in text
     assert "sacct -j \"$setup_job_id\"" in text
+    assert "scontrol show job -o \"$setup_job_id\"" in text
+    assert "JobState=COMPLETED" in text
+    assert "ExitCode=0:0" in text
+    assert "setup_state_source='scontrol'" in text
     assert "TRAINING_PROFILE=graph_treatment" in text
     assert "TRAINING_MODE=full" in text
     assert "BATCH_SIZE=32 SEED=1000 PEFT_R=16" in text

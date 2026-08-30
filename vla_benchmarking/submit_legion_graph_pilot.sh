@@ -119,8 +119,24 @@ if actual != listed:
     raise SystemExit("setup archive inventory is incomplete")
 PY_SETUP_ARCHIVE
   [[ -s "$job_dir/setup.sbatch" && -s "$job_dir/train.sbatch" && -s "$job_dir/eval.sbatch" ]] || { echo 'setup job scripts are missing' >&2; exit 1; }
-  command -v sacct >/dev/null 2>&1 || { echo 'sacct is required to prove setup completion before launch' >&2; exit 1; }
-  setup_slurm_state="$(sacct -j "$setup_job_id" -X -n -o State | tr -d '[:space:]')"
+  # Legion accounting may be temporarily unavailable. Prefer sacct when it
+  # responds, but fall back to the controller's retained terminal record while
+  # it is still available; never treat an empty/failed query as completion.
+  setup_slurm_state=''
+  setup_state_source=''
+  if command -v sacct >/dev/null 2>&1; then
+    setup_slurm_state="$(sacct -j "$setup_job_id" -X -n -o State 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "$setup_slurm_state" == COMPLETED ]]; then
+      setup_state_source='sacct'
+    fi
+  fi
+  if [[ "$setup_slurm_state" != COMPLETED ]] && command -v scontrol >/dev/null 2>&1; then
+    setup_controller_state="$(scontrol show job -o "$setup_job_id" 2>/dev/null || true)"
+    if [[ "$setup_controller_state" == *'JobState=COMPLETED'* && "$setup_controller_state" == *'ExitCode=0:0'* ]]; then
+      setup_slurm_state='COMPLETED'
+      setup_state_source='scontrol'
+    fi
+  fi
   [[ "$setup_slurm_state" == COMPLETED ]] || { echo "setup SLURM state is not COMPLETED: $setup_slurm_state" >&2; exit 1; }
   setup_status=OK
 fi
