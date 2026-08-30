@@ -1028,14 +1028,21 @@ def run_convert_graph_pair(args: argparse.Namespace) -> None:
                         task_text=base_task_text,
                         is_drawer_task="in_the_top_drawer" in TASK_NAMES[task_id],
                     )
+                    # LeRobot 0.5.2's DatasetWriter.add_frame() removes the
+                    # ``task`` field from the caller-owned frame dictionary.
+                    # Snapshot the prompt and digest before either writer sees
+                    # the frames, then append the audit record only after both
+                    # writes have succeeded.
+                    graph_prompt = graph_frame["task"]
+                    graph_prompt_sha256 = hashlib.sha256(graph_prompt.encode("utf-8")).hexdigest()
                     graph_dataset.add_frame(graph_frame)
                     arrow_graph_dataset.add_frame(arrow_graph_frame)
                     graph_prompt_records.append({
                         "frame_index": demo_frames,
-                        "prompt": graph_frame["task"],
+                        "prompt": graph_prompt,
                         "triplets": [list(item) for item in relations],
                         "triplet_sha256": canonical_json_sha256(relations),
-                        "prompt_sha256": hashlib.sha256(graph_frame["task"].encode("utf-8")).hexdigest(),
+                        "prompt_sha256": graph_prompt_sha256,
                         "arrow_pixels": bool(np.any(arrow_mask)),
                     })
                     demo_frames += 1

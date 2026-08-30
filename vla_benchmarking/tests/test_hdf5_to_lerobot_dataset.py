@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -18,6 +19,8 @@ from hdf5_to_lerobot_dataset import (
     GRAPH_CONTRACT,
     GRAPH_EXTRACTOR_PATH,
     GRAPH_PAIR_KIND,
+    GRAPH_TREATMENT_VARIANT,
+    ARROW_GRAPH_TREATMENT_VARIANT,
     REPO_ROOT,
     SEALED_LORA_IMAGE_SIZE,
     SEALED_LORA_VISUAL_CONTRACT,
@@ -34,7 +37,9 @@ from hdf5_to_lerobot_dataset import (
     main_image_change_mask,
     resize_rgb_image,
     run_convert_pair,
+    run_convert_graph_pair,
     run_verify,
+    run_verify_graph_pair,
     sealed_pair_manifest_path,
     sealed_pair_sentinel_path,
     sealed_target_arrow_pair_manifest_path,
@@ -495,6 +500,38 @@ def test_pair_converter_verifier_rejects_tampered_stored_main_image(tmp_path):
         assert "subset smoke" in str(exc)
     else:
         raise AssertionError("one-task target-arrow sentinel must be rejected for launch")
+
+    # Exercise the graph path with the real LeRobot writer.  Its add_frame()
+    # mutates the caller frame by removing ``task``; conversion must therefore
+    # preserve the prompt audit before handing either frame to the writer.
+    graph_args = argparse.Namespace(
+        data_dir=tmp_path,
+        output_root=args.output_root,
+        tasks=[0],
+        demos_per_task=1,
+        allow_subset=True,
+    )
+    run_convert_graph_pair(graph_args)
+    graph_manifest = json.loads(
+        (args.output_root / "sealed_lora_graph_pair_manifest.json").read_text(encoding="utf-8")
+    )
+    graph_prompt_records = graph_manifest["tasks"][0]["demos"][0]["graph_prompt_records"]
+    assert len(graph_prompt_records) == 2
+    for record in graph_prompt_records:
+        assert record["prompt"]
+        assert record["prompt_sha256"] == hashlib.sha256(record["prompt"].encode("utf-8")).hexdigest()
+    run_verify_graph_pair(graph_args)
+    assert (args.output_root / "sealed_lora_graph_pair_verified.json").is_file()
+    graph_sentinel = validate_verified_pair(
+        args.output_root,
+        require_full_experiment=False,
+        graph=True,
+    )
+    assert graph_sentinel["pair_kind"] == GRAPH_PAIR_KIND
+    assert set(graph_sentinel["dataset_fingerprints"]) == {
+        GRAPH_TREATMENT_VARIANT,
+        ARROW_GRAPH_TREATMENT_VARIANT,
+    }
 
     try:
         validate_verified_pair(args.output_root)
