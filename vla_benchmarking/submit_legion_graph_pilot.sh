@@ -262,10 +262,11 @@ case "\$graph_artifact_count" in
   4)
     # A historical verify pass rewrites its timestamped sentinel and would
     # invalidate the immutable graph manifest binding.  Preflight validates
-    # the existing historical sentinel without changing its bytes; the graph
-    # verifier then rechecks source-grounded frames and both dataset pairs.
+    # the existing historical sentinel without changing its bytes.  The graph
+    # pair was source-grounded by the standalone verification repair job; its
+    # immutable sentinel is rechecked here without another full frame traversal.
     "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode preflight --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
-    "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode verify-graph --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
+    "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode preflight-graph --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
     ;;
   *)
     die 'partial graph dataset/pair artifacts found; refusing to generate or overwrite them'
