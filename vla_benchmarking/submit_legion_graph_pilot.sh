@@ -260,7 +260,7 @@ case "\$graph_artifact_count" in
     "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode verify-graph --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
     ;;
   4)
-    # A historical `verify` pass rewrites its timestamped sentinel and would
+    # A historical verify pass rewrites its timestamped sentinel and would
     # invalidate the immutable graph manifest binding.  Preflight validates
     # the existing historical sentinel without changing its bytes; the graph
     # verifier then rechecks source-grounded frames and both dataset pairs.
