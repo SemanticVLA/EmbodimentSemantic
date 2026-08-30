@@ -102,14 +102,14 @@ setup_job_id=''; train_job_id=''; eval_job_id=''
 setup_status=QUEUED; train_status=BLOCKED; eval_status=BLOCKED
 setup_dependency=''; train_dependency='afterok:SETUP_JOB_ID'; eval_dependency='afterok:TRAIN_JOB_ID'
 sha256_file() { sha256sum "$1" | awk '{print $1}'; }
-submit_id() { local raw="$1" id="${raw%%;*}"; [[ "$id" =~ ^[0-9]+$ ]] || { echo "invalid sbatch job id: $raw" >&2; exit 1; }; printf '%s\n' "$id"; }
+submit_id() { local raw="$1"; local id="${raw%%;*}"; [[ "$id" =~ ^[0-9]+$ ]] || { echo "invalid sbatch job id: $raw" >&2; exit 1; }; printf '%s\n' "$id"; }
 write_state() {
   local tmp="${STATE_FILE}.tmp.$$"
   {
     printf 'label=%s\nstate_file=%s\nexpected_repo_commit=%s\nlibero_commit=%s\nbase_policy_revision=%s\n' "$LABEL" "$STATE_FILE" "$EXPECTED_REPO_COMMIT" "$LIBERO_COMMIT" "$BASE_POLICY_REVISION"
     printf 'policy_id=%s\ntraining_profile=%s\ntraining_steps=%s\ntraining_save_freq=%s\ntraining_batch_size=%s\ntraining_seed=%s\npeft_r=%s\n' "$POLICY_ID" "$PROFILE" "$SEALED_STEPS" "$SEALED_SAVE_FREQ" "$SEALED_BATCH_SIZE" "$SEALED_SEED" "$SEALED_PEFT_R"
     printf 'repo=%s\nruntime_root=%s\nscratch_root=%s\narchive_root=%s\ndata_root=%s\nlibero_data_dir=%s\nlibero_dir=%s\nbase_policy=%s\nlibero_config=%s\n' "$REPO" "$RUNTIME" "$SCRATCH_ROOT" "$ARCHIVE_ROOT" "$DATA_ROOT" "$LIBERO_DATA_DIR" "$LIBERO_DIR" "$BASE_POLICY" "$LIBERO_CONFIG"
-    printf 'action_only_checkpoint=%s\naction_only_training_manifest=%s\nsmoke_root=%s\ntraining_root=%s\nevaluation_root=%s\n' "$ACTION_ONLY_CHECKPOINT" "$ACTION_ONLY_TRAINING_MANIFEST" "$SMOKE_ROOT" "$TRAIN_ROOT" "$EVAL_ROOT"
+    printf 'action_only_checkpoint=%s\naction_only_training_manifest=%s\nlegacy_evidence_bundle=%s\nsmoke_root=%s\ntraining_root=%s\nevaluation_root=%s\n' "$ACTION_ONLY_CHECKPOINT" "$ACTION_ONLY_TRAINING_MANIFEST" "$STATE_DIR/legacy_action_only_evidence_v1" "$SMOKE_ROOT" "$TRAIN_ROOT" "$EVAL_ROOT"
     printf 'setup_job_id=%s\ntrain_job_id=%s\neval_job_id=%s\nsetup_dependency=%s\ntrain_dependency=%s\neval_dependency=%s\nsetup_status=%s\ntrain_status=%s\neval_status=%s\n' "$setup_job_id" "$train_job_id" "$eval_job_id" "$setup_dependency" "$train_dependency" "$eval_dependency" "$setup_status" "$train_status" "$eval_status"
     printf 'setup_template_sha256=%s\ntrain_template_sha256=%s\neval_template_sha256=%s\n' "${setup_template_sha256:-}" "${train_template_sha256:-}" "${eval_template_sha256:-}"
   } > "$tmp"
@@ -134,8 +134,8 @@ cat > "$JOB_DIR/setup.sbatch" <<EOF
 #SBATCH --error=${RUNTIME}/operator/logs/%x_%j.err
 set -Eeuo pipefail
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl TOKENIZERS_PARALLELISM=false
-REPO='${REPO}'; RUNTIME='${RUNTIME}'; SCRATCH_ROOT='${SCRATCH_ROOT}'; ARCHIVE_ROOT='${ARCHIVE_ROOT}'; STATE_FILE='${STATE_FILE}'; PYTHON='${PYTHON}'; EXPECTED_REPO_COMMIT='${EXPECTED_REPO_COMMIT}'; LIBERO_COMMIT='${LIBERO_COMMIT}'; BASE_POLICY_REVISION='${BASE_POLICY_REVISION}'; LABEL='${LABEL}'
-DATA_ROOT='${DATA_ROOT}'; LIBERO_DATA_DIR='${LIBERO_DATA_DIR}'; LIBERO_DIR='${LIBERO_DIR}'; BASE_POLICY='${BASE_POLICY}'; LIBERO_CONFIG='${LIBERO_CONFIG}'; ACTION_ONLY_CHECKPOINT='${ACTION_ONLY_CHECKPOINT}'; ACTION_ONLY_TRAINING_MANIFEST='${ACTION_ONLY_TRAINING_MANIFEST}'; SMOKE_ROOT='${SMOKE_ROOT}'; ARCHIVE_DIR="\$ARCHIVE_ROOT/setup/${LABEL}_\$SLURM_JOB_ID"; EVIDENCE="\$SCRATCH_ROOT/runs/${LABEL}_setup_\$SLURM_JOB_ID"
+REPO='${REPO}'; RUNTIME='${RUNTIME}'; SCRATCH_ROOT='${SCRATCH_ROOT}'; ARCHIVE_ROOT='${ARCHIVE_ROOT}'; STATE_DIR='${STATE_DIR}'; STATE_FILE='${STATE_FILE}'; PYTHON='${PYTHON}'; EXPECTED_REPO_COMMIT='${EXPECTED_REPO_COMMIT}'; LIBERO_COMMIT='${LIBERO_COMMIT}'; BASE_POLICY_REVISION='${BASE_POLICY_REVISION}'; LABEL='${LABEL}'
+DATA_ROOT='${DATA_ROOT}'; LIBERO_DATA_DIR='${LIBERO_DATA_DIR}'; LIBERO_DIR='${LIBERO_DIR}'; BASE_POLICY='${BASE_POLICY}'; LIBERO_CONFIG='${LIBERO_CONFIG}'; ACTION_ONLY_CHECKPOINT='${ACTION_ONLY_CHECKPOINT}'; ACTION_ONLY_TRAINING_MANIFEST='${ACTION_ONLY_TRAINING_MANIFEST}'; SMOKE_ROOT='${SMOKE_ROOT}'; LEGACY_EVIDENCE_BUNDLE="\$STATE_DIR/legacy_action_only_evidence_v1"; ARCHIVE_DIR="\$ARCHIVE_ROOT/setup/${LABEL}_\$SLURM_JOB_ID"; EVIDENCE="\$SCRATCH_ROOT/runs/${LABEL}_setup_\$SLURM_JOB_ID"
 die() { echo "action-visual setup: \$*" >&2; exit 1; }
 copy_tree() { local src="\$1" dst="\$2"; [[ -e "\$src" ]] || return 1; mkdir -p "\$dst"; if command -v rsync >/dev/null 2>&1; then rsync -a "\$src/" "\$dst/"; else cp -a "\$src/." "\$dst/"; fi; }
 seal_tree() { \$PYTHON - "\$1" "\$2" <<'PY_SEAL'
@@ -157,15 +157,12 @@ else:
  if actual!=listed: raise SystemExit('archive inventory is incomplete')
 PY_SEAL
 }
-finish() { local rc=\$? arc=0; trap - EXIT; set +e; mkdir -p "\$EVIDENCE"; printf 'slurm_job_id=%s\\nslurm_job_name=%s\\nexit_code=%s\\n' "\${SLURM_JOB_ID:-}" "\${SLURM_JOB_NAME:-}" "\$rc" > "\$EVIDENCE/status.env"; mkdir -p "\$ARCHIVE_DIR"; copy_tree "\$EVIDENCE" "\$ARCHIVE_DIR" || arc=\$?; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" build || arc=\$?; fi; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || arc=\$?; fi; printf 'archive_status=%s\\n' "\$([[ \$arc -eq 0 ]] && echo VERIFIED || echo FAILED)" > "\$EVIDENCE/archive_status.env"; printf 'setup_archive_status=%s\\nsetup_archive_tree_sha256=%s\\nsetup_status=%s\\n' "\$([[ \$arc -eq 0 ]] && echo VERIFIED || echo FAILED)" "\$([[ \$arc -eq 0 ]] && tr -d '[:space:]' < \"\$ARCHIVE_DIR/tree_sha256\" || true)" "\$([[ \$rc -eq 0 && \$arc -eq 0 ]] && echo OK || echo FAILED)" >> "\$STATE_FILE"; [[ \$rc -eq 0 && \$arc -eq 0 ]] || rc=90; exit \$rc; }; trap finish EXIT
+finish() { local rc=\$? arc=0 tree=''; trap - EXIT; set +e; mkdir -p "\$EVIDENCE"; printf 'slurm_job_id=%s\\nslurm_job_name=%s\\nexit_code=%s\\n' "\${SLURM_JOB_ID:-}" "\${SLURM_JOB_NAME:-}" "\$rc" > "\$EVIDENCE/status.env"; mkdir -p "\$ARCHIVE_DIR"; copy_tree "\$EVIDENCE" "\$ARCHIVE_DIR" || arc=\$?; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" build || arc=\$?; fi; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || arc=\$?; fi; if [[ \$arc -eq 0 ]]; then tree="\$(tr -d '[:space:]' < "\$ARCHIVE_DIR/tree_sha256")"; fi; printf 'archive_status=%s\\n' "\$([[ \$arc -eq 0 ]] && echo VERIFIED || echo FAILED)" > "\$EVIDENCE/archive_status.env"; printf 'setup_archive_status=%s\\nsetup_archive_tree_sha256=%s\\nsetup_status=%s\\n' "\$([[ \$arc -eq 0 ]] && echo VERIFIED || echo FAILED)" "\$tree" "\$([[ \$rc -eq 0 && \$arc -eq 0 ]] && echo OK || echo FAILED)" >> "\$STATE_FILE"; [[ \$rc -eq 0 && \$arc -eq 0 ]] || rc=90; exit \$rc; }; trap finish EXIT
 [[ -d "\$REPO/.git" && "\$(git -C "\$REPO" rev-parse HEAD)" == "\$EXPECTED_REPO_COMMIT" ]] || die 'repository commit drift'; [[ -z "\$(git -C "\$REPO" status --porcelain --untracked-files=all)" ]] || die 'repository is dirty'; [[ -d "\$LIBERO_DIR/.git" && "\$(git -C "\$LIBERO_DIR" rev-parse HEAD)" == "\$LIBERO_COMMIT" ]] || die 'LIBERO checkout is not pinned'; [[ -z "\$(git -C "\$LIBERO_DIR" status --porcelain --untracked-files=no)" ]] || die 'LIBERO checkout is dirty'; [[ -f "\$LIBERO_CONFIG" && -d "\$BASE_POLICY" && -f "\$BASE_POLICY/config.json" && -f "\$BASE_POLICY/base_snapshot_manifest.json" ]] || die 'pinned LIBERO config/base snapshot is missing'; [[ -d "\$LIBERO_DATA_DIR" && -f "\$DATA_ROOT/sealed_lora_pair_manifest.json" && -f "\$DATA_ROOT/sealed_lora_pair_verified.json" ]] || die 'verified no-arrow dataset pair is missing'
 module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"; export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$(dirname "\$LIBERO_CONFIG")" LIBERO_CONFIG="\$LIBERO_CONFIG" BASE_POLICY="\$BASE_POLICY" BASE_POLICY_REVISION="\$BASE_POLICY_REVISION" DATA_ROOT="\$DATA_ROOT" LIBERO_DATA_DIR="\$LIBERO_DATA_DIR" LIBERO_DIR="\$LIBERO_DIR" LIBERO_COMMIT="\$LIBERO_COMMIT" TRAINING_PROFILE=no_arrow_treatment PROFILE=no_arrow_treatment DEVICE=cuda RANDOMIZE_SCENES=1 VISUAL_CONDITION=none VISUAL_ARROWS=0
-\$PYTHON - "\$ACTION_ONLY_TRAINING_MANIFEST" "\$ACTION_ONLY_CHECKPOINT" <<'PY_BASELINE'
-import sys
-from pathlib import Path
-from run_lora_policy_pair_eval import _validate_training_provenance
-_validate_training_provenance(Path(sys.argv[1]), Path(sys.argv[2]), 'action_only_lora_v1')
-PY_BASELINE
+[[ ! -e "\$LEGACY_EVIDENCE_BUNDLE" ]] || die 'legacy action-only evidence bundle already exists'
+\$PYTHON "\$REPO/vla_benchmarking/legacy_action_only_evidence.py" build --training-manifest "\$ACTION_ONLY_TRAINING_MANIFEST" --checkpoint "\$ACTION_ONLY_CHECKPOINT" --base-policy "\$BASE_POLICY" --data-root "\$DATA_ROOT" --output-dir "\$LEGACY_EVIDENCE_BUNDLE" || die 'legacy action-only evidence bundle build failed'
+\$PYTHON "\$REPO/vla_benchmarking/legacy_action_only_evidence.py" validate --training-manifest "\$ACTION_ONLY_TRAINING_MANIFEST" --checkpoint "\$ACTION_ONLY_CHECKPOINT" --base-policy "\$BASE_POLICY" --data-root "\$DATA_ROOT" --output-dir "\$LEGACY_EVIDENCE_BUNDLE" || die 'legacy action-only evidence bundle validation failed'
 \$PYTHON - "\$BASE_POLICY/base_snapshot_manifest.json" "\$BASE_POLICY_REVISION" <<'PY_BASE
 import json,sys
 if json.load(open(sys.argv[1])).get('revision') != sys.argv[2]: raise SystemExit('base snapshot revision is not pinned')
@@ -176,9 +173,9 @@ import hashlib,pathlib,sys
 root=pathlib.Path(sys.argv[1]); rows=[(p.relative_to(root).as_posix(),hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(root.rglob('*')) if p.is_file()]; print(hashlib.sha256(repr(rows).encode()).hexdigest())
 PY_HASH
 )"
-\$PYTHON - "\$EVIDENCE/input_provenance.json" "\$ACTION_ONLY_TRAINING_MANIFEST" "\$ACTION_ONLY_CHECKPOINT" "\$DATA_ROOT/sealed_lora_pair_manifest.json" "\$DATA_ROOT/sealed_lora_pair_verified.json" "\$BASE_POLICY/base_snapshot_manifest.json" <<'PY_PROVENANCE'
+\$PYTHON - "\$EVIDENCE/input_provenance.json" "\$LEGACY_EVIDENCE_BUNDLE" "\$DATA_ROOT/sealed_lora_pair_manifest.json" "\$DATA_ROOT/sealed_lora_pair_verified.json" "\$BASE_POLICY/base_snapshot_manifest.json" <<'PY_PROVENANCE'
 import hashlib,json,pathlib,sys
-out,*items=sys.argv[1:]
+out,bundle,*items=sys.argv[1:]
 def digest(path):
  p=pathlib.Path(path).resolve()
  if p.is_dir():
@@ -186,11 +183,10 @@ def digest(path):
   value=hashlib.sha256(json.dumps(rows,sort_keys=True,separators=(',',':')).encode()).hexdigest()
  else: value=hashlib.sha256(p.read_bytes()).hexdigest()
  return {'path':str(p),'sha256':value,'kind':'directory' if p.is_dir() else 'file'}
-manifest=json.loads(pathlib.Path(items[0]).read_text(encoding='utf-8'))
-inventory=manifest['expected_adapter_inventory']['path']; audit=manifest['adapter_audit']['path']
-payload={'repo_commit': '${EXPECTED_REPO_COMMIT}', 'libero_commit': '${LIBERO_COMMIT}', 'base_policy_revision': '${BASE_POLICY_REVISION}', 'files':[digest(p) for p in [*items,inventory,audit]]}
+payload={'repo_commit': '${EXPECTED_REPO_COMMIT}', 'libero_commit': '${LIBERO_COMMIT}', 'base_policy_revision': '${BASE_POLICY_REVISION}', 'legacy_action_only_evidence_bundle': digest(bundle), 'files':[digest(p) for p in items]}
 json.dump(payload,open(out,'w'),indent=2,sort_keys=True)
 PY_PROVENANCE
+copy_tree "\$LEGACY_EVIDENCE_BUNDLE" "\$EVIDENCE/legacy_action_only_evidence_v1" || die 'legacy action-only evidence bundle archival copy failed'
 \$PYTHON "\$REPO/vla_benchmarking/adapter_audit.py" --generate-expected --base-policy "\$BASE_POLICY" --finetuning-policy action_visual_lora_v1 --output "\$EVIDENCE/expected_adapter_inventory.json" || die 'candidate live inventory generation failed'
 \$PYTHON - "\$EVIDENCE/expected_adapter_inventory.json" <<'PY_INV'
 import json,sys
@@ -296,7 +292,7 @@ cat > "$JOB_DIR/eval.sbatch" <<EOF
 #SBATCH --error=${RUNTIME}/operator/logs/%x_%j.err
 set -Eeuo pipefail
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl TOKENIZERS_PARALLELISM=false
-REPO='${REPO}'; RUNTIME='${RUNTIME}'; SCRATCH_ROOT='${SCRATCH_ROOT}'; ARCHIVE_ROOT='${ARCHIVE_ROOT}'; STATE_FILE='${STATE_FILE}'; PYTHON='${PYTHON}'; EXPECTED_REPO_COMMIT='${EXPECTED_REPO_COMMIT}'; LIBERO_COMMIT='${LIBERO_COMMIT}'; BASE_POLICY='${BASE_POLICY}'; LIBERO_CONFIG='${LIBERO_CONFIG}'; LIBERO_DATA_DIR='${LIBERO_DATA_DIR}'; LABEL='${LABEL}'; ACTION_ONLY_CHECKPOINT='${ACTION_ONLY_CHECKPOINT}'; ACTION_ONLY_TRAINING_MANIFEST='${ACTION_ONLY_TRAINING_MANIFEST}'; TRAIN_ROOT='${TRAIN_ROOT}'; EVAL_ROOT='${EVAL_ROOT}'; TRAIN_JOB_ID='__TRAIN_JOB_ID__'; ARCHIVE_DIR="\$ARCHIVE_ROOT/eval/${LABEL}_\$SLURM_JOB_ID"; EVIDENCE="\$SCRATCH_ROOT/eval/${LABEL}_\$SLURM_JOB_ID"
+REPO='${REPO}'; RUNTIME='${RUNTIME}'; SCRATCH_ROOT='${SCRATCH_ROOT}'; ARCHIVE_ROOT='${ARCHIVE_ROOT}'; STATE_FILE='${STATE_FILE}'; PYTHON='${PYTHON}'; EXPECTED_REPO_COMMIT='${EXPECTED_REPO_COMMIT}'; LIBERO_COMMIT='${LIBERO_COMMIT}'; BASE_POLICY='${BASE_POLICY}'; LIBERO_CONFIG='${LIBERO_CONFIG}'; LIBERO_DATA_DIR='${LIBERO_DATA_DIR}'; LIBERO_DIR='${LIBERO_DIR}'; LABEL='${LABEL}'; ACTION_ONLY_CHECKPOINT='${ACTION_ONLY_CHECKPOINT}'; ACTION_ONLY_TRAINING_MANIFEST='${ACTION_ONLY_TRAINING_MANIFEST}'; TRAIN_ROOT='${TRAIN_ROOT}'; EVAL_ROOT='${EVAL_ROOT}'; TRAIN_JOB_ID='__TRAIN_JOB_ID__'; ARCHIVE_DIR="\$ARCHIVE_ROOT/eval/${LABEL}_\$SLURM_JOB_ID"; EVIDENCE="\$SCRATCH_ROOT/eval/${LABEL}_\$SLURM_JOB_ID"
 die() { echo "action-visual eval: \$*" >&2; exit 1; }; copy_tree() { mkdir -p "\$2"; if command -v rsync >/dev/null 2>&1; then rsync -a "\$1/" "\$2/"; else cp -a "\$1/." "\$2/"; fi; }; seal_tree() { \$PYTHON - "\$1" "\$2" <<'PY_SEAL_EVAL'
 import hashlib,pathlib,sys
 root=pathlib.Path(sys.argv[1]).resolve(); mode=sys.argv[2]; inv=root/'inventory.sha256'; tree=root/'tree_sha256'
@@ -315,13 +311,18 @@ else:
  if actual!=listed: raise SystemExit('eval archive inventory is incomplete')
 PY_SEAL_EVAL
 }; finish() { local rc=\$? arc=0 tree=''; trap - EXIT; set +e; mkdir -p "\$EVIDENCE" "\$ARCHIVE_DIR"; printf 'slurm_job_id=%s\\nslurm_job_name=%s\\nslurm_job_dependency=afterok:%s\\nexit_code=%s\\n' "\${SLURM_JOB_ID:-}" "\${SLURM_JOB_NAME:-}" "\$TRAIN_JOB_ID" "\$rc" > "\$EVIDENCE/status.env"; copy_tree "\$EVIDENCE" "\$ARCHIVE_DIR/evidence" || arc=\$?; if [[ \$arc -eq 0 && -d "\$EVAL_ROOT" ]]; then copy_tree "\$EVAL_ROOT" "\$ARCHIVE_DIR/results" || arc=\$?; fi; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" build || arc=\$?; fi; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || arc=\$?; fi; [[ \$arc -eq 0 ]] && tree="\$(tr -d '[:space:]' < "\$ARCHIVE_DIR/tree_sha256")"; printf 'eval_archive_status=%s\\neval_archive_tree_sha256=%s\\neval_status=%s\\n' "\$([[ \$arc -eq 0 ]] && echo VERIFIED || echo FAILED)" "\$tree" "\$([[ \$rc -eq 0 && \$arc -eq 0 ]] && echo OK || echo FAILED)" >> "\$STATE_FILE"; [[ \$rc -eq 0 && \$arc -eq 0 ]] || rc=90; exit \$rc; }; trap finish EXIT
+STATE_DIR='${STATE_DIR}'; LEGACY_EVIDENCE_BUNDLE="\$STATE_DIR/legacy_action_only_evidence_v1"
 export LIBERO_DIR="\$LIBERO_DIR"
+DATA_ROOT='${DATA_ROOT}'; BASE_POLICY_REVISION='${BASE_POLICY_REVISION}'
 [[ -z "\$(git -C "\$REPO" status --porcelain --untracked-files=all)" ]] || die 'repository is dirty'
 [[ -d "\$LIBERO_DIR/.git" && "\$(git -C "\$LIBERO_DIR" rev-parse HEAD)" == "\$LIBERO_COMMIT" ]] || die 'LIBERO checkout is not pinned'; [[ -z "\$(git -C "\$LIBERO_DIR" status --porcelain --untracked-files=no)" ]] || die 'LIBERO checkout is dirty'
-[[ -d "\$REPO/.git" && "\$(git -C "\$REPO" rev-parse HEAD)" == "\$EXPECTED_REPO_COMMIT" ]] || die 'repository commit drift'; [[ -s "\$TRAIN_ROOT/training_manifest.json" && -s "\$TRAIN_ROOT/checkpoints/029190/pretrained_model/adapter_model.safetensors" ]] || die 'candidate final checkpoint is missing'; module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"; export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$(dirname "\$LIBERO_CONFIG")" LIBERO_CONFIG="\$LIBERO_CONFIG" BASE_POLICY="\$BASE_POLICY" LIBERO_DATA_DIR="\$LIBERO_DATA_DIR" LIBERO_DIR="\$LIBERO_DIR" LIBERO_COMMIT="\$LIBERO_COMMIT" TRAINING_PROFILE=no_arrow_treatment PROFILE=no_arrow_treatment CONTEXT_MODE=standard CONTEXT_FORMAT=standard VISUAL_CONDITION=none VISUAL_ARROWS=0 RANDOMIZE_SCENES=1 DEVICE=cuda; mkdir -p "\$EVAL_ROOT"; \$PYTHON "\$REPO/vla_benchmarking/run_lora_policy_pair_eval.py" --action-only-checkpoint "\$ACTION_ONLY_CHECKPOINT" --action-visual-checkpoint "\$TRAIN_ROOT/checkpoints/029190/pretrained_model" --action-only-training-manifest "\$ACTION_ONLY_TRAINING_MANIFEST" --action-visual-training-manifest "\$TRAIN_ROOT/training_manifest.json" --output-root "\$EVAL_ROOT" --episodes 10 --batch-size 1 --device cuda --no-videos; [[ -s "\$EVAL_ROOT/action_visual_lora_no_arrow_pair_manifest.json" && -s "\$EVAL_ROOT/action_visual_lora_no_arrow_pair_summary.csv" && -s "\$EVAL_ROOT/episode_results.jsonl" ]] || die 'matched per-task evaluation outputs are missing'; \$PYTHON - "\$EVAL_ROOT/action_visual_lora_no_arrow_pair_manifest.json" <<'PY_EVAL'
+[[ -d "\$LEGACY_EVIDENCE_BUNDLE" ]] || die 'legacy evidence bundle is missing'
+[[ -d "\$REPO/.git" && "\$(git -C "\$REPO" rev-parse HEAD)" == "\$EXPECTED_REPO_COMMIT" ]] || die 'repository commit drift'; [[ -s "\$TRAIN_ROOT/training_manifest.json" && -s "\$TRAIN_ROOT/checkpoints/029190/pretrained_model/adapter_model.safetensors" ]] || die 'candidate final checkpoint is missing'; module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"; export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$(dirname "\$LIBERO_CONFIG")" LIBERO_CONFIG="\$LIBERO_CONFIG" BASE_POLICY="\$BASE_POLICY" LIBERO_DATA_DIR="\$LIBERO_DATA_DIR" LIBERO_DIR="\$LIBERO_DIR" LIBERO_COMMIT="\$LIBERO_COMMIT" TRAINING_PROFILE=no_arrow_treatment PROFILE=no_arrow_treatment CONTEXT_MODE=standard CONTEXT_FORMAT=standard VISUAL_CONDITION=none VISUAL_ARROWS=0 RANDOMIZE_SCENES=1 DEVICE=cuda; mkdir -p "\$EVAL_ROOT"; \$PYTHON "\$REPO/vla_benchmarking/run_lora_policy_pair_eval.py" --action-only-checkpoint "\$ACTION_ONLY_CHECKPOINT" --action-visual-checkpoint "\$TRAIN_ROOT/checkpoints/029190/pretrained_model" --action-only-training-manifest "\$ACTION_ONLY_TRAINING_MANIFEST" --action-visual-training-manifest "\$TRAIN_ROOT/training_manifest.json" --action-only-legacy-evidence-bundle "\$LEGACY_EVIDENCE_BUNDLE" --training-data-root "\$DATA_ROOT" --output-root "\$EVAL_ROOT" --episodes 10 --batch-size 1 --device cuda --no-videos; [[ -s "\$EVAL_ROOT/action_visual_lora_no_arrow_pair_manifest.json" && -s "\$EVAL_ROOT/action_visual_lora_no_arrow_pair_summary.csv" && -s "\$EVAL_ROOT/episode_results.jsonl" ]] || die 'matched per-task evaluation outputs are missing'; \$PYTHON - "\$EVAL_ROOT/action_visual_lora_no_arrow_pair_manifest.json" <<'PY_EVAL'
 import json,sys
 d=json.load(open(sys.argv[1])); cells=d.get('cells',[])
-if [c.get('cell_id') for c in cells] != ['action_only_lora_v1_no_arrows','action_visual_lora_v1_no_arrows']: raise SystemExit('canonical two-cell order is missing')
+if [c.get('cell_id') for c in cells] != ['historical_action_only_lora_v1_no_arrows','action_visual_lora_v1_no_arrows']: raise SystemExit('canonical two-cell order is missing')
+if cells[0].get('policy_id') != 'action_only_lora_v1' or cells[0].get('live_arrows') is not False or cells[0].get('visual_condition') != 'none': raise SystemExit('historical action-only retrospective contract is not sealed')
+if cells[1].get('policy_id') != 'action_visual_lora_v1' or cells[1].get('live_arrows') is not False or cells[1].get('visual_condition') != 'none': raise SystemExit('candidate action-visual retrospective contract is not sealed')
 if d.get('tasks') != list(range(10)) or d.get('episodes') != 10 or d.get('batch_size') != 1 or d.get('seeds') != [1000] or d.get('visual_condition') != 'none': raise SystemExit('matched clean evaluation contract is not sealed')
 PY_EVAL
 EOF

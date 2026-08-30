@@ -231,7 +231,16 @@ The data profile says what the adapter was trained on; the evaluation overlay
 says what it saw during rollout. Always report both. The first candidate
 diagnostic is planned on the exact `no_arrow_treatment` data with a clean,
 paired no-arrow evaluation against the historical 43/100 action-only result.
-It is implemented/planned, not launched; no candidate score is implied.
+The retrospective baseline cell is named
+`historical_action_only_lora_v1_no_arrows`; the candidate cell is
+`action_visual_lora_v1_no_arrows`. The legacy baseline evidence is post-hoc
+and reconstructed, with the raw original sentinel unavailable; the stable
+pair identity is revalidated and the candidate uses native policy evidence
+(`native_policy_evidence_v1`). This
+is `retrospective_matched_checkpoint_evaluation` with
+`retrospective_not_strict` causal status. It is implemented/planned, not
+launched; no candidate score is implied. A strict causal claim requires
+contemporaneous action-only retraining.
 
 The training environment is Python 3.12 with the pinned LeRobot source commit
 `d656da8ccca5989ff0a2207e81fbfa2c2d5bafb1` and its dataset, training, PEFT,

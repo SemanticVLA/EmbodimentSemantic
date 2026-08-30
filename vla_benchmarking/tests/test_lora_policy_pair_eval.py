@@ -17,10 +17,31 @@ def _sha(path: Path) -> str:
 def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict, dict]:
     base = tmp_path / f"smolvla_libero-{pair_eval.SEALED_REVISION}"
     base.mkdir()
+    sealed_file = base / "sealed_config.json"
+    sealed_file.write_text("sealed base", encoding="utf-8")
+    (base / "base_snapshot_manifest.json").write_text(
+        json.dumps({
+            "revision": pair_eval.SEALED_REVISION,
+            "files": {"sealed_config.json": _sha(sealed_file)},
+        }),
+        encoding="utf-8",
+    )
+    cache = base / ".cache" / "huggingface"
+    cache.mkdir(parents=True)
+    (cache / "benign_cache_index.json").write_text("cache", encoding="utf-8")
+    base_identity = pair_eval.validate_base_snapshot_identity(base)
     pair = tmp_path / "sealed_lora_pair_manifest.json"
     sentinel = tmp_path / "sealed_lora_pair_verified.json"
     pair.write_text("pair", encoding="utf-8")
     sentinel.write_text("sentinel", encoding="utf-8")
+    data_root = tmp_path / "training_data"
+    data_root.mkdir()
+    (data_root / "sealed_lora_pair_manifest.json").write_bytes(pair.read_bytes())
+    bundle = tmp_path / "legacy_action_only_evidence_bundle"
+    bundle.mkdir()
+    (bundle / "bundle.json").write_text(
+        json.dumps({"pair": {"pair_identity": "p" * 64}}), encoding="utf-8"
+    )
 
     def make(policy_id: str, name: str) -> tuple[Path, Path, dict]:
         adapter = tmp_path / name / "029190" / "pretrained_model"
@@ -60,10 +81,26 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict, dic
     }
     monkeypatch.setattr(pair_eval, "load_expected_inventory", lambda path: expected[ACTION_ONLY_LORA_V1] if Path(path).name.startswith("action_only_") else expected[ACTION_VISUAL_LORA_V1])
     monkeypatch.setattr(pair_eval, "audit_adapter_checkpoint", lambda *args, **kwargs: {"checkpoint_tree_sha256": "action_only" if Path(args[0]).parts[-3] == "action_only" else "action_visual"})
+    monkeypatch.setattr(
+        pair_eval,
+        "validate_legacy_action_only_evidence",
+        lambda *args, **kwargs: {
+            "valid": True,
+            "pair_identity": "p" * 64,
+            "checkpoint_tree_sha256": "historical-checkpoint",
+            "base_snapshot_identity_sha256": base_identity,
+            "source_snapshots": [
+                {"role": "base_policy", "sha256": base_identity},
+                {"role": "data_root", "sha256": "data-root"},
+            ],
+        },
+    )
     # The adapter_audit evidence in each fixture must match the monkeypatched
     # runtime audit exactly.
     only["adapter_audit"]["sha256"] = _sha(only_adapter / "adapter_audit.json")
     visual["adapter_audit"]["sha256"] = _sha(visual_adapter / "adapter_audit.json")
+    only["_legacy_bundle"] = str(bundle)
+    only["_data_root"] = str(data_root)
     return only, visual
 
 
@@ -78,6 +115,8 @@ def test_build_manifest_has_canonical_two_cell_order_and_clean_contract(tmp_path
         action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
         action_only_training_manifest=str(only_path),
         action_visual_training_manifest=str(visual_path),
+        action_only_legacy_evidence_bundle=only["_legacy_bundle"],
+        training_data_root=only["_data_root"],
         output_root=tmp_path / "eval",
         device="plan",
     )
@@ -88,7 +127,54 @@ def test_build_manifest_has_canonical_two_cell_order_and_clean_contract(tmp_path
     assert manifest["episodes"] == 10
     assert manifest["batch_size"] == 1
     assert manifest["paired_reset_states"] is True
-    assert manifest["comparability_contract"]["only_intended_difference"] == ["finetuning_policy_id", "adapter_identity"]
+    contract = manifest["comparability_contract"]
+    assert contract["intended_training_difference"] == "finetuning_policy_target_modules"
+    assert contract["verified_shared_training_fields"] == [
+        "base_policy_revision",
+        "dataset_repo_id",
+        "dataset_variant",
+        "pair_manifest_sha256",
+        "training_schedule",
+        "training_seed",
+    ]
+    assert contract["verified_current_compatibility_fields"] == [
+        "reconstruction_and_candidate_base_snapshot_identity",
+    ]
+    assert "historical_training_base_content_identity" in contract["unverified_or_runtime_confound_fields"]
+    assert contract["unverified_or_runtime_confound_fields"]
+    assert "only_intended_difference" not in contract
+    assert manifest["evidence_classes"]["action_visual_candidate"] == "native_policy_evidence_v1"
+    assert manifest["conclusion_limits"] == pair_eval.CONCLUSION_LIMITS
+    base_identity_evidence = manifest["base_snapshot_identity_evidence"]
+    assert base_identity_evidence["historical_training_base_content_identity"] == {
+        "status": "unavailable_noncontemporaneous",
+        "sha256": None,
+    }
+    assert base_identity_evidence["reconstruction_and_candidate_base_snapshot_identity"]["status"] == "current_verified_compatibility_evidence"
+    assert len(base_identity_evidence["reconstruction_and_candidate_base_snapshot_identity"]["sha256"]) == 64
+    assert "base_snapshot_identity_sha256" not in manifest["shared_training_provenance"]
+    assert any("historical training base-content identity is unavailable" in item for item in manifest["known_noncontemporaneous_evidence"])
+
+
+def test_manifest_rejects_legacy_only_intended_difference_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    only, visual = _fixture(tmp_path, monkeypatch)
+    only_path = tmp_path / "action_only_training_manifest.json"
+    visual_path = tmp_path / "action_visual_training_manifest.json"
+    only_path.write_text(json.dumps(only), encoding="utf-8")
+    visual_path.write_text(json.dumps(visual), encoding="utf-8")
+    manifest = pair_eval.build_manifest(
+        action_only_checkpoint=only["no_arrow_treatment_adapter"]["path"],
+        action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
+        action_only_training_manifest=str(only_path),
+        action_visual_training_manifest=str(visual_path),
+        action_only_legacy_evidence_bundle=only["_legacy_bundle"],
+        training_data_root=only["_data_root"],
+        output_root=tmp_path / "eval",
+        device="plan",
+    )
+    manifest["comparability_contract"]["only_intended_difference"] = ["policy"]
+    with pytest.raises(ValueError, match="only_intended_difference"):
+        pair_eval._validate_manifest(manifest)
 
 
 def test_legacy_action_only_manifest_without_policy_fields_resolves_to_v1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -104,6 +190,8 @@ def test_legacy_action_only_manifest_without_policy_fields_resolves_to_v1(tmp_pa
         action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
         action_only_training_manifest=str(only_path),
         action_visual_training_manifest=str(visual_path),
+        action_only_legacy_evidence_bundle=only["_legacy_bundle"],
+        training_data_root=only["_data_root"],
         output_root=tmp_path / "eval",
         device="plan",
     )
@@ -121,12 +209,96 @@ def test_build_manifest_rejects_training_data_or_schedule_drift(tmp_path: Path, 
     visual_path = tmp_path / "visual.json"
     only_path.write_text(json.dumps(only), encoding="utf-8")
     visual_path.write_text(json.dumps(visual), encoding="utf-8")
-    with pytest.raises(ValueError, match="paired training manifests differ.*pair_manifest_sha256"):
+    with pytest.raises(ValueError, match="pair-manifest digests differ"):
         pair_eval.build_manifest(
             action_only_checkpoint=only["no_arrow_treatment_adapter"]["path"],
             action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
             action_only_training_manifest=str(only_path),
             action_visual_training_manifest=str(visual_path),
+            action_only_legacy_evidence_bundle=only["_legacy_bundle"],
+            training_data_root=only["_data_root"],
+            output_root=tmp_path / "eval",
+            device="plan",
+        )
+
+
+def _build_manifest_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict, dict, Path, Path]:
+    only, visual = _fixture(tmp_path, monkeypatch)
+    only_path = tmp_path / "only.json"
+    visual_path = tmp_path / "visual.json"
+    only_path.write_text(json.dumps(only), encoding="utf-8")
+    visual_path.write_text(json.dumps(visual), encoding="utf-8")
+    return only, visual, only_path, visual_path
+
+
+def test_missing_or_invalid_legacy_bundle_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    only, visual, only_path, visual_path = _build_manifest_fixture(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="legacy action-only evidence bundle is missing"):
+        pair_eval.build_manifest(
+            action_only_checkpoint=only["no_arrow_treatment_adapter"]["path"],
+            action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
+            action_only_training_manifest=str(only_path), action_visual_training_manifest=str(visual_path),
+            action_only_legacy_evidence_bundle=str(tmp_path / "missing_bundle"), training_data_root=only["_data_root"],
+            output_root=tmp_path / "eval", device="plan",
+        )
+    (Path(only["_legacy_bundle"]) / "bundle.json").write_text(json.dumps({"pair": {"pair_identity": "q" * 64}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="stable pair identity"):
+        pair_eval.build_manifest(
+            action_only_checkpoint=only["no_arrow_treatment_adapter"]["path"],
+            action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
+            action_only_training_manifest=str(only_path), action_visual_training_manifest=str(visual_path),
+            action_only_legacy_evidence_bundle=only["_legacy_bundle"], training_data_root=only["_data_root"],
+            output_root=tmp_path / "eval", device="plan",
+        )
+
+
+def test_candidate_cannot_use_legacy_policy_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    only, visual, only_path, visual_path = _build_manifest_fixture(tmp_path, monkeypatch)
+    visual["finetuning_policy_id"] = ACTION_ONLY_LORA_V1
+    visual_path.write_text(json.dumps(visual), encoding="utf-8")
+    with pytest.raises(ValueError, match="training manifest policy"):
+        pair_eval.build_manifest(
+            action_only_checkpoint=only["no_arrow_treatment_adapter"]["path"],
+            action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
+            action_only_training_manifest=str(only_path), action_visual_training_manifest=str(visual_path),
+            action_only_legacy_evidence_bundle=only["_legacy_bundle"], training_data_root=only["_data_root"],
+            output_root=tmp_path / "eval", device="plan",
+        )
+
+
+def test_stable_pair_identity_drift_fails_but_raw_sentinel_drift_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    only, visual, only_path, visual_path = _build_manifest_fixture(tmp_path, monkeypatch)
+    # Keep the validated stable identity but use a distinct, valid candidate
+    # sentinel byte stream. Raw sentinel equality is intentionally not a gate.
+    candidate_sentinel = tmp_path / "candidate_pair_sentinel.json"
+    candidate_sentinel.write_text("candidate sentinel", encoding="utf-8")
+    visual["pair_sentinel"] = str(candidate_sentinel)
+    visual["pair_sentinel_sha256"] = _sha(candidate_sentinel)
+    visual_path.write_text(json.dumps(visual), encoding="utf-8")
+    manifest = pair_eval.build_manifest(
+        action_only_checkpoint=only["no_arrow_treatment_adapter"]["path"],
+        action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
+        action_only_training_manifest=str(only_path), action_visual_training_manifest=str(visual_path),
+        action_only_legacy_evidence_bundle=only["_legacy_bundle"], training_data_root=only["_data_root"],
+        output_root=tmp_path / "eval", device="plan",
+    )
+    assert manifest["comparison_type"] == "retrospective_matched_checkpoint_evaluation"
+    assert manifest["causal_ablation_status"] == "retrospective_not_strict"
+    assert manifest["raw_pair_sentinel_digests"]["historical_action_only"] != manifest["raw_pair_sentinel_digests"]["action_visual_candidate"]
+    assert manifest["stable_verified_pair_identity"] == "p" * 64
+
+
+def test_build_manifest_rejects_sealed_base_snapshot_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    only, visual, only_path, visual_path = _build_manifest_fixture(tmp_path, monkeypatch)
+    (Path(only["base_policy"]) / "sealed_config.json").write_text("tampered base", encoding="utf-8")
+    with pytest.raises(ValueError, match="base snapshot hash mismatch"):
+        pair_eval.build_manifest(
+            action_only_checkpoint=only["no_arrow_treatment_adapter"]["path"],
+            action_visual_checkpoint=visual["no_arrow_treatment_adapter"]["path"],
+            action_only_training_manifest=str(only_path),
+            action_visual_training_manifest=str(visual_path),
+            action_only_legacy_evidence_bundle=only["_legacy_bundle"],
+            training_data_root=only["_data_root"],
             output_root=tmp_path / "eval",
             device="plan",
         )
@@ -144,6 +316,8 @@ def test_build_manifest_rejects_same_checkpoint_path(tmp_path: Path, monkeypatch
             action_visual_checkpoint=only["no_arrow_treatment_adapter"]["path"],
             action_only_training_manifest=str(only_path),
             action_visual_training_manifest=str(visual_path),
+            action_only_legacy_evidence_bundle=only["_legacy_bundle"],
+            training_data_root=only["_data_root"],
             output_root=tmp_path / "eval",
             device="plan",
         )
@@ -165,6 +339,8 @@ def test_build_manifest_rejects_distinct_paths_with_identical_adapter_bytes(tmp_
             action_visual_checkpoint=str(visual_adapter),
             action_only_training_manifest=str(only_path),
             action_visual_training_manifest=str(visual_path),
+            action_only_legacy_evidence_bundle=only["_legacy_bundle"],
+            training_data_root=only["_data_root"],
             output_root=tmp_path / "eval",
             device="plan",
         )

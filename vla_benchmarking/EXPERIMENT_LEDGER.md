@@ -11,7 +11,7 @@ The always-applied startup rule enforcing this requirement is
 **Analysis scope:** epoch 15 checkpoints only (`029190`, 29,190 steps). Do not
 add any other checkpoints unless the user explicitly changes the scope.
 
-**Last active-run audit represented in both files:** 2026-08-29 19:44:40 UTC.
+**Last active-run audit represented in both files:** 2026-08-30 19:59:06 UTC.
 The active forward run is on PoliTO Legion. The last preserved Lambda-only audit
 is 2026-08-20 10:11:17 UTC; its process IDs are historical snapshots, not live
 state.
@@ -179,15 +179,7 @@ Image conditions:
 - Overlay evidence: no `visual_relation_audit.jsonl` is expected because
   `VISUAL_CONDITION=none`.
 
-## No evaluation jobs running for these in-scope tasks
-
-- No-arrow LoRA/no-arrow evaluation is running:
-  - PID: 56554
-  - Output:
-    `/home/ubuntu/EmbodimentSemantic/vla_benchmarking/eval_outputs/no_arrow_treatment_epoch15_tasks_0_7`
-- Other in-scope evaluations: none running.
-
-## Evaluation pending training completion
+## Historical Lambda-only evaluation snapshot
 
 ### 6. No-arrow LoRA evaluated without arrows
 
@@ -195,8 +187,10 @@ Image conditions:
 - Evaluated with: no arrows
 - Planned checkpoint: epoch 15 (`029190`)
 - Planned coverage: task 0 and task 7, 10 episodes each
-- Status: running (counts partial until eval_info.json completes)
-- Evaluation PID: 56554
+- Status: **stale historical snapshot; not a current running-state claim**.
+- Last observed PID on Lambda: 56554 at the preserved 2026-08-20 audit.
+- The active forward run moved to Legion, and this Lambda process was not
+  refreshed during the current Legion-only audit.
 - Planned output:
   `/home/ubuntu/EmbodimentSemantic/vla_benchmarking/eval_outputs/no_arrow_treatment_epoch15_tasks_0_7`
 
@@ -227,33 +221,41 @@ never be reported as results:
 Do not delete these or any other Lambda artifacts without explicit user
 authorization.
 
-## Active Legion no-arrow causal-control experiment
+## Completed Legion no-arrow causal-control experiment
 
-Audit time: **2026-08-29 19:44:40 UTC**.
+Audit time: **2026-08-30 19:59:06 UTC**.
 
 ### Training — `legion_no_arrow_lora_full_s1000_v1`
 
-- Status: **running** on PoliTO Legion.
-- SLURM job: `1910197` on `gpu_a40` (`compute-4-11` at this audit).
+- Status: **complete** on PoliTO Legion.
+- SLURM job: `1910197` on `gpu_a40`; it has left the live queue.
 - Source commit: `8579b62e58aad28e131a8b8da370b4c34f2fc013`.
-- Trained on: **no arrows**, using the control half of the exact sealed
+- Trained on: **no arrows**, using the no-arrow half of the exact sealed
   `sealed_lora_control_treatment` pair.
 - Base revision: `6721902bc4d61e50a3bfdb11dfb4cb626f05d102`.
 - Schedule: 15 epochs, 29,190 steps, checkpoint every 1,946 steps, batch 32,
   seed 1000, LoRA rank 16.
-- Planned final checkpoint: `029190`.
+- Final checkpoint: `029190`; all 15 scheduled checkpoints exist.
+- Completion evidence: step 29,190 and `End of training` at 08:27:49 UTC,
+  adapter postcondition and reload smoke passed, launcher finished at 08:28:09
+  UTC.
+- Final adapter SHA-256:
+  `80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092`.
+- Training-manifest SHA-256:
+  `95e376aff504265bea2bb53e63cc221fb42d7baa01dd6c3810317de85875c391`.
 - Scratch run:
   `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197`
 - Durable archive:
   `/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197`
-- Score: not available while training is running.
+- Score: training itself has no rollout score; final evaluation results are
+  recorded below.
 
 The refreshed stage, no-arrow preflight, and two-step A40 smoke completed before
 this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
 
 ### Evaluation — `legion_no_arrow_trained_live_vs_none_s1000_ep10_v1`
 
-- Status: **queued**, SLURM job `1910198` with dependency `afterok:1910197`.
+- Status: **complete**, SLURM job `1910198`; it has left the live queue.
 - It evaluates the same final no-arrow-trained adapter in exactly this order:
   1. `no_arrow_trained_live_arrows` — trained on no arrows, evaluated with live
      all-object arrows.
@@ -264,9 +266,77 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
 - No frozen-base or arrow-trained model enters this evaluation job.
 - Scratch evaluation root:
   `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/eval/legion_no_arrow_trained_live_vs_none_s1000_ep10_v1_no_arrow_treatment_1910198`
-- Scores: not available until training and the dependent evaluation complete.
-- Complete or partial outputs are archived under
-  `/home/hjaber/EmbodimentSemantic_archive/eval/` by the job's EXIT trap.
+- Final scores from each cell's authoritative `eval_info.json`:
+  - `no_arrow_trained_live_arrows` — trained on no arrows, evaluated with live
+    all-object arrows: tasks 0–9 = `8, 4, 3, 4, 0, 0, 7, 1, 3, 0` successes
+    out of 10; **30/100 (30%) final**.
+  - `no_arrow_trained_no_arrows` — trained on no arrows, evaluated with no
+    arrows: tasks 0–9 = `9, 9, 6, 4, 1, 1, 6, 4, 3, 0` successes out of 10;
+    **43/100 (43%) final**.
+- Cell completion times were 10:16:18 UTC and 11:45:18 UTC, respectively.
+- Durable archive:
+  `/home/hjaber/EmbodimentSemantic_archive/eval/legion_no_arrow_trained_live_vs_none_s1000_ep10_v1_no_arrow_treatment_1910198`.
+- The final adapter, training manifest, both `eval_info.json` files, and the
+  pair-summary CSV have identical SHA-256 hashes in scratch and durable HOME
+  storage.
+
+## Blocked graph-text training chain — `legion_graph_treatment_lora_full_s1000_v1_20260830T153645Z`
+
+This chain did not reach training and has no checkpoint or score.
+
+- Source commit: `615f0d23078f6ca36a03cb6fb9ba9bcccb1dc11f`.
+- Setup job `1911244`: **failed** with exit code 1 while validating the
+  serialized graph base-policy snapshot. The exact error was `base policy
+  snapshot file inventory drifted`.
+- Setup evidence was preserved and its archive verified with tree SHA-256
+  `c0f1a1fb449a607bf520113867e2236a35a1bd2f971bc9b5604e7358469e3e82`.
+- Training job `1911247`: still present in `squeue` as **PENDING /
+  DependencyNeverSatisfied** because it requires `afterok:1911244(failed)`.
+  It has run for 0 seconds and produced no training directory or checkpoint.
+- Evaluation job `1911248`: **PENDING / Dependency** behind unstarted training
+  job `1911247`; it has no evaluation output or score.
+- No cancellation, repair, or resubmission was performed during this audit.
+
+## Failed visual-path setup attempt — `legion_action_visual_lora_no_arrow_s1000_v1_20260830T185643Z`
+
+This is a failed setup attempt, not a training or evaluation result. It must
+remain separate from the planned candidate run below.
+
+- Status: **failed during setup; no training or evaluation was submitted**.
+- Intended policy: `action_visual_lora_v1`.
+- Intended data profile: `no_arrow_treatment`.
+- Source commit: `2bbda0bcd7241a68716c23ce73a0ddd1b67d205e`.
+- Setup SLURM job: `1911343`.
+- Failure causes:
+  - the historical schema-1 manifest lacked the current sidecars;
+  - its recorded sentinel hash was stale;
+  - after the setup `sbatch` call, the launcher `submit_id` parser failed, so
+    the setup job ID was not written to the launcher state.
+- Scratch setup evidence:
+  `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/legion_action_visual_lora_no_arrow_s1000_v1_20260830T185643Z_setup_1911343`
+- Durable setup archive:
+  `/home/hjaber/EmbodimentSemantic_archive/setup/legion_action_visual_lora_no_arrow_s1000_v1_20260830T185643Z_1911343`
+- Preserved scheduler logs:
+  `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/legion_action_visual_lora_no_arrow_s1000_v1_20260830T185643Z_setup_1911343.out`
+  and
+  `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/legion_action_visual_lora_no_arrow_s1000_v1_20260830T185643Z_setup_1911343.err`
+- Formal repair: `legacy_action_only_evidence_v1` is **implemented locally**
+  as post-hoc/reconstructed evidence; resubmission has **not been launched**.
+  It is not a result and does not authorize resubmission.
+
+### Legacy evidence status for the retrospective comparison
+
+- Evidence class: post-hoc/reconstructed `legacy_action_only_evidence_v1` for
+  the historical `action_only_lora_v1` checkpoint.
+- Raw original sentinel: unavailable; its stale recorded hash is not treated
+  as evidence.
+- Stable sealed-pair identity: revalidated against the current pair.
+- Candidate evidence: native `native_policy_evidence_v1`.
+- Comparison type: `retrospective_matched_checkpoint_evaluation`.
+- Causal-ablation status: `retrospective_not_strict`.
+- Permitted conclusion: exact checkpoint performance under the matched
+  evaluation. A strict causal claim requires contemporaneous retraining of
+  `action_only_lora_v1` under the same protocol.
 
 ## Planned visual-path LoRA diagnostic (not launched)
 
@@ -291,8 +361,8 @@ checkpoint, or result. Status is **implemented/planned, not launched**.
   historical no-arrow `action_only_lora_v1` result.
 - Evaluate both policy cells with **no arrows**: candidate
   `action_visual_lora_v1_no_arrows` versus the verified historical
-  `action_only_lora_v1_no_arrows` baseline. The training data profile remains
-  `no_arrow_treatment` for both cells.
+  `historical_action_only_lora_v1_no_arrows` baseline. The training data
+  profile remains `no_arrow_treatment` for both cells.
 - Cover tasks 0–9 with ten episodes per task and matched seeds, reset/
   randomization configuration, and episode ordering where possible.
 - Report the total and every per-task score for both cells.
@@ -300,9 +370,12 @@ checkpoint, or result. Status is **implemented/planned, not launched**.
 Hypothesis: late visual-path adaptation can improve spatially grounded action
 learning when the vision pathway is frozen. The literal success screen is
 **greater than 43/100**; the preferred advancement is approximately **+5
-points without a major task 0–1 regression**. An ICLR-quality claim requires
-matched retraining seeds and paired per-task/episode results. Until that run
-is launched and evaluated, this is a plan—not a result.
+points without a major task 0–1 regression**. This retrospective comparison
+is classified as `retrospective_matched_checkpoint_evaluation` with
+`causal_ablation_status: retrospective_not_strict`; an ICLR-quality strict
+causal claim requires matched contemporaneous retraining seeds and paired
+per-task/episode results. Until that run is launched and evaluated, this is a
+plan—not a result.
 
 Data profiles (`no_arrow_treatment`, `treatment`, and graph profiles) and
 evaluation overlays (no arrows, live arrows, target arrow, or graph overlay)
@@ -324,22 +397,21 @@ remain separate axes. Always state both **trained on** and **evaluated with**.
 
 ## Next actions, in order
 
-1. Monitor Legion training job `1910197` through checkpoint `029190` and verify
-   its final manifest and adapter hash.
-2. Monitor dependent evaluation job `1910198`; record each cell's per-task and
-   total results from `eval_info.json` when available.
-3. Verify the durable HOME archives match the scratch training/evaluation
-   outputs.
-4. Do not launch any additional baseline or seed unless the user explicitly
+1. Treat no-arrow training job `1910197` and evaluation job `1910198` as
+   complete final results; their required durable artifacts match scratch.
+2. Decide separately whether to cancel or repair the blocked graph-text jobs
+   `1911247` and `1911248`; this audit made no scheduler changes.
+3. Do not launch any additional baseline or seed unless the user explicitly
    requests it.
 
 ## Current interpretation boundary
 
 Verified: the all-arrow LoRA epoch-15 checkpoint scored 11/20 when evaluated
 with all arrows; the frozen base scored 0/20 under that same all-arrow rollout
-condition.
+condition. The Legion no-arrow LoRA epoch-15 checkpoint scored 43/100 when
+evaluated with no arrows and 30/100 when evaluated with live all-object arrows.
 
-Not yet isolated: whether the gain is caused by arrow-conditioned learning,
-generic additional fine-tuning, arrows at evaluation time, or an interaction.
-The no-arrow-LoRA/no-arrow evaluation was still pending when the prior claim was
-made, and is now running.
+The same no-arrow-trained checkpoint performed 13 percentage points worse with
+live arrows than without them in this seed-1000 paired evaluation. That result
+supports an evaluation-time overlay effect for this checkpoint, but it does not
+by itself isolate training-data effects or establish a multi-seed causal claim.

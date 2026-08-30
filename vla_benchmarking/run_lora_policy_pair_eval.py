@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Matched clean-image evaluation for action-only versus visual-path LoRA.
 
-This evaluator is deliberately a two-cell policy ablation.  Both adapters are
-trained on the same no-arrow dataset and are evaluated with standard text and
-no live visual overlay.  The only intended difference is the versioned
-fine-tuning policy (and therefore the adapter checkpoint).  The manifest and
-the reset audit bind the two cells to the same task order and randomized
-simulator states before any paper-level comparison is made.
+This evaluator is deliberately a two-cell retrospective matched-checkpoint
+comparison.  Both adapters are trained on the same no-arrow dataset and are
+evaluated with standard text and no live visual overlay.  The manifest records
+the intended training-policy difference, the fields that were verified as
+shared, and the remaining runtime/training confounds.  The reset audit binds
+the two cells to the same task order and randomized simulator states before
+any exact-checkpoint comparison is made.
 """
 
 from __future__ import annotations
@@ -29,6 +30,10 @@ from config import (
     task_randomization_dimensions,
 )
 from lora_finetuning_policy import ACTION_ONLY_LORA_V1, ACTION_VISUAL_LORA_V1, get_policy
+from legacy_action_only_evidence import (
+    validate_base_snapshot_identity,
+    validate_legacy_action_only_evidence,
+)
 from run_lora_2x2_eval import (
     TASK_IDS,
     _randomization_config_payload,
@@ -39,12 +44,12 @@ from run_lora_2x2_eval import (
 
 TRAINING_CAMERAS = ",".join(LEROBOT_CAMERA_KEYS)
 RAW_TRAINING_CAMERAS = ",".join(DEFAULT_CAMERAS)
-CELL_IDS = ("action_only_lora_v1_no_arrows", "action_visual_lora_v1_no_arrows")
+CELL_IDS = ("historical_action_only_lora_v1_no_arrows", "action_visual_lora_v1_no_arrows")
 POLICY_IDS = (ACTION_ONLY_LORA_V1, ACTION_VISUAL_LORA_V1)
 MANIFEST_FILENAME = "action_visual_lora_no_arrow_pair_manifest.json"
 SUMMARY_FILENAME = "action_visual_lora_no_arrow_pair_summary.csv"
 RESULTS_FILENAME = "action_visual_lora_no_arrow_pair_results.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXPERIMENT = "smolvla_lora_action_visual_policy_no_arrow_matched_eval_v1"
 TRAINING_EXPERIMENT = "smolvla_lora_no_arrow_treatment_training"
 SEALED_REVISION = "6721902bc4d61e50a3bfdb11dfb4cb626f05d102"
@@ -61,6 +66,47 @@ LEGACY_ACTION_AUDIT_KEYS = frozenset({
     "nonzero_lora_b_count", "nonzero_lora_b_required", "expected_inventory_sha256",
     "expected_matched_module_names",
 })
+EVIDENCE_CLASSES = {
+    "historical_action_only": "legacy_action_only_evidence_v1",
+    "action_visual_candidate": "native_policy_evidence_v1",
+}
+CONCLUSION_LIMITS = [
+    "The valid comparison is limited to exact-checkpoint matched-evaluation success rates and per-task deltas.",
+    "This retrospective result cannot identify a strict causal effect of visual-path LoRA.",
+    "The current base-snapshot identity verifies reconstruction compatibility only; historical training-byte identity is unavailable and noncontemporaneous.",
+    "Paper claims require a contemporaneously retrained matched-policy comparison.",
+]
+COMPARABILITY_CONTRACT = {
+    "intended_training_difference": "finetuning_policy_target_modules",
+    "verified_shared_training_fields": [
+        "base_policy_revision",
+        "dataset_repo_id",
+        "dataset_variant",
+        "pair_manifest_sha256",
+        "training_schedule",
+        "training_seed",
+    ],
+    "verified_current_compatibility_fields": [
+        "reconstruction_and_candidate_base_snapshot_identity",
+    ],
+    "unverified_or_runtime_confound_fields": [
+        "historical_training_base_content_identity",
+        "historical_vs_contemporaneous_checkpoint_age",
+        "optimizer_and_rng_trajectory",
+        "checkpoint_capture_context",
+        "runtime_gpu_and_software_environment",
+    ],
+    "shared_base_revision": SEALED_REVISION,
+    "shared_training_seed": SEALED_SEED,
+    "shared_schedule": {
+        "steps": SEALED_STEPS,
+        "epochs": 15,
+        "batch_size": SEALED_BATCH_SIZE,
+        "peft_r": SEALED_PEFT_R,
+    },
+    "live_arrows": False,
+    "paired_reset_states": True,
+}
 
 
 def _canonical_json(value: Any) -> str:
@@ -159,6 +205,7 @@ def _validate_training_provenance(path: Path, adapter: Path, policy_id: str) -> 
     base_policy = Path(str(data.get("base_policy", ""))).expanduser().resolve()
     if not str(data.get("base_policy", "")) or base_policy.name != f"smolvla_libero-{SEALED_REVISION}":
         raise ValueError("training manifest base policy path is not the sealed snapshot")
+    base_snapshot_identity = validate_base_snapshot_identity(base_policy)
     if not isinstance(data.get("pair_manifest_sha256"), str) or not isinstance(data.get("pair_sentinel_sha256"), str):
         raise ValueError("training manifest lacks sealed dataset pair hashes")
     for key in ("pair_manifest", "pair_sentinel"):
@@ -207,6 +254,7 @@ def _validate_training_provenance(path: Path, adapter: Path, policy_id: str) -> 
         "manifest_sha256": _sha256_file(path),
         "base_policy": str(base_policy),
         "base_policy_revision": SEALED_REVISION,
+        "base_snapshot_identity_sha256": base_snapshot_identity,
         "dataset_repo_id": data["dataset_repo_id"],
         "dataset_variant": data["dataset_variant"],
         "pair_manifest_sha256": data["pair_manifest_sha256"],
@@ -230,6 +278,71 @@ def _validate_training_provenance(path: Path, adapter: Path, policy_id: str) -> 
     }
 
 
+def _validate_legacy_provenance(
+    *,
+    evidence_bundle: Path,
+    training_manifest: Path,
+    adapter: Path,
+    base_policy: Path,
+    data_root: Path,
+) -> dict[str, Any]:
+    """Validate historical action-only evidence through its canonical API only."""
+    if not evidence_bundle.is_dir():
+        raise ValueError(f"legacy action-only evidence bundle is missing: {evidence_bundle}")
+    if not data_root.is_dir():
+        raise ValueError(f"training data root is missing: {data_root}")
+    try:
+        result = validate_legacy_action_only_evidence(
+            evidence_bundle,
+            training_manifest,
+            adapter,
+            base_policy,
+            data_root,
+        )
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"legacy action-only evidence validation failed: {exc}") from exc
+    if not isinstance(result, dict) or result.get("valid") is not True:
+        raise ValueError("legacy action-only evidence validator did not return valid=true")
+    base_snapshot_identity = validate_base_snapshot_identity(base_policy)
+    if result.get("base_snapshot_identity_sha256") != base_snapshot_identity:
+        raise ValueError("legacy evidence base snapshot identity differs from the supplied base")
+    pair_identity = result.get("pair_identity")
+    if not isinstance(pair_identity, str) or len(pair_identity) != 64:
+        raise ValueError("legacy evidence lacks a stable verified pair identity")
+    bundle_metadata = _read_json(evidence_bundle / "bundle.json", "legacy evidence metadata")
+    declared_pair_identity = (bundle_metadata.get("pair") or {}).get("pair_identity")
+    if declared_pair_identity != pair_identity:
+        raise ValueError("legacy evidence stable pair identity differs from validated bundle identity")
+    pair_manifest = data_root / "sealed_lora_pair_manifest.json"
+    if not pair_manifest.is_file():
+        raise ValueError(f"verified pair manifest is missing from training data root: {pair_manifest}")
+    snapshots = result.get("source_snapshots")
+    snapshot_by_role = {
+        item.get("role"): item for item in snapshots if isinstance(item, dict)
+    } if isinstance(snapshots, list) else {}
+    historical_manifest = _read_json(training_manifest, "historical training manifest")
+    return {
+        "evidence_bundle": str(evidence_bundle.resolve()),
+        "manifest_path": str(training_manifest.resolve()),
+        "manifest_sha256": _sha256_file(training_manifest),
+        "validator_result": result,
+        "pair_identity": pair_identity,
+        "bundle_pair_identity": declared_pair_identity,
+        "pair_manifest_sha256": _sha256_file(pair_manifest),
+        "pair_sentinel_sha256": historical_manifest.get("pair_sentinel_sha256"),
+        "base_policy": str(base_policy),
+        "base_policy_revision": SEALED_REVISION,
+        "dataset_repo_id": historical_manifest.get("dataset_repo_id", "local/libero_spatial_control"),
+        "dataset_variant": historical_manifest.get("dataset_variant", "control"),
+        "flags": {
+            "steps": 29190, "save_freq": 1946, "batch_size": 32,
+            "seed": 1000, "peft_r": 16,
+        },
+        "base_snapshot_identity_sha256": base_snapshot_identity,
+        "data_root_tree_sha256": snapshot_by_role.get("data_root", {}).get("sha256"),
+    }
+
+
 def build_cells(
     action_only_checkpoint: str,
     action_visual_checkpoint: str,
@@ -239,7 +352,7 @@ def build_cells(
     checkpoints = (_adapter_directory(action_only_checkpoint), _adapter_directory(action_visual_checkpoint))
     cells: list[dict[str, Any]] = []
     for index, (cell_id, policy_id, checkpoint) in enumerate(zip(CELL_IDS, POLICY_IDS, checkpoints)):
-        cells.append({
+        cell = {
             "order": index,
             "cell_id": cell_id,
             "policy_id": policy_id,
@@ -248,20 +361,74 @@ def build_cells(
             "adapter_sha256": _sha256_file(checkpoint / "adapter_model.safetensors"),
             "training_manifest": provenance[policy_id]["manifest_path"],
             "training_manifest_sha256": provenance[policy_id]["manifest_sha256"],
-            "expected_adapter_inventory": provenance[policy_id]["expected_adapter_inventory"],
-            "adapter_audit": provenance[policy_id]["adapter_audit"],
             "live_arrows": False,
             "visual_condition": "none",
             "context_mode": "standard",
             "context_format": "standard",
             "output_dir": str(output_root / f"seed_{SEALED_SEED}" / cell_id),
-        })
+        }
+        if policy_id == ACTION_VISUAL_LORA_V1:
+            cell["expected_adapter_inventory"] = provenance[policy_id]["expected_adapter_inventory"]
+            cell["adapter_audit"] = provenance[policy_id]["adapter_audit"]
+        else:
+            cell["legacy_evidence_bundle"] = provenance[policy_id]["evidence_bundle"]
+            cell["stable_verified_pair_identity"] = provenance[policy_id]["pair_identity"]
+        cells.append(cell)
     return cells
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("schema_version") != SCHEMA_VERSION or manifest.get("experiment") != EXPERIMENT:
         raise ValueError("unsupported or unexpected matched-evaluation manifest")
+    if manifest.get("comparison_type") != "retrospective_matched_checkpoint_evaluation":
+        raise ValueError("matched evaluation comparison type is not retrospective")
+    if manifest.get("causal_ablation_status") != "retrospective_not_strict":
+        raise ValueError("matched evaluation must disclose retrospective causal limits")
+    if manifest.get("evidence_classes") != EVIDENCE_CLASSES:
+        raise ValueError("matched evaluation evidence classes are incomplete")
+    limits = manifest.get("conclusion_limits")
+    if limits != CONCLUSION_LIMITS:
+        raise ValueError("matched evaluation conclusion limits must remain exact-checkpoint-only")
+    contract = manifest.get("comparability_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("matched evaluation comparability contract is missing")
+    if "only_intended_difference" in contract:
+        raise ValueError("retrospective matched evaluation must not claim only_intended_difference")
+    if contract != COMPARABILITY_CONTRACT:
+        raise ValueError("matched evaluation comparability contract is not retrospective and explicit")
+    base_identity_evidence = manifest.get("base_snapshot_identity_evidence")
+    expected_identity_evidence = {
+        "historical_training_base_content_identity": {
+            "status": "unavailable_noncontemporaneous",
+            "sha256": None,
+        },
+        "reconstruction_and_candidate_base_snapshot_identity": {
+            "status": "current_verified_compatibility_evidence",
+            "sha256": None,
+        },
+    }
+    if not isinstance(base_identity_evidence, dict):
+        raise ValueError("matched evaluation base identity evidence is missing")
+    if set(base_identity_evidence) != set(expected_identity_evidence):
+        raise ValueError("matched evaluation base identity evidence fields are invalid")
+    historical_identity = base_identity_evidence["historical_training_base_content_identity"]
+    current_identity = base_identity_evidence["reconstruction_and_candidate_base_snapshot_identity"]
+    if historical_identity != expected_identity_evidence["historical_training_base_content_identity"]:
+        raise ValueError("historical training base content identity must be unavailable")
+    if not isinstance(current_identity, dict) or current_identity.get("status") != expected_identity_evidence["reconstruction_and_candidate_base_snapshot_identity"]["status"]:
+        raise ValueError("current base identity is not marked as compatibility evidence")
+    if not isinstance(current_identity.get("sha256"), str) or len(current_identity["sha256"]) != 64:
+        raise ValueError("current base identity compatibility evidence is malformed")
+    sentinel_digests = manifest.get("raw_pair_sentinel_digests")
+    if not isinstance(sentinel_digests, dict) or not all(isinstance(sentinel_digests.get(key), str) for key in ("historical_action_only", "action_visual_candidate")):
+        raise ValueError("matched evaluation must record both raw pair sentinel digests")
+    if not isinstance(manifest.get("known_noncontemporaneous_evidence"), list) or not manifest["known_noncontemporaneous_evidence"]:
+        raise ValueError("matched evaluation must disclose noncontemporaneous evidence")
+    stable_identity = manifest.get("stable_verified_pair_identity")
+    if not isinstance(stable_identity, str) or len(stable_identity) != 64:
+        raise ValueError("matched evaluation lacks stable verified pair identity")
+    if not isinstance(manifest.get("verified_pair_manifest_sha256"), str) or len(manifest["verified_pair_manifest_sha256"]) != 64:
+        raise ValueError("matched evaluation lacks verified pair-manifest digest")
     if manifest.get("tasks") != list(TASK_IDS) or manifest.get("seeds") != [SEALED_SEED]:
         raise ValueError("matched evaluation is sealed to tasks 0..9 and seed 1000")
     if manifest.get("episodes") != EPISODES or manifest.get("batch_size") != 1:
@@ -289,10 +456,14 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         policy = get_policy(cell["policy_id"])
         if cell.get("finetuning_policy_target_regex") != policy.target_regex:
             raise ValueError(f"cell {cell['cell_id']} target regex is not sealed for {policy.policy_id}")
-        for evidence_name in ("expected_adapter_inventory", "adapter_audit"):
-            evidence = cell.get(evidence_name)
-            if not isinstance(evidence, dict) or not isinstance(evidence.get("path"), str) or not isinstance(evidence.get("sha256"), str):
-                raise ValueError(f"cell {cell['cell_id']} lacks explicit {evidence_name} evidence")
+        if cell["policy_id"] == ACTION_VISUAL_LORA_V1:
+            for evidence_name in ("expected_adapter_inventory", "adapter_audit"):
+                evidence = cell.get(evidence_name)
+                if not isinstance(evidence, dict) or not isinstance(evidence.get("path"), str) or not isinstance(evidence.get("sha256"), str):
+                    raise ValueError(f"cell {cell['cell_id']} lacks explicit {evidence_name} evidence")
+        else:
+            if not isinstance(cell.get("legacy_evidence_bundle"), str) or cell.get("stable_verified_pair_identity") != stable_identity:
+                raise ValueError("historical cell lacks validated legacy evidence binding")
     if manifest.get("paired_reset_states") is not True:
         raise ValueError("matched evaluation must require paired reset states")
     dimensions = manifest.get("randomization_dimensions")
@@ -309,6 +480,8 @@ def build_manifest(
     action_visual_checkpoint: str,
     action_only_training_manifest: str,
     action_visual_training_manifest: str,
+    action_only_legacy_evidence_bundle: str,
+    training_data_root: str,
     output_root: Path,
     episodes: int = EPISODES,
     batch_size: int = 1,
@@ -330,19 +503,37 @@ def build_manifest(
         raise ValueError("matched policy cells must use distinct checkpoint paths")
     if _sha256_file(action_only_adapter / "adapter_model.safetensors") == _sha256_file(action_visual_adapter / "adapter_model.safetensors"):
         raise ValueError("matched policy cells must use distinct adapter artifact identities")
-    provenance = {
-        ACTION_ONLY_LORA_V1: _validate_training_provenance(
-            only_path, action_only_adapter, ACTION_ONLY_LORA_V1
-        ),
-        ACTION_VISUAL_LORA_V1: _validate_training_provenance(
-            visual_path, action_visual_adapter, ACTION_VISUAL_LORA_V1
-        ),
-    }
-    left, right = provenance[ACTION_ONLY_LORA_V1], provenance[ACTION_VISUAL_LORA_V1]
-    for key in ("base_policy", "base_policy_revision", "dataset_repo_id", "dataset_variant", "pair_manifest_sha256", "pair_sentinel_sha256", "flags"):
-        if left[key] != right[key]:
+    # The candidate must pass the native policy/inventory/audit path.  The
+    # historical action-only checkpoint is intentionally validated only by
+    # the portable legacy evidence bundle API.
+    candidate = _validate_training_provenance(
+        visual_path, action_visual_adapter, ACTION_VISUAL_LORA_V1
+    )
+    legacy = _validate_legacy_provenance(
+        evidence_bundle=Path(action_only_legacy_evidence_bundle).expanduser().resolve(),
+        training_manifest=only_path,
+        adapter=action_only_adapter,
+        base_policy=Path(candidate["base_policy"]),
+        data_root=Path(training_data_root).expanduser().resolve(),
+    )
+    if legacy["pair_manifest_sha256"] != candidate["pair_manifest_sha256"]:
+        raise ValueError("historical and candidate pair-manifest digests differ")
+    if legacy.get("pair_identity") is None:
+        raise ValueError("historical evidence lacks stable verified pair identity")
+    if not isinstance(legacy.get("base_snapshot_identity_sha256"), str) or len(legacy["base_snapshot_identity_sha256"]) != 64:
+        raise ValueError("historical evidence lacks validated base/content identity")
+    if candidate.get("base_snapshot_identity_sha256") != legacy["base_snapshot_identity_sha256"]:
+        raise ValueError("historical and candidate base/content identities differ")
+    if legacy["validator_result"].get("checkpoint_tree_sha256") is None:
+        raise ValueError("historical evidence lacks validated checkpoint identity")
+    if legacy["pair_sentinel_sha256"] is not None and not isinstance(legacy["pair_sentinel_sha256"], str):
+        raise ValueError("historical evidence raw pair sentinel digest is malformed")
+    if legacy["pair_sentinel_sha256"] is None:
+        raise ValueError("historical training manifest lacks raw pair sentinel digest")
+    for key in ("base_policy", "base_policy_revision", "dataset_repo_id", "dataset_variant", "flags"):
+        if legacy.get(key) is not None and legacy[key] != candidate[key]:
             raise ValueError(f"paired training manifests differ in sealed field {key}")
-    if left["manifest_path"] == right["manifest_path"]:
+    if only_path == visual_path:
         raise ValueError("matched policies require two distinct training manifests")
     root = output_root.expanduser().resolve()
     dimensions = {str(task): task_randomization_dimensions(task) for task in TASK_IDS}
@@ -370,22 +561,52 @@ def build_manifest(
         "n_action_steps": "checkpoint",
         "visual_condition": "none",
         "training_conditions": {"training_variant": "no_arrow_treatment", "dataset_variant": "control", "trained_on_visual_condition": "no_arrows"},
-        "shared_training_provenance": {key: left[key] for key in ("base_policy", "base_policy_revision", "dataset_repo_id", "dataset_variant", "pair_manifest_sha256", "pair_sentinel_sha256", "flags")},
+        "shared_training_provenance": {
+            key: candidate[key]
+            for key in (
+                "base_policy",
+                "base_policy_revision",
+                "dataset_repo_id",
+                "dataset_variant",
+                "flags",
+            )
+        },
+        "base_snapshot_identity_evidence": {
+            "historical_training_base_content_identity": {
+                "status": "unavailable_noncontemporaneous",
+                "sha256": None,
+            },
+            "reconstruction_and_candidate_base_snapshot_identity": {
+                "status": "current_verified_compatibility_evidence",
+                "sha256": candidate["base_snapshot_identity_sha256"],
+            },
+        },
+        "stable_verified_pair_identity": legacy["pair_identity"],
+        "verified_pair_manifest_sha256": candidate["pair_manifest_sha256"],
+        "raw_pair_sentinel_digests": {
+            "historical_action_only": legacy["pair_sentinel_sha256"],
+            "action_visual_candidate": candidate["pair_sentinel_sha256"],
+        },
+        "comparison_type": "retrospective_matched_checkpoint_evaluation",
+        "evidence_classes": dict(EVIDENCE_CLASSES),
+        "known_noncontemporaneous_evidence": [
+            "historical action-only checkpoint and legacy evidence bundle predate the action_visual_lora_v1 run",
+            "raw pair sentinel digests are recorded independently and are not required to be byte-identical",
+            "historical training base-content identity is unavailable; the current base identity is reconstruction compatibility evidence only",
+        ],
+        "causal_ablation_status": "retrospective_not_strict",
+        "conclusion_limits": list(CONCLUSION_LIMITS),
         "randomization_dimensions": dimensions,
         "randomization_dimension_names": list(RANDOMIZATION_DIMENSIONS),
         "randomization_config": config,
         "randomization_config_sha256": hashlib.sha256(_canonical_json(config).encode("utf-8")).hexdigest(),
         "output_root": str(root),
         "contrast": "action_visual_minus_action_only_clean_no_arrow_pp",
-        "cells": build_cells(action_only_checkpoint, action_visual_checkpoint, root, provenance),
-        "comparability_contract": {
-            "only_intended_difference": ["finetuning_policy_id", "adapter_identity"],
-            "shared_base_revision": SEALED_REVISION,
-            "shared_training_seed": SEALED_SEED,
-            "shared_schedule": {"steps": SEALED_STEPS, "epochs": 15, "batch_size": SEALED_BATCH_SIZE, "peft_r": SEALED_PEFT_R},
-            "live_arrows": False,
-            "paired_reset_states": True,
-        },
+        "cells": build_cells(
+            action_only_checkpoint, action_visual_checkpoint, root,
+            {ACTION_ONLY_LORA_V1: legacy, ACTION_VISUAL_LORA_V1: candidate},
+        ),
+        "comparability_contract": json.loads(_canonical_json(COMPARABILITY_CONTRACT)),
     }
     _validate_manifest(manifest)
     return manifest
@@ -579,6 +800,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--action-visual-checkpoint", required=True)
     parser.add_argument("--action-only-training-manifest", required=True)
     parser.add_argument("--action-visual-training-manifest", required=True)
+    parser.add_argument("--action-only-legacy-evidence-bundle", required=True)
+    parser.add_argument("--training-data-root", required=True)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--episodes", type=int, default=EPISODES)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -601,6 +824,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             action_visual_checkpoint=args.action_visual_checkpoint,
             action_only_training_manifest=args.action_only_training_manifest,
             action_visual_training_manifest=args.action_visual_training_manifest,
+            action_only_legacy_evidence_bundle=args.action_only_legacy_evidence_bundle,
+            training_data_root=args.training_data_root,
             output_root=root,
             episodes=args.episodes,
             batch_size=args.batch_size,

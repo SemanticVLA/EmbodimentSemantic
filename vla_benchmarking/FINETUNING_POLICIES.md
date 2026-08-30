@@ -62,7 +62,7 @@ The first diagnostic should train `action_visual_lora_v1` on the exact
 `no_arrow_treatment` data used for the verified historical
 `action_only_lora_v1` baseline. It should then run a paired clean evaluation:
 
-- baseline cell: `action_only_lora_v1_no_arrows`,
+- baseline cell: `historical_action_only_lora_v1_no_arrows`,
 - candidate cell: `action_visual_lora_v1_no_arrows`,
 - evaluated with: no arrows for both cells,
 - tasks: 0–9, ten episodes per task, identical reset/randomization schedule,
@@ -82,3 +82,17 @@ same training seeds and record paired per-task and episode-level results.
 The existing 43/100 result is a verified baseline for planning, not evidence
 that this candidate has improved. Full vision unfreezing remains a separate
 future method/ablation.
+
+### Retrospective evidence boundary
+
+The historical baseline comparison uses post-hoc, reconstructed
+`legacy_action_only_evidence_v1`; the raw original sentinel is unavailable.
+The stable sealed-pair identity was revalidated against the current pair. The
+candidate uses native policy evidence (`native_policy_evidence_v1`). Its
+comparison metadata is `comparison_type:
+retrospective_matched_checkpoint_evaluation` and
+`causal_ablation_status: retrospective_not_strict`. The permitted conclusion
+is exact checkpoint performance under the matched evaluation. A strict causal
+claim requires contemporaneous retraining of `action_only_lora_v1` under the
+same protocol. The repair is implemented locally; resubmission has not been
+launched.
