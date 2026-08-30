@@ -240,9 +240,15 @@ def test_graph_policy_snapshot_rewrites_only_graph_tokenizer_budget(tmp_path: Pa
         }),
         encoding="utf-8",
     )
+    # Runtime Hugging Face cache metadata is copied with the snapshot but is
+    # intentionally excluded from the authenticated policy-file inventory.
+    (source / ".cache" / "huggingface").mkdir(parents=True)
+    (source / ".cache" / "huggingface" / "CACHEDIR.TAG").write_text(
+        "runtime metadata", encoding="utf-8"
+    )
     source_files = {
         path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in source.rglob("*") if path.is_file()
+        for path in source.rglob("*") if path.is_file() and ".cache" not in path.parts
     }
     (source / "base_snapshot_manifest.json").write_text(
         json.dumps({"revision": "6721902bc4d61e50a3bfdb11dfb4cb626f05d102", "files": source_files}), encoding="utf-8"

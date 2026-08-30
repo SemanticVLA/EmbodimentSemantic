@@ -1007,7 +1007,11 @@ def prepare_graph_policy_snapshot(
         # the original model revision and explicit source provenance.
         files = {}
         for path in sorted(staging.rglob("*")):
-            if path.is_file() and path.name != "base_snapshot_manifest.json":
+            if (
+                path.is_file()
+                and path.name != "base_snapshot_manifest.json"
+                and ".cache" not in path.parts
+            ):
                 files[path.relative_to(staging).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
         revision = None
         source_manifest = source / "base_snapshot_manifest.json"
