@@ -268,6 +268,46 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
 - Complete or partial outputs are archived under
   `/home/hjaber/EmbodimentSemantic_archive/eval/` by the job's EXIT trap.
 
+## Planned visual-path LoRA diagnostic (not launched)
+
+This section records the next policy experiment without inventing a job,
+checkpoint, or result. Status is **implemented/planned, not launched**.
+
+### Policy names
+
+- Historical policy: `action_only_lora_v1`.
+- Candidate policy: `action_visual_lora_v1`.
+- Candidate framing: **action + late-visual LoRA** / **visual-path LoRA**.
+  It retains the historical rank-16 action-expert and action/state targets,
+  and adds rank-16 LoRA to the VLM connector plus vision encoder layers 8–11
+  q/v. All original base weights, all non-adapted vision weights, and VLM text
+  weights remain frozen; only the newly inserted LoRA tensors are trainable.
+  Never call this policy “vision-unfrozen”; full vision unfreezing is a
+  separate future method.
+
+### Planned matched run
+
+- Train the candidate on the exact `no_arrow_treatment` data used by the
+  historical no-arrow `action_only_lora_v1` result.
+- Evaluate both policy cells with **no arrows**: candidate
+  `action_visual_lora_v1_no_arrows` versus the verified historical
+  `action_only_lora_v1_no_arrows` baseline. The training data profile remains
+  `no_arrow_treatment` for both cells.
+- Cover tasks 0–9 with ten episodes per task and matched seeds, reset/
+  randomization configuration, and episode ordering where possible.
+- Report the total and every per-task score for both cells.
+
+Hypothesis: late visual-path adaptation can improve spatially grounded action
+learning when the vision pathway is frozen. The literal success screen is
+**greater than 43/100**; the preferred advancement is approximately **+5
+points without a major task 0–1 regression**. An ICLR-quality claim requires
+matched retraining seeds and paired per-task/episode results. Until that run
+is launched and evaluated, this is a plan—not a result.
+
+Data profiles (`no_arrow_treatment`, `treatment`, and graph profiles) and
+evaluation overlays (no arrows, live arrows, target arrow, or graph overlay)
+remain separate axes. Always state both **trained on** and **evaluated with**.
+
 ## Permanent takeover checklist
 
 1. Read this ledger and `evaluation_results_tracker.json` before answering any

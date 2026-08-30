@@ -9,6 +9,7 @@ PROFILE=""
 RUN_DIR=""
 OUTPUT_ROOT=""
 SEEDS=""
+FINETUNING_POLICY_ID="action_only_lora_v1"
 EPISODES=1
 BATCH_SIZE=1
 DEVICE=cuda
@@ -51,7 +52,7 @@ abs_executable_path() {
 }
 
 usage() {
-  echo "Usage: $0 <setup|dry|smoke|full|resume|eval> --profile <treatment|no-arrow|graph|arrow-graph> [--run-dir PATH] [--seeds LIST] [--output-root PATH]"
+  echo "Usage: $0 <setup|dry|smoke|full|resume|eval> --profile <treatment|no-arrow|graph|arrow-graph> [--finetuning-policy action_only_lora_v1|action_visual_lora_v1] [--run-dir PATH] [--seeds LIST] [--output-root PATH]"
 }
 [[ -n "$ACTION" ]] || { usage; exit 2; }
 case "$ACTION" in setup|dry|smoke|full|resume|eval) ;; -h|--help) usage; exit 0 ;; *) usage >&2; exit 2 ;; esac
@@ -61,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --run-dir) mark_seen run-dir; RUN_DIR="${2:?--run-dir requires a value}"; shift 2 ;;
     --output-root) mark_seen output-root; OUTPUT_ROOT="${2:?--output-root requires a value}"; shift 2 ;;
     --seeds) mark_seen seeds; SEEDS="${2:?--seeds requires a value}"; shift 2 ;;
+    --finetuning-policy) mark_seen finetuning-policy; FINETUNING_POLICY_ID="${2:?--finetuning-policy requires a value}"; shift 2 ;;
     --episodes) mark_seen episodes; EPISODES="${2:?--episodes requires a value}"; shift 2 ;;
     --batch-size) mark_seen batch-size; BATCH_SIZE="${2:?--batch-size requires a value}"; shift 2 ;;
     --device) mark_seen device; DEVICE="${2:?--device requires a value}"; shift 2 ;;
@@ -157,6 +159,7 @@ case "$ACTION" in
     TRAIN_BATCH_SIZE=32
     env -u EPOCHS -u STEPS -u SAVE_FREQ -u UPDATES_PER_EPOCH \
       PYTHON="$PYTHON" TRAINING_PROFILE="$PROFILE_CANONICAL" TRAINING_MODE="$ACTION" \
+      FINETUNING_POLICY_ID="$FINETUNING_POLICY_ID" \
       RUN_ROOT="$RUN_DIR" RESUME="$RESUME_VALUE" BATCH_SIZE="$TRAIN_BATCH_SIZE" SEED=1000 PEFT_R=16 DEVICE="$DEVICE" \
       RESUME_CONFIG_PATH="$RESUME_CONFIG_PATH" \
       bash "$SCRIPT_DIR/launch_lora_treatment.sh" "$ACTION"

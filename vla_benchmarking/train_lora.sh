@@ -81,6 +81,7 @@ BASE_POLICY_REVISION="${BASE_POLICY_REVISION:-6721902bc4d61e50a3bfdb11dfb4cb626f
 BASE_POLICY_SNAPSHOT="${BASE_POLICY_SNAPSHOT:-$SCRIPT_DIR/base_models/smolvla_libero-$BASE_POLICY_REVISION}"
 BASE_POLICY="${BASE_POLICY:-$BASE_POLICY_SNAPSHOT}"
 PEFT_R="${PEFT_R:-16}"
+FINETUNING_POLICY_ID="${FINETUNING_POLICY_ID:-action_only_lora_v1}"
 # These are sealed experiment constants.  In particular, do not let a stale
 # EPOCHS/STEPS/SAVE_FREQ exported by a shell or scheduler silently change the
 # treatment condition.
@@ -100,6 +101,9 @@ PYTHON="${PYTHON:-python}"
 RESUME="${RESUME:-false}"
 RESUME_CONFIG_PATH="${RESUME_CONFIG_PATH:-}"
 
+die() { echo "train_lora preflight: $*" >&2; exit 1; }
+run_python() { "${PYTHON_CMD[@]}" "$@"; }
+
 # Graph profiles are sealed experimental conditions.  Ignore ambient shell
 # overrides so direct invocation cannot silently change the paper cell.
 if [[ "$VARIANT" == graph_treatment || "$VARIANT" == arrow_graph_treatment ]]; then
@@ -116,8 +120,22 @@ else
   PYTHON_CMD=("$PYTHON")
 fi
 
-die() { echo "train_lora preflight: $*" >&2; exit 1; }
-run_python() { "${PYTHON_CMD[@]}" "$@"; }
+# Resolve the versioned adapter policy before any expensive runtime work. The
+# policy is separate from the data profile so a future thread can identify the
+# exact training condition from argv and the resulting manifests.
+POLICY_TARGET_REGEX="$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" run_python - "$FINETUNING_POLICY_ID" "$VARIANT" "$PAIR_MANIFEST" <<'PY'
+import json, pathlib, sys
+from lora_finetuning_policy import validate_policy_for_profile
+policy_id, profile, manifest_path = sys.argv[1:]
+manifest = None
+path = pathlib.Path(manifest_path)
+if path.is_file():
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+policy = validate_policy_for_profile(policy_id, profile, manifest)
+print(policy.target_regex)
+PY
+)" || die "invalid finetuning policy $FINETUNING_POLICY_ID for profile $VARIANT"
+export FINETUNING_POLICY_ID POLICY_TARGET_REGEX
 
 # LeRobot loads policy_preprocessor.json from policy.path.  A CLI
 # tokenizer_max_length override alone does not rewrite that serialized step,
@@ -274,7 +292,7 @@ load_expected_inventory(sys.argv[1])
 PY
 else
   [[ ! -e "$EXPECTED_INVENTORY_PENDING" ]] || die "stale expected LoRA inventory sidecar exists: $EXPECTED_INVENTORY_PENDING"
-  run_python "$SCRIPT_DIR/adapter_audit.py" --generate-expected --base-policy "$BASE_POLICY" --output "$EXPECTED_INVENTORY_PENDING" \
+  run_python "$SCRIPT_DIR/adapter_audit.py" --generate-expected --base-policy "$BASE_POLICY" --finetuning-policy "$FINETUNING_POLICY_ID" --output "$EXPECTED_INVENTORY_PENDING" \
     || die "could not build expected live-policy LoRA inventory"
 fi
 
@@ -351,6 +369,8 @@ payload = {
     "variant": variant, "dataset_variant": pathlib.Path(dataset).name, "dataset_root": str(pathlib.Path(dataset).resolve()),
     "dataset_repo_id": dataset_repo_id, "pair_kind": pair_kind,
     "base_policy": str(pathlib.Path(base).resolve()), "base_policy_revision": revision,
+    "finetuning_policy_id": os.environ.get("FINETUNING_POLICY_ID", "action_only_lora_v1"),
+    "finetuning_policy_target_regex": os.environ.get("POLICY_TARGET_REGEX"),
     "libero_dir": str(pathlib.Path(os.environ.get("LIBERO_DIR", "")).resolve()),
     "libero_commit": os.environ.get("LIBERO_COMMIT", "8f1084e3132a39270c3a13ebe37270a43ece2a01"),
     "libero_worktree_status": "clean", "libero_tracked_clean": True,
@@ -372,6 +392,7 @@ echo "base=$BASE_POLICY revision=$BASE_POLICY_REVISION dataset=$DATASET_ROOT out
 TRAIN_ARGS=(
   --policy.push_to_hub=false \
   --peft.r="$PEFT_R" \
+  --peft.target_modules="$POLICY_TARGET_REGEX" \
   --dataset.repo_id="$DATASET_REPO_ID" \
   --dataset.root="$DATASET_ROOT" \
   --output_dir="$OUTPUT_DIR" \
@@ -445,6 +466,7 @@ fi
 for config in "${adapters[@]}"; do
   run_python "$SCRIPT_DIR/adapter_audit.py" --checkpoint "$(dirname "$config")" \
     --expected-inventory "$EXPECTED_INVENTORY" \
-    || die "checkpoint failed the action-side LoRA audit: $(dirname "$config")"
+    --finetuning-policy "$FINETUNING_POLICY_ID" \
+    || die "checkpoint failed the versioned LoRA policy audit: $(dirname "$config")"
 done
 printf '[%s] adapter postcondition OK (%s checkpoints)\n' "$(date +'%F %T')" "${#adapters[@]}"

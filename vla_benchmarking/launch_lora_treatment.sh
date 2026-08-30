@@ -65,6 +65,7 @@ case "$PROFILE" in
   *) echo "unknown TRAINING_PROFILE: $PROFILE" >&2; exit 2 ;;
 esac
 case "$MODE" in dry|smoke|full|resume) ;; *) echo "usage: $0 [profile] <dry|smoke|full|resume>" >&2; exit 2 ;; esac
+FINETUNING_POLICY_ID="${FINETUNING_POLICY_ID:-action_only_lora_v1}"
 # Sealed schedule: ignore ambient EPOCHS/STEPS/SAVE_FREQ values.
 SEALED_EPOCHS=15
 SEALED_UPDATES_PER_EPOCH=1946
@@ -85,6 +86,22 @@ LIBERO_DIR_VALUE="${LIBERO_DIR:-$SCRIPT_DIR/LIBERO}"
 LIBERO_COMMIT_VALUE="8f1084e3132a39270c3a13ebe37270a43ece2a01"
 RESUME_VALUE="${RESUME:-false}"
 RESUME_CONFIG_PATH_VALUE="${RESUME_CONFIG_PATH:-}"
+
+# The adapter policy is an explicit, versioned axis separate from the data
+# profile. Resolve it before preflight and reject visual LoRA on graph profiles
+# whose manifests seal action_side_only=true.
+POLICY_TARGET_REGEX="$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_VALUE" - "$FINETUNING_POLICY_ID" "$PROFILE" "$PAIR_MANIFEST_VALUE" <<'PY'
+import json, pathlib, sys
+from lora_finetuning_policy import validate_policy_for_profile
+policy_id, profile, manifest_path = sys.argv[1:]
+manifest = None
+path = pathlib.Path(manifest_path)
+if path.is_file():
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+print(validate_policy_for_profile(policy_id, profile, manifest).target_regex)
+PY
+)" || { echo "invalid finetuning policy $FINETUNING_POLICY_ID for profile $PROFILE" >&2; exit 2; }
+export FINETUNING_POLICY_ID POLICY_TARGET_REGEX
 
 if [[ "$PROFILE" == graph_treatment || "$PROFILE" == arrow_graph_treatment ]]; then
   # Graph cells are sealed: ambient values cannot change their training
@@ -113,6 +130,7 @@ COMMON_ENV=("PAIR_MANIFEST=$PAIR_MANIFEST_VALUE"
   "PYTHON=$PYTHON_VALUE"
   "BASE_POLICY_REVISION=$BASE_POLICY_REVISION_VALUE"
   "BASE_POLICY=$BASE_POLICY_VALUE"
+  "FINETUNING_POLICY_ID=$FINETUNING_POLICY_ID" "POLICY_TARGET_REGEX=$POLICY_TARGET_REGEX"
   "PEFT_R=${PEFT_R:-16}" "TRAINING_MODE=$MODE" "STEPS_VALUE=$STEPS_VALUE" "SAVE_FREQ_VALUE=$SAVE_FREQ_VALUE"
   "STEPS=$STEPS_VALUE" "SAVE_FREQ=$SAVE_FREQ_VALUE" "BATCH_SIZE=${BATCH_SIZE:-32}"
   "SEED=${SEED:-1000}" "DEVICE=${DEVICE:-cuda}"
@@ -227,14 +245,19 @@ PY
   fi
   "$PYTHON_VALUE" "$SCRIPT_DIR/adapter_audit.py" --checkpoint "$resume_checkpoint_dir" \
     --expected-inventory "$expected_inventory_path" \
-    || { echo "resume checkpoint failed the action-side LoRA audit" >&2; exit 1; }
+    --finetuning-policy "$FINETUNING_POLICY_ID" \
+    || { echo "resume checkpoint failed the versioned LoRA policy audit" >&2; exit 1; }
   provenance_path="${RUN_ROOT}/run_provenance.json"
   [[ -f "$provenance_path" ]] || provenance_path="${RUN_ROOT}.run_provenance.pending.json"
   [[ -f "$provenance_path" ]] || { echo "resume requires preserved run_provenance.json or pending provenance" >&2; exit 1; }
   "$PYTHON_VALUE" - "$PLAN_SOURCE" "$RUN_ROOT/training_manifest.json" "$provenance_path" "$PROFILE" "$EXPECTED_DATASET_VARIANT" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$PAIR_MANIFEST_VALUE" "$DATASET_REPO_ID" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" <<'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 plan_path=pathlib.Path(sys.argv[1]); manifest_path=pathlib.Path(sys.argv[2]); provenance_path=pathlib.Path(sys.argv[3]); profile=sys.argv[4]; expected_dataset=sys.argv[5]; base_policy=pathlib.Path(sys.argv[6]).expanduser().resolve(); revision=sys.argv[7]; pair_path=pathlib.Path(sys.argv[8]); expected_repo=sys.argv[9]; libero_dir=pathlib.Path(sys.argv[10]).expanduser().resolve(); libero_commit=sys.argv[11]
 plan=json.loads(plan_path.read_text(encoding='utf-8'))
+from lora_finetuning_policy import get_policy
+policy = get_policy(plan.get('finetuning_policy_id'))
+if policy.policy_id != os.environ.get('FINETUNING_POLICY_ID', 'action_only_lora_v1') or plan.get('finetuning_policy_target_regex', policy.target_regex) != policy.target_regex:
+    raise SystemExit('resume training plan finetuning policy differs from the requested policy')
 required_plan=('training_variant','dataset_variant','dataset_repo_id','base_policy','base_policy_revision','pair_manifest_sha256','flags','libero_dir','libero_commit','libero_worktree_status','libero_tracked_clean')
 if any(key not in plan for key in required_plan):
     raise SystemExit('resume training plan is missing required provenance keys')
@@ -272,7 +295,7 @@ if manifest_path.is_file():
         raise SystemExit('resume training manifest is incompatible with requested profile/base revision')
 PY
   "$PYTHON_VALUE" - "$PLAN_SOURCE" "$RESUME_CONFIG_PATH_VALUE" "$RUN_ROOT/resume_audits" "$PROFILE" "$EXPECTED_DATASET_VARIANT" "$DATASET_REPO_ID" "$resume_checkpoint_dir" <<'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 plan_path, config_path, audit_dir = map(pathlib.Path, sys.argv[1:4])
 profile, expected_dataset, expected_repo = sys.argv[4:7]
 checkpoint_dir = pathlib.Path(sys.argv[7]).resolve()
@@ -301,6 +324,7 @@ values={
  'output_dir':get(config,'output_dir'), 'seed':get(config,'seed'), 'batch_size':get(config,'batch_size'),
  'steps':get(config,'steps'), 'save_freq':get(config,'save_freq'),
  'peft.r':get(config,'peft','r') if get(config,'peft','r') is not None else get(config,'policy','peft','r'),
+ 'peft.target_modules':get(config,'peft','target_modules') if get(config,'peft','target_modules') is not None else get(config,'policy','peft','target_modules'),
 }
 required=('data_root','output_dir')
 if any(key not in plan for key in required): raise SystemExit('resume plan lacks data_root/output_dir for train_config binding')
@@ -309,6 +333,9 @@ for key, wanted in expected.items():
     actual=values[key]
     if actual is None or (str(actual) != str(wanted) and not (isinstance(wanted,int) and int(actual) == wanted)):
         raise SystemExit(f'resume train_config mismatch: {key}')
+if plan.get('finetuning_policy_id'):
+    if values['peft.target_modules'] != os.environ.get('POLICY_TARGET_REGEX'):
+        raise SystemExit('resume train_config finetuning policy target regex mismatch')
 if profile in ('graph_treatment', 'arrow_graph_treatment'):
     policy = config.get('policy', {})
     if int(policy.get('tokenizer_max_length', -1)) != 96:
@@ -375,9 +402,10 @@ fi
 
 if [[ "$MODE" != resume ]]; then
 "$PYTHON_VALUE" - "$RUN_PLAN_PENDING" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$DATA_ROOT_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "${PEFT_R:-16}" "${DEVICE:-cuda}" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$PROFILE" "$PAIR_KIND" "$OUTPUT_VALUE" "$RESUME_VALUE" "$RESUME_CONFIG_PATH_VALUE" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" "$EXPERIMENT_NAME" "$TRAINED_VISUAL_CONDITION" <<'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 out, pair_manifest, pair_sentinel, base_policy, revision, data_root, steps, save_freq, batch, seed, peft_r, device, dataset_repo_id, dataset_variant, variant, pair_kind, output_dir, resume, resume_config, libero_dir, libero_commit, experiment, trained_visual_condition = sys.argv[1:]
 from importlib.metadata import PackageNotFoundError, version
+from lora_finetuning_policy import policy_metadata
 def sha(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -403,6 +431,9 @@ payload = {
     "dataset_repo_id": dataset_repo_id,
     "dataset_variant": dataset_variant,
     "training_variant": variant,
+    "finetuning_policy_id": os.environ.get("FINETUNING_POLICY_ID", "action_only_lora_v1"),
+    "finetuning_policy_target_regex": os.environ.get("POLICY_TARGET_REGEX"),
+    "finetuning_policy": policy_metadata(os.environ.get("FINETUNING_POLICY_ID")),
     "pair_kind": pair_kind,
     "training_entrypoint": "run_lerobot_train.py",
     "flags": {"peft_r": int(peft_r), "steps": int(steps), "save_freq": int(save_freq), "batch_size": int(batch), "seed": int(seed), "device": device,
@@ -420,39 +451,84 @@ payload = {
 }
 if variant == "no_arrow_treatment":
     payload["trained_on_visual_condition"] = trained_visual_condition
-    payload["evaluation_contract"] = {
-        "tasks": list(range(10)),
-        "cells": ["no_arrow_trained_live_arrows", "no_arrow_trained_no_arrows"],
-        "episodes_per_task": 10,
-        "eval_seed": 1000,
-        "eval_batch_size": 1,
-        "n_action_steps": "checkpoint",
-        "evaluation_entrypoint": "vla_benchmarking/run_lora_no_arrow_pair_eval.py",
-        "evaluation_script": "vla_benchmarking/run_lora_no_arrow_pair_eval.py",
-        "evaluation_experiment": "smolvla_lora_no_arrow_trained_live_vs_none_2cell",
-        "evaluation_manifest_filename": "no_arrow_trained_arrow_pair_manifest.json",
-        "evaluation_summary_filename": "no_arrow_trained_arrow_pair_summary.csv",
-        "visual_conditions": {
-            "no_arrow_trained_live_arrows": "visual_arrows",
-            "no_arrow_trained_no_arrows": "none",
-        },
-        "context_mode": "standard",
-        "context_format": "standard",
-        "visual_prompt_hint": "disabled",
-        "canonical_libero_init_state_variation": True,
-        "custom_interventions": {
-            "scene_layout": True,
-            "object_removal": True,
-        },
-        "static_prompt_overrides": True,
-        "camera_name": "agentview_image,robot0_eye_in_hand_image",
-        "raw_camera_names": "agentview,robot0_eye_in_hand",
-        "observation_size": [256, 256],
-        "eval_use_async_envs": False,
-        "render_mode": "rgb_array",
-        "adapter_key": "no_arrow_treatment_adapter",
-        "contrast": "live_arrow_effect_pp",
-    }
+    policy_id = os.environ.get("FINETUNING_POLICY_ID", "action_only_lora_v1")
+    if policy_id == "action_only_lora_v1":
+        # Preserve the historical action-only contract and evaluator cells.
+        payload["evaluation_contract"] = {
+            "tasks": list(range(10)),
+            "cells": ["no_arrow_trained_live_arrows", "no_arrow_trained_no_arrows"],
+            "episodes_per_task": 10,
+            "eval_seed": 1000,
+            "eval_batch_size": 1,
+            "n_action_steps": "checkpoint",
+            "evaluation_entrypoint": "vla_benchmarking/run_lora_no_arrow_pair_eval.py",
+            "evaluation_script": "vla_benchmarking/run_lora_no_arrow_pair_eval.py",
+            "evaluation_experiment": "smolvla_lora_no_arrow_trained_live_vs_none_2cell",
+            "evaluation_manifest_filename": "no_arrow_trained_arrow_pair_manifest.json",
+            "evaluation_summary_filename": "no_arrow_trained_arrow_pair_summary.csv",
+            "visual_conditions": {
+                "no_arrow_trained_live_arrows": "visual_arrows",
+                "no_arrow_trained_no_arrows": "none",
+            },
+            "context_mode": "standard",
+            "context_format": "standard",
+            "visual_prompt_hint": "disabled",
+            "canonical_libero_init_state_variation": True,
+            "custom_interventions": {
+                "scene_layout": True,
+                "object_removal": True,
+            },
+            "static_prompt_overrides": True,
+            "camera_name": "agentview_image,robot0_eye_in_hand_image",
+            "raw_camera_names": "agentview,robot0_eye_in_hand",
+            "observation_size": [256, 256],
+            "eval_use_async_envs": False,
+            "render_mode": "rgb_array",
+            "adapter_key": "no_arrow_treatment_adapter",
+            "contrast": "live_arrow_effect_pp",
+        }
+    elif policy_id == "action_visual_lora_v1":
+        # Visual LoRA is compared against the matched action-only policy under
+        # the same clean no-arrow condition.  It must not inherit the legacy
+        # within-policy live-arrows-vs-none evaluator, which would confound
+        # the policy comparison with a visual-condition change.
+        payload["evaluation_contract"] = {
+            "tasks": list(range(10)),
+            "cells": ["action_only_lora_v1_no_arrows", "action_visual_lora_v1_no_arrows"],
+            "episodes_per_task": 10,
+            "eval_seed": 1000,
+            "eval_batch_size": 1,
+            "n_action_steps": "checkpoint",
+            "evaluation_entrypoint": "vla_benchmarking/run_lora_policy_pair_eval.py",
+            "evaluation_script": "vla_benchmarking/run_lora_policy_pair_eval.py",
+            "evaluation_experiment": "smolvla_lora_action_visual_policy_no_arrow_matched_eval_v1",
+            "evaluation_manifest_filename": "action_visual_lora_no_arrow_pair_manifest.json",
+            "evaluation_summary_filename": "action_visual_lora_no_arrow_pair_summary.csv",
+            "evaluation_results_filename": "action_visual_lora_no_arrow_pair_results.json",
+            "visual_conditions": {
+                "action_only_lora_v1_no_arrows": "none",
+                "action_visual_lora_v1_no_arrows": "none",
+            },
+            "policy_ids": ["action_only_lora_v1", "action_visual_lora_v1"],
+            "training_profile": "no_arrow_treatment",
+            "context_mode": "standard",
+            "context_format": "standard",
+            "visual_prompt_hint": "disabled",
+            "canonical_libero_init_state_variation": True,
+            "custom_interventions": {
+                "scene_layout": True,
+                "object_removal": True,
+            },
+            "static_prompt_overrides": True,
+            "camera_name": "agentview_image,robot0_eye_in_hand_image",
+            "raw_camera_names": "agentview,robot0_eye_in_hand",
+            "observation_size": [256, 256],
+            "eval_use_async_envs": False,
+            "render_mode": "rgb_array",
+            "contrast": "action_visual_minus_action_only_clean_no_arrow_pp",
+        }
+    else:
+        raise SystemExit(f"unsupported no-arrow evaluation policy: {policy_id}")
 elif variant in ("graph_treatment", "arrow_graph_treatment"):
     payload["trained_on_visual_condition"] = trained_visual_condition
     payload["trained_on_text_condition"] = "target_natural_v1"
@@ -496,6 +572,7 @@ training_argv = [
     "run_lerobot_train.py",
     "--policy.push_to_hub=false",
     f"--peft.r={int(peft_r)}",
+    f"--peft.target_modules={os.environ['POLICY_TARGET_REGEX']}",
     f"--dataset.repo_id={dataset_repo_id}",
     f"--dataset.root={pathlib.Path(data_root, dataset_variant).resolve()}",
     f"--output_dir={pathlib.Path(output_dir).resolve()}",
@@ -539,8 +616,9 @@ adapter_path="$RUN_ROOT/checkpoints/$checkpoint_id/pretrained_model/adapter_mode
 [[ -s "$adapter_path" ]] || { echo "adapter artifact is missing: $adapter_path" >&2; exit 1; }
 
 "$PYTHON_VALUE" - "$RUN_ROOT/training_manifest.json" "$RUN_ROOT/training_plan.json" "$adapter_path" "$PAIR_MANIFEST_VALUE" "$PAIR_SENTINEL_VALUE" "$BASE_POLICY_VALUE" "$BASE_POLICY_REVISION_VALUE" "$STEPS_VALUE" "$SAVE_FREQ_VALUE" "${BATCH_SIZE:-32}" "${SEED:-1000}" "${PEFT_R:-16}" "$checkpoint_id" "$PROFILE" "$PAIR_KIND" "$DATASET_REPO_ID" "$DATASET_VARIANT" "$LIBERO_DIR_VALUE" "$LIBERO_COMMIT_VALUE" "$RUN_ROOT/resume_audits" "$EXPERIMENT_NAME" "$TRAINED_VISUAL_CONDITION" "$ADAPTER_KEY" "$RUN_ROOT/graph_tokenizer_audit.json" "$RUN_ROOT/expected_adapter_inventory.json" <<'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 out, plan, treatment, pair_manifest, pair_sentinel, base_policy, revision, steps, save_freq, batch, seed, peft_r, checkpoint_id, variant, pair_kind, dataset_repo_id, dataset_variant, libero_dir, libero_commit, audit_dir, experiment, trained_visual_condition, adapter_key, graph_audit_path, expected_inventory_path = sys.argv[1:]
+from lora_finetuning_policy import policy_metadata
 def sha(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -574,6 +652,9 @@ payload = {
     "pair_sentinel": str(pathlib.Path(pair_sentinel).resolve()),
     "pair_sentinel_sha256": sha(pair_sentinel),
     "training_variant": variant,
+    "finetuning_policy_id": os.environ.get("FINETUNING_POLICY_ID", "action_only_lora_v1"),
+    "finetuning_policy_target_regex": os.environ.get("POLICY_TARGET_REGEX"),
+    "finetuning_policy": policy_metadata(os.environ.get("FINETUNING_POLICY_ID")),
     "dataset_repo_id": dataset_repo_id,
     "dataset_variant": dataset_variant,
     "libero_dir": str(pathlib.Path(libero_dir).resolve()),
@@ -614,7 +695,7 @@ if variant in ("graph_treatment", "arrow_graph_treatment"):
 adapter_dir = pathlib.Path(treatment).resolve().parent
 adapter_audit = adapter_dir / "adapter_audit.json"
 if not adapter_audit.is_file():
-    raise SystemExit(f"action-side LoRA audit evidence is missing: {adapter_audit}")
+    raise SystemExit(f"versioned LoRA policy audit evidence is missing: {adapter_audit}")
 payload["adapter_audit"] = {
     "path": str(adapter_audit),
     "sha256": sha(adapter_audit),

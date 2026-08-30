@@ -80,6 +80,7 @@ def _expected_inventory_fixture(base_policy: str) -> dict:
 def _runtime(tmp_path: Path, *, real_launcher: bool = True) -> tuple[Path, dict[str, str], Path]:
     """Create a no-network operator sandbox with a traceable launcher boundary."""
     shutil.copy2(ROOT / "run_smolvla_pipeline.sh", tmp_path / "run_smolvla_pipeline.sh")
+    shutil.copy2(ROOT / "lora_finetuning_policy.py", tmp_path / "lora_finetuning_policy.py")
     if real_launcher:
         shutil.copy2(ROOT / "launch_lora_treatment.sh", tmp_path / "launch_lora_treatment.sh")
     else:
@@ -131,6 +132,8 @@ def _runtime(tmp_path: Path, *, real_launcher: bool = True) -> tuple[Path, dict[
     shutil.copy2(pair_manifest, default_data_root / pair_manifest.name)
     shutil.copy2(pair_sentinel, default_data_root / pair_sentinel.name)
     fake_site = tmp_path / "fake_site"
+    fake_site.mkdir()
+    shutil.copy2(ROOT / "lora_finetuning_policy.py", fake_site / "lora_finetuning_policy.py")
     for package in ("peft", "safetensors"):
         (fake_site / package).mkdir(parents=True)
     (fake_site / "peft" / "__init__.py").write_text(
@@ -484,6 +487,69 @@ def test_smoke_is_exactly_two_steps_and_full_schedule_ignores_ambient_values(tmp
     assert full_plan["flags"]["save_freq"] == 1946
     assert full_plan["flags"]["epochs"] == 15
     assert full_plan["flags"]["updates_per_epoch"] == 1946
+
+
+def test_no_arrow_action_only_plan_preserves_historical_evaluation_contract(tmp_path: Path) -> None:
+    """The historical policy keeps its original within-policy two-cell eval."""
+    script, env, _ = _runtime(tmp_path)
+    run_dir = tmp_path / "action-only-no-arrow"
+    result = _run(
+        script,
+        [
+            "smoke",
+            "--profile",
+            "no-arrow",
+            "--run-dir",
+            _bash_path(run_dir),
+            "--python",
+            _bash_path(tmp_path / "python_stub"),
+            "--finetuning-policy",
+            "action_only_lora_v1",
+        ],
+        env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    contract = json.loads((run_dir / "training_plan.json").read_text(encoding="utf-8"))["evaluation_contract"]
+    assert contract["cells"] == ["no_arrow_trained_live_arrows", "no_arrow_trained_no_arrows"]
+    assert contract["evaluation_entrypoint"] == "vla_benchmarking/run_lora_no_arrow_pair_eval.py"
+    assert contract["contrast"] == "live_arrow_effect_pp"
+
+
+def test_no_arrow_visual_policy_plan_uses_matched_clean_policy_evaluation(tmp_path: Path) -> None:
+    """Visual LoRA must compare matched no-arrow policies, never live arrows."""
+    script, env, _ = _runtime(tmp_path)
+    run_dir = tmp_path / "visual-no-arrow"
+    result = _run(
+        script,
+        [
+            "smoke",
+            "--profile",
+            "no-arrow",
+            "--run-dir",
+            _bash_path(run_dir),
+            "--python",
+            _bash_path(tmp_path / "python_stub"),
+            "--finetuning-policy",
+            "action_visual_lora_v1",
+        ],
+        env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    contract = json.loads((run_dir / "training_plan.json").read_text(encoding="utf-8"))["evaluation_contract"]
+    assert contract["cells"] == ["action_only_lora_v1_no_arrows", "action_visual_lora_v1_no_arrows"]
+    assert contract["evaluation_entrypoint"] == "vla_benchmarking/run_lora_policy_pair_eval.py"
+    assert contract["evaluation_experiment"] == "smolvla_lora_action_visual_policy_no_arrow_matched_eval_v1"
+    assert contract["evaluation_manifest_filename"] == "action_visual_lora_no_arrow_pair_manifest.json"
+    assert contract["evaluation_summary_filename"] == "action_visual_lora_no_arrow_pair_summary.csv"
+    assert contract["evaluation_results_filename"] == "action_visual_lora_no_arrow_pair_results.json"
+    assert contract["policy_ids"] == ["action_only_lora_v1", "action_visual_lora_v1"]
+    assert contract["visual_conditions"] == {
+        "action_only_lora_v1_no_arrows": "none",
+        "action_visual_lora_v1_no_arrows": "none",
+    }
+    assert "no_arrow_trained_live_arrows" not in contract["cells"]
+    assert "no_arrow_trained_no_arrows" not in contract["cells"]
+    assert "run_lora_no_arrow_pair_eval.py" not in contract["evaluation_entrypoint"]
 
 
 def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(tmp_path: Path) -> None:

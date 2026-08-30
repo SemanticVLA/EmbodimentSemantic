@@ -241,3 +241,69 @@ def test_checkpoint_audit_rejects_strict_lm_expert_subset(tmp_path, monkeypatch)
     expected["inventory_sha256"] = adapter_audit.inventory_sha256(expected)
     with pytest.raises(ValueError, match="module set"):
         adapter_audit.audit_adapter_checkpoint(adapter, expected_inventory=expected)
+
+
+def test_visual_policy_audit_accepts_exact_late_vision_and_connector_coverage(tmp_path, monkeypatch):
+    adapter = tmp_path / "pretrained_model"
+    adapter.mkdir(parents=True)
+    (adapter / "adapter_model.safetensors").write_bytes(b"weights")
+    (adapter / "adapter_config.json").write_text(
+        json.dumps({
+            "peft_type": "LORA", "r": 16, "modules_to_save": [],
+            "target_modules": adapter_audit.ACTION_VISUAL_TARGET_REGEX,
+        }), encoding="utf-8"
+    )
+    modules = sorted(adapter_audit.REQUIRED_ACTION_MODULES)
+    modules += [f"model.vlm_with_expert.lm_expert.layers.{i}.{side}_proj" for i in range(32) for side in ("q", "v")]
+    modules.append("model.vlm_with_expert.vlm.model.connector.modality_projection.proj")
+    modules += [
+        f"model.vlm_with_expert.vlm.model.vision_model.encoder.layers.{i}.self_attn.{side}_proj"
+        for i in range(8, 12) for side in ("q", "v")
+    ]
+    modules = sorted(modules)
+    assert len(modules) == 78
+    dimensions = {module: (718 if index == 0 else 634) for index, module in enumerate(modules)}
+    tensors = {
+        f"base_model.model.{module}.lora_{side}.default.weight": _Tensor(
+            (16, dimensions[module]) if side == "A" else (dimensions[module], 16)
+        )
+        for module in modules for side in ("A", "B")
+    }
+    names = sorted(tensors)
+    expected = {
+        "schema_version": 2,
+        "finetuning_policy_id": "action_visual_lora_v1",
+        "base_policy_revision": adapter_audit.PINNED_BASE_POLICY_REVISION,
+        "target_regex": adapter_audit.ACTION_VISUAL_TARGET_REGEX,
+        "peft_type": "LORA", "rank": 16, "modules_to_save": [],
+        "effective_peft_config": {
+            "peft_type": "LORA", "r": 16,
+            "target_modules": adapter_audit.ACTION_VISUAL_TARGET_REGEX, "modules_to_save": [],
+        },
+        "matched_module_names": modules,
+        "trainable_parameter_names": [
+            f"{module}.lora_{side}.default.weight" for module in modules for side in ("A", "B")
+        ],
+        "trainable_parameter_count": 156,
+        "trainable_tensor_count": 156,
+        "trainable_parameter_numel": 1_585_152,
+        "trainable_parameter_shapes": {
+            f"{module}.lora_{side}.default.weight": list((16, dimensions[module]) if side == "A" else (dimensions[module], 16))
+            for module in modules for side in ("A", "B")
+        },
+        "no_full_weight_trainables": True,
+        "base_parameters_frozen": True,
+    }
+    expected["inventory_sha256"] = adapter_audit.inventory_sha256(expected)
+    _patch_safetensors(monkeypatch, tensors)
+    report = adapter_audit.audit_adapter_checkpoint(adapter, expected_inventory=expected)
+    assert report["schema_version"] == 2
+    assert report["finetuning_policy_id"] == "action_visual_lora_v1"
+    assert report["no_full_weight_trainables"] is True
+    assert report["base_parameters_frozen"] is True
+    assert "no_vision_backbone_trainables" not in report
+    assert report["tensor_count"] == 156
+
+    tensors[names[0]] = _Tensor((16, dimensions[modules[0]] + 1))
+    with pytest.raises(ValueError, match="shapes"):
+        adapter_audit.audit_adapter_checkpoint(adapter, expected_inventory=expected)

@@ -217,6 +217,22 @@ adapter is trained. `treatment` uses baked-in arrows and `no-arrow` uses the
 arrow-free frames. These are distinct profiles, not a control/treatment adapter
 pair.
 
+Fine-tuning policy and data profile are separate axes. See
+[`FINETUNING_POLICIES.md`](FINETUNING_POLICIES.md) for the canonical IDs and
+the naming contract used in manifests, jobs, and future evaluations:
+
+- `action_only_lora_v1` is the historical rank-16 action-side LoRA policy.
+- `action_visual_lora_v1` retains those targets and adds rank-16 LoRA to the
+  VLM connector and vision encoder layers 8–11 q/v; all original base, vision,
+  and VLM text weights remain frozen. Only the new LoRA tensors are trainable.
+  This is **visual-path LoRA**, never “vision-unfrozen”.
+
+The data profile says what the adapter was trained on; the evaluation overlay
+says what it saw during rollout. Always report both. The first candidate
+diagnostic is planned on the exact `no_arrow_treatment` data with a clean,
+paired no-arrow evaluation against the historical 43/100 action-only result.
+It is implemented/planned, not launched; no candidate score is implied.
+
 The training environment is Python 3.12 with the pinned LeRobot source commit
 `d656da8ccca5989ff0a2207e81fbfa2c2d5bafb1` and its dataset, training, PEFT,
 SmolVLA, and LIBERO extras. Bootstrap also requires the LIBERO checkout at
