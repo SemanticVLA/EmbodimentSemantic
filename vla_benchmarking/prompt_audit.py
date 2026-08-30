@@ -897,6 +897,8 @@ def prepare_graph_policy_snapshot(
     try:
         for path in source.rglob("*"):
             relative = path.relative_to(source)
+            if ".cache" in relative.parts:
+                continue
             destination = staging / relative
             if path.is_dir():
                 destination.mkdir(parents=True, exist_ok=True)

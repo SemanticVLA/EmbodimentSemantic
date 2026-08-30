@@ -265,6 +265,7 @@ def test_graph_policy_snapshot_rewrites_only_graph_tokenizer_budget(tmp_path: Pa
     assert (target / "base_snapshot_manifest.json").is_file()
     derived_manifest = json.loads((target / "base_snapshot_manifest.json").read_text(encoding="utf-8"))
     assert not any(".cache" in name for name in derived_manifest["files"])
+    assert not (target / ".cache").exists()
     assert not os.path.samefile(source / "tokenizer" / "tokenizer.json", target / "tokenizer" / "tokenizer.json")
 
 

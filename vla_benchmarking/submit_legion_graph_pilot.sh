@@ -81,6 +81,7 @@ else
   [[ "$(state_value input_bundle_status)" == VERIFIED ]] || { echo 'setup input bundle is not verified; refusing launch' >&2; exit 1; }
   input_bundle_path="$(state_value input_bundle_path)"
   input_bundle_tree_sha256="$(state_value input_bundle_tree_sha256)"
+  input_bundle_status="$(state_value input_bundle_status)"
   [[ "$input_bundle_path" == "$ARCHIVE_ROOT/input_bundles/"* && -d "$input_bundle_path" ]] || { echo 'setup input bundle path is missing or outside HOME archive' >&2; exit 1; }
   [[ "$input_bundle_tree_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo 'setup input bundle tree hash is invalid' >&2; exit 1; }
   [[ -s "$input_bundle_path/tree_sha256" && "$(tr -d '[:space:]' < "$input_bundle_path/tree_sha256")" == "$input_bundle_tree_sha256" ]] || { echo 'setup input bundle tree hash changed' >&2; exit 1; }
