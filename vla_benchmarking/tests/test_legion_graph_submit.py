@@ -111,6 +111,7 @@ def test_eval_archive_seal_rejects_files_added_after_inventory_build():
 
 def test_setup_requires_live_checkpoint_and_real_libero_reset_smokes():
     text = SCRIPT.read_text(encoding="utf-8")
+    assert 'local raw="$1" id; id="${raw%%;*}"' in text
     assert 'git -C "\\$REPO" archive --format=tar "\\$EXPECTED_REPO_COMMIT" vla_benchmarking' in text
     assert 'SMOKE_CHECKPOINT="\\$EVIDENCE/smoke/checkpoints/000002/pretrained_model"' in text
     assert '--policy.path="\\$SMOKE_CHECKPOINT"' in text

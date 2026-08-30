@@ -139,7 +139,7 @@ write_state() {
   } > "$tmp"
   mv -f "$tmp" "$state_file"
 }
-submit_id() { local raw="$1" id="${raw%%;*}"; [[ "$id" =~ ^[0-9]+$ ]] || { echo "invalid sbatch job id: $raw" >&2; exit 1; }; printf '%s\n' "$id"; }
+submit_id() { local raw="$1" id; id="${raw%%;*}"; [[ "$id" =~ ^[0-9]+$ ]] || { echo "invalid sbatch job id: $raw" >&2; exit 1; }; printf '%s\n' "$id"; }
 sha256_file() { sha256sum "$1" | awk '{print $1}'; }
 
 if [[ "$ACTION" == setup ]]; then
