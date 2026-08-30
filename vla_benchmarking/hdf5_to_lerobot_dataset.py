@@ -1243,12 +1243,15 @@ def run_verify_graph_pair(args: argparse.Namespace) -> None:
         )
 
     checked = arrow_frames = 0
+    source_verification = []
     global_episode = 0
     for task_record in manifest["tasks"]:
         task_id = int(task_record["task_id"])
         path = hdf5_path_for_task(task_id, args.data_dir)
         with h5py.File(path, "r") as hdf5_file:
-            _assert_source_identity(task_record["source_identity"], path, task_id, hdf5_file)
+            source_verification.append(
+                _assert_source_identity(task_record["source_identity"], path, task_id, hdf5_file)
+            )
             base_task_text = task_record["task_text"]
             if task_text_for(task_id, hdf5_file) != base_task_text:
                 raise AssertionError(f"task {task_id}: task text no longer matches graph pair manifest")
@@ -1326,6 +1329,7 @@ def run_verify_graph_pair(args: argparse.Namespace) -> None:
         "historical_pair_contract": manifest["historical_pair_contract"],
         "task_ids": manifest["task_ids"],
         "source_snapshot_identity": manifest["source_snapshot_identity"],
+        "source_verification": source_verification,
         "full_experiment_ready": manifest["full_experiment_ready"],
         "launch_eligibility": manifest["launch_eligibility"],
         "total_episodes": global_episode,
@@ -1339,13 +1343,42 @@ def run_verify_graph_pair(args: argparse.Namespace) -> None:
     print(f"graph verify OK: {checked} frames and {global_episode} episodes checked; wrote {sentinel_path}")
 
 
-def _assert_source_identity(expected: dict, path: Path, task_id: int, hdf5_file: h5py.File) -> None:
+def _assert_source_identity(expected: dict, path: Path, task_id: int, hdf5_file: h5py.File) -> dict:
+    """Verify source content while allowing an exact HDF5 copy to relocate.
+
+    Absolute paths and nanosecond mtimes are observations of one storage copy,
+    not content identity.  Cross-host archival filesystems may also preserve
+    only coarser timestamp precision.  The cryptographic digest, byte size,
+    task metadata, demo count, and embedded problem metadata remain strict.
+    """
     actual = _source_identity(path, task_id, hdf5_file)
-    if actual != expected:
+    content_fields = (
+        "task_id",
+        "task_name",
+        "size_bytes",
+        "sha256",
+        "num_demos",
+        "problem_info",
+    )
+    mismatches = [field for field in content_fields if actual.get(field) != expected.get(field)]
+    if mismatches:
         raise AssertionError(
-            f"task {task_id}: source HDF5 identity changed since conversion; "
-            "regenerate the pair rather than verifying against a different source"
+            f"task {task_id}: source HDF5 content identity changed in fields {mismatches}; "
+            "regenerate the pair rather than verifying against different bytes"
         )
+    return {
+        "schema_version": 1,
+        "task_id": task_id,
+        "content_identity_fields": list(content_fields),
+        "sha256": actual["sha256"],
+        "size_bytes": actual["size_bytes"],
+        "manifest_source_path": expected.get("path"),
+        "verified_source_path": actual["path"],
+        "path_relocated": actual.get("path") != expected.get("path"),
+        "manifest_mtime_ns": expected.get("mtime_ns"),
+        "verified_mtime_ns": actual["mtime_ns"],
+        "mtime_changed": actual.get("mtime_ns") != expected.get("mtime_ns"),
+    }
 
 
 def _assert_loaded_frame_matches(
@@ -1468,12 +1501,15 @@ def run_verify(args: argparse.Namespace, *, target_arrow: bool = False) -> None:
         )
 
     checked = arrow_frames = 0
+    source_verification = []
     global_episode = 0
     for task_record in manifest["tasks"]:
         task_id = int(task_record["task_id"])
         path = hdf5_path_for_task(task_id, args.data_dir)
         with h5py.File(path, "r") as hdf5_file:
-            _assert_source_identity(task_record["source_identity"], path, task_id, hdf5_file)
+            source_verification.append(
+                _assert_source_identity(task_record["source_identity"], path, task_id, hdf5_file)
+            )
             if task_text_for(task_id, hdf5_file) != task_record["task_text"]:
                 raise AssertionError(f"task {task_id}: task text no longer matches pair manifest")
             for demo_record in task_record["demos"]:
@@ -1540,6 +1576,7 @@ def run_verify(args: argparse.Namespace, *, target_arrow: bool = False) -> None:
         "storage_contract": manifest["storage_contract"],
         "task_ids": manifest["task_ids"],
         "source_snapshot_identity": manifest["source_snapshot_identity"],
+        "source_verification": source_verification,
         "full_experiment_ready": manifest["full_experiment_ready"],
         "launch_eligibility": manifest["launch_eligibility"],
         "total_episodes": global_episode,

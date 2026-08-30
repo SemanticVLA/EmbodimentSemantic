@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
+import shutil
 from pathlib import Path
 
 import h5py
@@ -41,8 +43,10 @@ from hdf5_to_lerobot_dataset import (
     task_text_for,
     validate_verified_pair,
     _load_sealed_manifest,
+    _assert_source_identity,
     _assert_episode_expectations,
     _full_experiment_ready,
+    _source_identity,
 )
 
 
@@ -566,3 +570,29 @@ def test_camera_key_mapping_matches_hdf5_naming():
     params = inspect.signature(build_frame).parameters
     assert "eye_in_hand_rgb" in params
     assert "robot0_eye_in_hand_rgb" not in params
+
+
+def test_source_identity_accepts_relocated_exact_bytes_and_rejects_content_change(tmp_path):
+    original = tmp_path / "original.hdf5"
+    with h5py.File(original, "w") as hdf5_file:
+        data = hdf5_file.create_group("data")
+        data.attrs["num_demos"] = 50
+        data.attrs["problem_info"] = "sealed-test-problem"
+    with h5py.File(original, "r") as hdf5_file:
+        expected = _source_identity(original, 0, hdf5_file)
+
+    relocated = tmp_path / "relocated" / "copy.hdf5"
+    relocated.parent.mkdir()
+    shutil.copy2(original, relocated)
+    os.utime(relocated, ns=(relocated.stat().st_atime_ns, (expected["mtime_ns"] // 1_000_000_000) * 1_000_000_000))
+    with h5py.File(relocated, "r") as hdf5_file:
+        evidence = _assert_source_identity(expected, relocated, 0, hdf5_file)
+    assert evidence["path_relocated"] is True
+    assert evidence["mtime_changed"] is True
+    assert evidence["sha256"] == expected["sha256"]
+
+    with h5py.File(relocated, "a") as hdf5_file:
+        hdf5_file["data"].attrs["content_tamper"] = "changed"
+    with h5py.File(relocated, "r") as hdf5_file:
+        with pytest.raises(AssertionError, match="content identity changed"):
+            _assert_source_identity(expected, relocated, 0, hdf5_file)
