@@ -226,12 +226,13 @@ finish() {
 [[ -d "\$LIBERO_DIR/.git" && "\$(git -C "\$LIBERO_DIR" rev-parse HEAD)" == "\$LIBERO_COMMIT" ]] || die 'LIBERO checkout is not pinned'
 [[ -z "\$(git -C "\$LIBERO_DIR" status --porcelain --untracked-files=no)" ]] || die 'LIBERO checkout is dirty'
 mkdir -p "\$EVIDENCE"
-for p in "\$LIBERO_DATA_DIR" "\$DATA_ROOT/sealed_lora_pair_manifest.json" "\$DATA_ROOT/sealed_lora_pair_verified.json" "\$BASE_POLICY/config.json" "\$BASE_POLICY/base_snapshot_manifest.json" "\$LIBERO_CONFIG"; do [[ -e "\$p" ]] || die "required staged artifact missing: \$p"; done
+for p in "\$LIBERO_DATA_DIR" "\$DATA_ROOT/sealed_lora_pair_manifest.json" "\$BASE_POLICY/config.json" "\$BASE_POLICY/base_snapshot_manifest.json" "\$LIBERO_CONFIG"; do [[ -e "\$p" ]] || die "required staged artifact missing: \$p"; done
 module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"
 export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG
 export BASE_POLICY_REVISION BASE_POLICY GRAPH_BASE_POLICY DATA_ROOT LIBERO_DATA_DIR LIBERO_DIR LIBERO_COMMIT PAIR_MANIFEST="\$DATA_ROOT/sealed_lora_graph_pair_manifest.json" PAIR_SENTINEL="\$DATA_ROOT/sealed_lora_graph_pair_verified.json"
 "\$PYTHON" -m py_compile "\$REPO/vla_benchmarking/run_lora_graph_pair_eval.py" "\$REPO/vla_benchmarking/prompt_audit.py" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py"
 "\$PYTHON" "\$REPO/vla_benchmarking/hdf5_to_lerobot_dataset.py" --mode verify --data-dir "\$LIBERO_DATA_DIR" --output-root "\$DATA_ROOT"
+[[ -s "\$DATA_ROOT/sealed_lora_pair_verified.json" ]] || die 'historical pair verification did not produce its sentinel'
 graph_artifact_count=0
 for p in "\$DATA_ROOT/graph_treatment" "\$DATA_ROOT/arrow_graph_treatment" "\$DATA_ROOT/sealed_lora_graph_pair_manifest.json" "\$DATA_ROOT/sealed_lora_graph_pair_verified.json"; do [[ -e "\$p" ]] && graph_artifact_count=\$((graph_artifact_count + 1)); done
 case "\$graph_artifact_count" in

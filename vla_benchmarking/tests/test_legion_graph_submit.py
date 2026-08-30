@@ -127,6 +127,9 @@ def test_setup_requires_live_checkpoint_and_real_libero_reset_smokes():
     assert 'raise SystemExit("setup archive inventory is incomplete")' in text
     assert 'upstream_step_source = inspect.getsource(lerobot_libero.LiberoEnv.step)' in text
     assert '"upstream_libero_env_step_sha256"' in text
+    verify_call = 'hdf5_to_lerobot_dataset.py" --mode verify --data-dir'
+    sentinel_gate = "historical pair verification did not produce its sentinel"
+    assert text.index(verify_call) < text.index(sentinel_gate)
 
 @pytest.mark.skipif(os.name == "nt", reason="fake Legion submission requires a POSIX shell")
 def test_setup_with_fake_sbatch_is_single_submission_and_ambient_safe(tmp_path):
