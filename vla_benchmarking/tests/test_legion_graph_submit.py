@@ -33,6 +33,8 @@ def test_graph_pilot_submitter_has_sealed_chain_and_no_arrow_graph_run():
     assert "JobState=COMPLETED" in text
     assert "ExitCode=0:0" in text
     assert "setup_state_source='scontrol'" in text
+    assert "-graph96-v2" in text
+    assert "-graph96\"" not in text
     assert "TRAINING_PROFILE=graph_treatment" in text
     assert "TRAINING_MODE=full" in text
     assert "BATCH_SIZE=32 SEED=1000 PEFT_R=16" in text

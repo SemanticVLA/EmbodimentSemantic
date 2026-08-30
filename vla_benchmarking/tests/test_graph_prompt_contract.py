@@ -259,10 +259,12 @@ def test_graph_policy_snapshot_rewrites_only_graph_tokenizer_budget(tmp_path: Pa
     source_steps = json.loads((source / "policy_preprocessor.json").read_text(encoding="utf-8"))["steps"]
     source_tokenizer = next(step for step in source_steps if step["registry_name"] == "tokenizer_processor")
     assert source_tokenizer["config"]["max_length"] == 48
-    evidence = validate_serialized_graph_preprocessor(target)
+    evidence = validate_serialized_graph_preprocessor(target, require_snapshot_manifest=True)
     assert evidence["max_length"] == 96
     assert evidence["tokenizer_name"] == str((target / "tokenizer").resolve())
     assert (target / "base_snapshot_manifest.json").is_file()
+    derived_manifest = json.loads((target / "base_snapshot_manifest.json").read_text(encoding="utf-8"))
+    assert not any(".cache" in name for name in derived_manifest["files"])
     assert not os.path.samefile(source / "tokenizer" / "tokenizer.json", target / "tokenizer" / "tokenizer.json")
 
 
