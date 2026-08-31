@@ -163,7 +163,7 @@ module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/
 [[ ! -e "\$LEGACY_EVIDENCE_BUNDLE" ]] || die 'legacy action-only evidence bundle already exists'
 \$PYTHON "\$REPO/vla_benchmarking/legacy_action_only_evidence.py" build --training-manifest "\$ACTION_ONLY_TRAINING_MANIFEST" --checkpoint "\$ACTION_ONLY_CHECKPOINT" --base-policy "\$BASE_POLICY" --data-root "\$DATA_ROOT" --output-dir "\$LEGACY_EVIDENCE_BUNDLE" || die 'legacy action-only evidence bundle build failed'
 \$PYTHON "\$REPO/vla_benchmarking/legacy_action_only_evidence.py" validate --training-manifest "\$ACTION_ONLY_TRAINING_MANIFEST" --checkpoint "\$ACTION_ONLY_CHECKPOINT" --base-policy "\$BASE_POLICY" --data-root "\$DATA_ROOT" --output-dir "\$LEGACY_EVIDENCE_BUNDLE" || die 'legacy action-only evidence bundle validation failed'
-\$PYTHON - "\$BASE_POLICY/base_snapshot_manifest.json" "\$BASE_POLICY_REVISION" <<'PY_BASE
+\$PYTHON - "\$BASE_POLICY/base_snapshot_manifest.json" "\$BASE_POLICY_REVISION" <<'PY_BASE'
 import json,sys
 if json.load(open(sys.argv[1])).get('revision') != sys.argv[2]: raise SystemExit('base snapshot revision is not pinned')
 PY_BASE
@@ -196,7 +196,7 @@ if d.get('no_full_weight_trainables') is not True or d.get('base_parameters_froz
 PY_INV
 export TRAINING_RUNTIME_EVIDENCE="\$EVIDENCE/smoke_training_runtime.json"; env FINETUNING_POLICY_ID=action_visual_lora_v1 DATA_ROOT="\$DATA_ROOT" DATASET_ROOT="\$DATA_ROOT/control" LIBERO_DATA_DIR="\$LIBERO_DATA_DIR" LIBERO_DIR="\$LIBERO_DIR" LIBERO_COMMIT="\$LIBERO_COMMIT" BASE_POLICY="\$BASE_POLICY" BASE_POLICY_REVISION="\$BASE_POLICY_REVISION" PAIR_MANIFEST="\$DATA_ROOT/sealed_lora_pair_manifest.json" PAIR_SENTINEL="\$DATA_ROOT/sealed_lora_pair_verified.json" OUTPUT_DIR="\$SMOKE_ROOT" RUN_ROOT="\$SMOKE_ROOT" TRAINING_MODE=smoke BATCH_SIZE=32 SEED=1000 PEFT_R=16 DEVICE=cuda PYTHON="\$PYTHON" bash "\$REPO/vla_benchmarking/launch_lora_treatment.sh" smoke || die '2-step candidate smoke failed'
 SMOKE_CHECKPOINT="\$SMOKE_ROOT/checkpoints/000002/pretrained_model"; [[ -s "\$SMOKE_CHECKPOINT/adapter_model.safetensors" && -f "\$SMOKE_CHECKPOINT/adapter_audit.json" && -f "\$SMOKE_ROOT/expected_adapter_inventory.json" ]] || die 'smoke checkpoint/audit is missing'
-\$PYTHON - "\$EVIDENCE/smoke_training_runtime.json" <<'PY_RUNTIME
+\$PYTHON - "\$EVIDENCE/smoke_training_runtime.json" <<'PY_RUNTIME'
 import json,sys
 d=json.load(open(sys.argv[1]))
 if d.get('updates_observed') != 2 or d.get('all_losses_finite') is not True or d.get('all_grad_norms_finite') is not True: raise SystemExit('smoke training did not prove two finite updates')
@@ -264,12 +264,12 @@ else:
 PY_SEAL_TRAIN
 }; finish() { local rc=\$? arc=0 tree=''; trap - EXIT; set +e; mkdir -p "\$EVIDENCE" "\$ARCHIVE_DIR"; printf 'slurm_job_id=%s\\nslurm_job_name=%s\\nexit_code=%s\\n' "\${SLURM_JOB_ID:-}" "\${SLURM_JOB_NAME:-}" "\$rc" > "\$EVIDENCE/status.env"; copy_tree "\$EVIDENCE" "\$ARCHIVE_DIR/evidence" || arc=\$?; if [[ \$arc -eq 0 && -d "\$TRAIN_ROOT" ]]; then copy_tree "\$TRAIN_ROOT" "\$ARCHIVE_DIR/run" || arc=\$?; fi; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" build || arc=\$?; fi; if [[ \$arc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || arc=\$?; fi; [[ \$arc -eq 0 ]] && tree="\$(tr -d '[:space:]' < "\$ARCHIVE_DIR/tree_sha256")"; printf 'train_archive_status=%s\\ntrain_archive_tree_sha256=%s\\ntrain_status=%s\\n' "\$([[ \$arc -eq 0 ]] && echo VERIFIED || echo FAILED)" "\$tree" "\$([[ \$rc -eq 0 && \$arc -eq 0 ]] && echo OK || echo FAILED)" >> "\$STATE_FILE"; [[ \$rc -eq 0 && \$arc -eq 0 ]] || rc=90; exit \$rc; }; trap finish EXIT
 [[ -z "\$(git -C "\$REPO" status --porcelain --untracked-files=all)" ]] || die 'repository is dirty'
-[[ -d "\$REPO/.git" && "\$(git -C "\$REPO" rev-parse HEAD)" == "\$EXPECTED_REPO_COMMIT" ]] || die 'repository commit drift'; [[ ! -e "\$TRAIN_ROOT" ]] || die 'candidate training output already exists'; mkdir -p "\$EVIDENCE"; module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"; export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$(dirname "\$LIBERO_CONFIG")" LIBERO_CONFIG="\$LIBERO_CONFIG" BASE_POLICY="\$BASE_POLICY" BASE_POLICY_REVISION="\$BASE_POLICY_REVISION" DATA_ROOT="\$DATA_ROOT" LIBERO_DATA_DIR="\$LIBERO_DATA_DIR" LIBERO_DIR="\$LIBERO_DIR" LIBERO_COMMIT="\$LIBERO_COMMIT" TRAINING_PROFILE=no_arrow_treatment PROFILE=no_arrow_treatment FINETUNING_POLICY_ID=action_visual_lora_v1 RUN_ROOT="\$TRAIN_ROOT" OUTPUT_DIR="\$TRAIN_ROOT" BATCH_SIZE=32 SEED=1000 PEFT_R=16 DEVICE=cuda TRAINING_MODE=full RESUME=false TRAINING_RUNTIME_EVIDENCE="\$EVIDENCE/full_training_runtime.json"; bash "\$REPO/vla_benchmarking/launch_lora_treatment.sh" full; [[ -s "\$TRAIN_ROOT/training_manifest.json" && -s "\$TRAIN_ROOT/checkpoints/029190/pretrained_model/adapter_model.safetensors" ]] || die 'sealed candidate training artifacts are missing'; \$PYTHON - "\$TRAIN_ROOT/training_manifest.json" <<'PY_TRAIN
+[[ -d "\$REPO/.git" && "\$(git -C "\$REPO" rev-parse HEAD)" == "\$EXPECTED_REPO_COMMIT" ]] || die 'repository commit drift'; [[ ! -e "\$TRAIN_ROOT" ]] || die 'candidate training output already exists'; mkdir -p "\$EVIDENCE"; module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"; export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$(dirname "\$LIBERO_CONFIG")" LIBERO_CONFIG="\$LIBERO_CONFIG" BASE_POLICY="\$BASE_POLICY" BASE_POLICY_REVISION="\$BASE_POLICY_REVISION" DATA_ROOT="\$DATA_ROOT" LIBERO_DATA_DIR="\$LIBERO_DATA_DIR" LIBERO_DIR="\$LIBERO_DIR" LIBERO_COMMIT="\$LIBERO_COMMIT" TRAINING_PROFILE=no_arrow_treatment PROFILE=no_arrow_treatment FINETUNING_POLICY_ID=action_visual_lora_v1 RUN_ROOT="\$TRAIN_ROOT" OUTPUT_DIR="\$TRAIN_ROOT" BATCH_SIZE=32 SEED=1000 PEFT_R=16 DEVICE=cuda TRAINING_MODE=full RESUME=false TRAINING_RUNTIME_EVIDENCE="\$EVIDENCE/full_training_runtime.json"; bash "\$REPO/vla_benchmarking/launch_lora_treatment.sh" full; [[ -s "\$TRAIN_ROOT/training_manifest.json" && -s "\$TRAIN_ROOT/checkpoints/029190/pretrained_model/adapter_model.safetensors" ]] || die 'sealed candidate training artifacts are missing'; \$PYTHON - "\$TRAIN_ROOT/training_manifest.json" <<'PY_TRAIN'
 import json,sys
 d=json.load(open(sys.argv[1])); f=d.get('flags',{})
 if d.get('finetuning_policy_id')!='action_visual_lora_v1' or d.get('training_variant')!='no_arrow_treatment' or d.get('trained_on_visual_condition')!='no_arrows' or any(int(f.get(k,-1))!=v for k,v in {'steps':29190,'save_freq':1946,'batch_size':32,'seed':1000,'peft_r':16}.items()): raise SystemExit('candidate training manifest is not sealed')
 PY_TRAIN
-\$PYTHON - "\$EVIDENCE/full_training_runtime.json" <<'PY_RUNTIME_TRAIN
+\$PYTHON - "\$EVIDENCE/full_training_runtime.json" <<'PY_RUNTIME_TRAIN'
 import json,sys
 d=json.load(open(sys.argv[1]))
 if d.get('updates_observed') != 29190 or d.get('all_losses_finite') is not True or d.get('all_grad_norms_finite') is not True: raise SystemExit('full candidate training did not prove 29190 finite updates')
@@ -328,7 +328,8 @@ PY_EVAL
 EOF
 
 for generated_job in "$JOB_DIR/setup.sbatch" "$JOB_DIR/train.sbatch" "$JOB_DIR/eval.sbatch"; do
-  bash -n "$generated_job" || { echo "generated SLURM script has invalid syntax: $generated_job" >&2; exit 1; }
+  syntax_output="$(bash -n "$generated_job" 2>&1)" || { printf '%s\n' "$syntax_output" >&2; echo "generated SLURM script has invalid syntax: $generated_job" >&2; exit 1; }
+  [[ -z "$syntax_output" ]] || { printf '%s\n' "$syntax_output" >&2; echo "generated SLURM script emitted a syntax warning: $generated_job" >&2; exit 1; }
 done
 chmod 700 "$JOB_DIR"/*.sbatch
 setup_template_sha256="$(sha256_file "$JOB_DIR/setup.sbatch")"; train_template_sha256="$(sha256_file "$JOB_DIR/train.sbatch")"; eval_template_sha256="$(sha256_file "$JOB_DIR/eval.sbatch")"; write_state

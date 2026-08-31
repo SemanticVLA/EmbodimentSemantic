@@ -1,6 +1,7 @@
 from pathlib import Path
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,7 +52,8 @@ def test_action_visual_launcher_is_separate_and_sealed():
 def test_action_visual_launcher_queues_all_three_jobs_with_afterok_dependencies():
     text = SCRIPT.read_text(encoding="utf-8")
     assert 'for generated_job in "$JOB_DIR/setup.sbatch" "$JOB_DIR/train.sbatch" "$JOB_DIR/eval.sbatch"' in text
-    assert 'bash -n "$generated_job"' in text
+    assert 'syntax_output="$(bash -n "$generated_job" 2>&1)"' in text
+    assert "generated SLURM script emitted a syntax warning" in text
     assert text.index('bash -n "$generated_job"') < text.index('setup_raw="$(sbatch --parsable "$JOB_DIR/setup.sbatch")"')
     assert 'setup_raw="$(sbatch --parsable "$JOB_DIR/setup.sbatch")"' in text
     assert 'sbatch --parsable --dependency="afterok:$setup_job_id" "$JOB_DIR/train.sbatch"' in text
@@ -140,6 +142,11 @@ def test_generated_jobs_let_the_training_launcher_resolve_policy_regex():
     assert "FINETUNING_POLICY_ID=action_visual_lora_v1" in train_text
     assert "POLICY_TARGET_REGEX=" not in setup_text
     assert "POLICY_TARGET_REGEX=" not in train_text
+
+
+def test_generated_inner_heredoc_delimiters_are_closed():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert not re.findall(r"<<'[A-Z0-9_]+$", text, flags=re.MULTILINE)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="fake sbatch requires POSIX bash")
