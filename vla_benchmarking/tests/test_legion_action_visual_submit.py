@@ -126,6 +126,15 @@ def test_setup_archive_hash_uses_verified_tree_value():
     assert "setup_archive_tree_sha256=%s" in setup_text
 
 
+def test_generated_setup_preserves_runtime_policy_regex_quoting():
+    text = SCRIPT.read_text(encoding="utf-8")
+    setup_start = text.index('cat > "$JOB_DIR/setup.sbatch"')
+    setup_end = text.index("\nEOF", setup_start)
+    setup_text = text[setup_start:setup_end]
+    assert 'POLICY_TARGET_REGEX="\\$("\\$PYTHON" -c' in setup_text
+    assert 'POLICY_TARGET_REGEX=\\"' not in setup_text
+
+
 @pytest.mark.skipif(os.name == "nt", reason="fake sbatch requires POSIX bash")
 def test_fake_login_submission_does_not_run_compute_jobs(tmp_path):
     expected = "a" * 40
@@ -200,6 +209,12 @@ def test_fake_login_submission_does_not_run_compute_jobs(tmp_path):
     assert "training_profile=no_arrow_treatment" in state_text
 
     setup_source = runtime / "operator" / "jobs" / "fake_action_visual" / "setup.sbatch"
+    syntax = subprocess.run(
+        [shutil.which("bash"), "-n", str(setup_source)],
+        capture_output=True,
+        text=True,
+    )
+    assert syntax.returncode == 0, syntax.stderr
     rendered_setup = tmp_path / "setup.rendered.sbatch"
     rendered_setup.write_text(
         setup_source.read_text(encoding="utf-8").replace(
