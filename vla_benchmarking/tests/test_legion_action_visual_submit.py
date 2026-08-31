@@ -126,13 +126,17 @@ def test_setup_archive_hash_uses_verified_tree_value():
     assert "setup_archive_tree_sha256=%s" in setup_text
 
 
-def test_generated_setup_preserves_runtime_policy_regex_quoting():
+def test_generated_jobs_let_the_training_launcher_resolve_policy_regex():
     text = SCRIPT.read_text(encoding="utf-8")
     setup_start = text.index('cat > "$JOB_DIR/setup.sbatch"')
-    setup_end = text.index("\nEOF", setup_start)
-    setup_text = text[setup_start:setup_end]
-    assert 'POLICY_TARGET_REGEX="\\$("\\$PYTHON" -c' in setup_text
-    assert 'POLICY_TARGET_REGEX=\\"' not in setup_text
+    train_start = text.index('cat > "$JOB_DIR/train.sbatch"')
+    eval_start = text.index('cat > "$JOB_DIR/eval.sbatch"')
+    setup_text = text[setup_start:train_start]
+    train_text = text[train_start:eval_start]
+    assert "FINETUNING_POLICY_ID=action_visual_lora_v1" in setup_text
+    assert "FINETUNING_POLICY_ID=action_visual_lora_v1" in train_text
+    assert "POLICY_TARGET_REGEX=" not in setup_text
+    assert "POLICY_TARGET_REGEX=" not in train_text
 
 
 @pytest.mark.skipif(os.name == "nt", reason="fake sbatch requires POSIX bash")
