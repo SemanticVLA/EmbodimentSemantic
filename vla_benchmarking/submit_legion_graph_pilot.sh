@@ -373,7 +373,7 @@ export LIBERO_CONFIG_PATH="\$RUNTIME/config"
 export LIBERO_CONFIG="\$RUNTIME/config/config.yaml"
 "\$PYTHON" "\$REPO/vla_benchmarking/prompt_audit.py" --verify-graph-policy "\$GRAPH_BASE_POLICY"
 bash "\$REPO/vla_benchmarking/lambda_preflight.sh" graph_treatment
-"\$PYTHON" -m pytest -q "\$REPO/vla_benchmarking/tests/test_terminal_reset_compensation.py" > "\$EVIDENCE/terminal_reset_compensation_test.txt" 2>&1 || {
+env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "\$PYTHON" -m pytest -q "\$REPO/vla_benchmarking/tests/test_terminal_reset_compensation.py" > "\$EVIDENCE/terminal_reset_compensation_test.txt" 2>&1 || {
   cat "\$EVIDENCE/terminal_reset_compensation_test.txt" >&2
   die 'terminal reset compensation runtime test failed'
 }

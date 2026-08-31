@@ -117,6 +117,14 @@ def test_setup_does_not_submit_training_or_evaluation():
     assert "--dependency=afterok:$train_job_id" in launch_text
 
 
+def test_setup_disables_unrelated_pytest_plugin_autoload():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert (
+        'env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "\\$PYTHON" -m pytest -q '
+        '"\\$REPO/vla_benchmarking/tests/test_terminal_reset_compensation.py"'
+    ) in text
+
+
 def test_eval_archive_seal_rejects_files_added_after_inventory_build():
     text = SCRIPT.read_text(encoding="utf-8")
     eval_start = text.index("# Exactly two no-arrow cells")
