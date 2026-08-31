@@ -351,6 +351,19 @@ def _load_and_wrap_pinned_smolvla(
         wrap = getattr(model, "wrap_with_peft", None)
         if not callable(wrap):
             raise RuntimeError("pinned LeRobot policy has no production wrap_with_peft entrypoint")
+        config = getattr(model, "config", None)
+        if config is None:
+            raise RuntimeError("pinned LeRobot policy has no config to bind the local base policy")
+        try:
+            # LeRobot's wrapper resolves its underlying VLM from this field;
+            # bind it explicitly because from_pretrained may leave it unset.
+            # The resolved absolute path keeps this preflight local-only and
+            # makes the provenance contract independent of a Hub identifier.
+            config.pretrained_path = base
+        except (AttributeError, TypeError) as exc:
+            raise RuntimeError("pinned LeRobot policy config cannot bind the local base policy") from exc
+        if getattr(config, "pretrained_path", None) != base:
+            raise RuntimeError("pinned LeRobot policy config did not retain the exact local base policy path")
         # Mirror the production CLI path while making the policy's target
         # regex explicit. This prevents the visual policy from silently
         # resolving to SmolVLA's historical action-only default.
