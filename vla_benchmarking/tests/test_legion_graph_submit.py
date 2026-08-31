@@ -95,6 +95,15 @@ def test_graph_pilot_submitter_has_sealed_chain_and_no_arrow_graph_run():
     assert "copy_required \"\\$RUNTIME/operator/jobs/\\$LABEL/eval.sbatch\"" in text
 
 
+def test_generated_setup_embeds_operator_job_dir_for_bundle_staging():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "STATE_FILE='${state_file}'; JOB_DIR='${job_dir}'" in text
+    assert 'copy_required "\\$JOB_DIR/setup.sbatch"' in text
+    assert 'copy_required "\\$JOB_DIR/train.sbatch"' in text
+    assert 'copy_required "\\$JOB_DIR/eval.sbatch"' in text
+    assert 'copy_required "\\$job_dir/' not in text
+
+
 def test_setup_does_not_submit_training_or_evaluation():
     text = SCRIPT.read_text(encoding="utf-8")
     submit_section = text.index("# Materialize and submit only the requested stage.")

@@ -175,7 +175,7 @@ cat > "$job_dir/setup.sbatch" <<EOF
 #SBATCH --error=${RUNTIME}/operator/logs/%x_%j.err
 set -Eeuo pipefail
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl TOKENIZERS_PARALLELISM=false
-REPO='${REPO}'; RUNTIME='${RUNTIME}'; SCRATCH_ROOT='${SCRATCH_ROOT}'; ARCHIVE_ROOT='${ARCHIVE_ROOT}'; STATE_FILE='${state_file}'
+REPO='${REPO}'; RUNTIME='${RUNTIME}'; SCRATCH_ROOT='${SCRATCH_ROOT}'; ARCHIVE_ROOT='${ARCHIVE_ROOT}'; STATE_FILE='${state_file}'; JOB_DIR='${job_dir}'
 EXPECTED_REPO_COMMIT='${EXPECTED_REPO_COMMIT}'; LIBERO_COMMIT='${LIBERO_COMMIT}'; BASE_POLICY_REVISION='${BASE_POLICY_REVISION}'; PYTHON='${PYTHON}'; LABEL='${label}'
 DATA_ROOT="\$SCRATCH_ROOT/vla_benchmarking/lora_datasets"; LIBERO_DATA_DIR="\$SCRATCH_ROOT/vlm_benchmarking/data/libero_spatial_v5"; LIBERO_DIR="\$SCRATCH_ROOT/vla_benchmarking/LIBERO"; BASE_POLICY="\$SCRATCH_ROOT/vla_benchmarking/base_models/smolvla_libero-\$BASE_POLICY_REVISION"; GRAPH_BASE_POLICY="\$SCRATCH_ROOT/vla_benchmarking/base_models/smolvla_libero-\$BASE_POLICY_REVISION-graph96-v2"; LIBERO_CONFIG="\$RUNTIME/config/config.yaml"; EVIDENCE="\$SCRATCH_ROOT/runs/\${LABEL}_setup_\$SLURM_JOB_ID"; ARCHIVE_DIR="\$ARCHIVE_ROOT/setup/\${LABEL}_\$SLURM_JOB_ID"
 die() { echo "graph setup: \$*" >&2; exit 1; }
@@ -306,9 +306,9 @@ for code_file in hdf5_to_lerobot_dataset.py prompt_audit.py launch_lora_treatmen
 done
 git -C "\$REPO" archive --format=tar "\$EXPECTED_REPO_COMMIT" vla_benchmarking > "\$BUNDLE_STAGING/code/vla_benchmarking_source.tar"
 [[ -s "\$BUNDLE_STAGING/code/vla_benchmarking_source.tar" ]] || die 'exact-commit VLA source archive is empty'
-copy_required "\$job_dir/setup.sbatch" "\$BUNDLE_STAGING/operator/setup.sbatch"
-copy_required "\$job_dir/train.sbatch" "\$BUNDLE_STAGING/operator/train.sbatch"
-copy_required "\$job_dir/eval.sbatch" "\$BUNDLE_STAGING/operator/eval.sbatch"
+copy_required "\$JOB_DIR/setup.sbatch" "\$BUNDLE_STAGING/operator/setup.sbatch"
+copy_required "\$JOB_DIR/train.sbatch" "\$BUNDLE_STAGING/operator/train.sbatch"
+copy_required "\$JOB_DIR/eval.sbatch" "\$BUNDLE_STAGING/operator/eval.sbatch"
 printf '%s\\n' "\$EXPECTED_REPO_COMMIT" > "\$BUNDLE_STAGING/code/repo_commit.txt"
 printf '%s\\n' "\$LIBERO_COMMIT" > "\$BUNDLE_STAGING/code/libero_commit.txt"
 "\$PYTHON" - "\$LIBERO_DATA_DIR" "\$PAIR_MANIFEST" "\$BUNDLE_STAGING/source/hdf5_source_manifest.json" <<'PY_HDF5'
