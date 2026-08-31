@@ -260,6 +260,17 @@ def _load_and_wrap_pinned_smolvla(base_policy: str | Path) -> Any:
         wrap = getattr(model, "wrap_with_peft", None)
         if not callable(wrap):
             raise RuntimeError("pinned LeRobot policy has no production wrap_with_peft entrypoint")
+        config = getattr(model, "config", None)
+        if config is None:
+            raise RuntimeError("pinned LeRobot policy has no config to bind the local base policy")
+        try:
+            # LeRobot validates this field when wrapping a locally loaded policy.
+            # Binding the resolved directory keeps the audit offline and exact.
+            config.pretrained_path = base
+        except (AttributeError, TypeError) as exc:
+            raise RuntimeError("pinned LeRobot policy config cannot bind the local base policy") from exc
+        if getattr(config, "pretrained_path", None) != base:
+            raise RuntimeError("pinned LeRobot policy config did not retain the exact local base policy path")
         # This is exactly the production CLI path: LeRobot merges the only
         # explicit override (--peft.r=16) with SmolVLA's own default target
         # regex and PEFT method.  Avoid constructing a hand-written config,

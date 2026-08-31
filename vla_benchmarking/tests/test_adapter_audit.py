@@ -193,6 +193,50 @@ def test_live_expected_inventory_rejects_non_action_trainables():
         adapter_audit._build_expected_inventory_from_model(policy)
 
 
+def test_load_and_wrap_binds_exact_local_base_to_policy_config(tmp_path, monkeypatch):
+    base = tmp_path / "base-policy"
+    base.mkdir()
+    loaded = []
+
+    class _Config:
+        pretrained_path = None
+
+    class _PeftConfig:
+        peft_type = "LORA"
+        r = 16
+        target_modules = adapter_audit.ACTION_SIDE_TARGET_REGEX
+        modules_to_save = []
+
+    class _Policy:
+        @classmethod
+        def from_pretrained(cls, pretrained_name_or_path, local_files_only=True):
+            assert local_files_only is True
+            assert pretrained_name_or_path == str(base.resolve())
+            policy = cls()
+            policy.config = _Config()
+            loaded.append(policy)
+            return policy
+
+        def wrap_with_peft(self, *, peft_cli_overrides):
+            assert self.config.pretrained_path == str(base.resolve())
+            self.peft_config = {"default": _PeftConfig()}
+            return self
+
+    lerobot = types.ModuleType("lerobot")
+    policies = types.ModuleType("lerobot.policies")
+    smolvla = types.ModuleType("lerobot.policies.smolvla")
+    smolvla.SmolVLAPolicy = _Policy
+    monkeypatch.setitem(sys.modules, "peft", types.ModuleType("peft"))
+    monkeypatch.setitem(sys.modules, "lerobot", lerobot)
+    monkeypatch.setitem(sys.modules, "lerobot.policies", policies)
+    monkeypatch.setitem(sys.modules, "lerobot.policies.smolvla", smolvla)
+
+    wrapped = adapter_audit._load_and_wrap_pinned_smolvla(base)
+
+    assert wrapped is loaded[0]
+    assert loaded[0].config.pretrained_path == str(base.resolve())
+
+
 def test_live_expected_inventory_round_trip_is_sealed(tmp_path):
     modules = sorted(adapter_audit.REQUIRED_ACTION_MODULES | {
         "model.vlm_with_expert.lm_expert.layers.0.q_proj",
