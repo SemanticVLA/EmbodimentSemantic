@@ -50,6 +50,9 @@ def test_action_visual_launcher_is_separate_and_sealed():
 
 def test_action_visual_launcher_queues_all_three_jobs_with_afterok_dependencies():
     text = SCRIPT.read_text(encoding="utf-8")
+    assert 'for generated_job in "$JOB_DIR/setup.sbatch" "$JOB_DIR/train.sbatch" "$JOB_DIR/eval.sbatch"' in text
+    assert 'bash -n "$generated_job"' in text
+    assert text.index('bash -n "$generated_job"') < text.index('setup_raw="$(sbatch --parsable "$JOB_DIR/setup.sbatch")"')
     assert 'setup_raw="$(sbatch --parsable "$JOB_DIR/setup.sbatch")"' in text
     assert 'sbatch --parsable --dependency="afterok:$setup_job_id" "$JOB_DIR/train.sbatch"' in text
     assert 'sbatch --parsable --dependency="afterok:$train_job_id" "$rendered_eval"' in text

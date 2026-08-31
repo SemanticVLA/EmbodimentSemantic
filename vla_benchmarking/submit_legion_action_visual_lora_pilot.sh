@@ -327,6 +327,9 @@ if d.get('tasks') != list(range(10)) or d.get('episodes') != 10 or d.get('batch_
 PY_EVAL
 EOF
 
+for generated_job in "$JOB_DIR/setup.sbatch" "$JOB_DIR/train.sbatch" "$JOB_DIR/eval.sbatch"; do
+  bash -n "$generated_job" || { echo "generated SLURM script has invalid syntax: $generated_job" >&2; exit 1; }
+done
 chmod 700 "$JOB_DIR"/*.sbatch
 setup_template_sha256="$(sha256_file "$JOB_DIR/setup.sbatch")"; train_template_sha256="$(sha256_file "$JOB_DIR/train.sbatch")"; eval_template_sha256="$(sha256_file "$JOB_DIR/eval.sbatch")"; write_state
 setup_raw="$(sbatch --parsable "$JOB_DIR/setup.sbatch")"; setup_job_id="$(submit_id "$setup_raw")"; setup_dependency=''; setup_status=QUEUED; train_dependency="afterok:$setup_job_id"; eval_dependency='afterok:TRAIN_JOB_ID'; write_state
