@@ -149,6 +149,12 @@ def test_generated_inner_heredoc_delimiters_are_closed():
     assert not re.findall(r"<<'[A-Z0-9_]+$", text, flags=re.MULTILINE)
 
 
+def test_inference_smoke_uses_lerobot_camera_keys():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "--env.camera_name=agentview_image,robot0_eye_in_hand_image" in text
+    assert "--env.camera_name=observation.images.image,observation.images.image2" not in text
+
+
 @pytest.mark.skipif(os.name == "nt", reason="fake sbatch requires POSIX bash")
 def test_fake_login_submission_does_not_run_compute_jobs(tmp_path):
     expected = "a" * 40

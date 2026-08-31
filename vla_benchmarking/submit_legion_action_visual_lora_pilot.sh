@@ -224,7 +224,7 @@ root=pathlib.Path(sys.argv[1]); rows=[(p.relative_to(root).as_posix(),hashlib.sh
 PY_HASH2
 )"; [[ "\$base_hash_before" == "\$base_hash_after" ]] || die 'base policy files changed during smoke'; export EVIDENCE
 export MODELS="\$SMOKE_CHECKPOINT" CONTEXT_MODE=standard CONTEXT_FORMAT=standard VISUAL_CONDITION=none VISUAL_ARROWS=0 TASK_IDS='[0]' N_EPISODES=1 BATCH_SIZE=1 SEED=1000 DEVICE=cuda OUTPUT_DIR="\$EVIDENCE/inference" N_ACTION_STEPS=checkpoint
-\$PYTHON "\$REPO/vla_benchmarking/run_lerobot_eval_with_context.py" --eval.use_async_envs=false --output_dir="\$EVIDENCE/inference" --policy.path="\$SMOKE_CHECKPOINT" --env.task_ids='[0]' --env.camera_name=observation.images.image,observation.images.image2 --env.observation_height=256 --env.observation_width=256 || die 'one-action checkpoint reload/inference smoke failed'
+\$PYTHON "\$REPO/vla_benchmarking/run_lerobot_eval_with_context.py" --eval.use_async_envs=false --output_dir="\$EVIDENCE/inference" --policy.path="\$SMOKE_CHECKPOINT" --env.task_ids='[0]' --env.camera_name=agentview_image,robot0_eye_in_hand_image --env.observation_height=256 --env.observation_width=256 || die 'one-action checkpoint reload/inference smoke failed'
 [[ -s "\$EVIDENCE/inference/eval_info.json" ]] || die 'inference smoke did not emit eval_info.json'
 copy_tree "\$SMOKE_ROOT" "\$EVIDENCE/smoke"
 EOF
