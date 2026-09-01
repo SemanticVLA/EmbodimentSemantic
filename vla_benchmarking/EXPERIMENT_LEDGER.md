@@ -318,9 +318,10 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
   coercing the dummy action to a NumPy `float32` array before `LiberoEnv.step`.
   The setup archive is verified with tree hash
   `bad36313db6f05d60c3424edf7787bb8a63afe819fe28df66bb31f79906f4380`.
-- Full training and paired evaluation were **not submitted** by this setup
-  action. The verified state is reusable for the planned 15-epoch, 29,190-step
-  run after explicit launch confirmation.
+- After explicit launch confirmation, training job `1912720` is **RUNNING** and
+  paired evaluation job `1912721` is **PENDING (Dependency)** on
+  `afterok:1912720`. The verified setup state and sealed templates were reused;
+  no second setup or dataset regeneration was performed.
 - Trained on: graph-text `target_natural_v1` with no visual arrows, using the
   sealed `graph_treatment`/`arrow_graph_treatment` pair.
 - Planned contract: 15 epochs, 29,190 steps, checkpoint `029190`, batch 32,
@@ -339,8 +340,8 @@ submission; its partial setup evidence remains archived. The follow-up setup
 fix was identified; it produced no training/evaluation submission and must not
 be reused. Failed setup `1911386` is likewise retired after exposing the stale
 historical-pair sentinel. Setup `1911474` is the latest attempt and is terminally
-failed; setup `1912529` is the later verified setup-only attempt. There is no
-active full training or evaluation job pending launch confirmation.
+failed; setup `1912529` is the later verified setup, with training `1912720`
+running and evaluation `1912721` dependency-pending.
 
 ## Completed action-visual training — `legion_action_visual_lora_no_arrow_s1000_v7_20260831T101333Z`
 
