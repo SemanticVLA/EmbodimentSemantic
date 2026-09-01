@@ -62,6 +62,7 @@ def test_cli_requires_mode_and_parses_safety_flags(matrix):
     execute = matrix.parse_args(["--execute-motion", "--allow-unvalidated-profile", "--resume"])
     assert execute.execute_motion is True and execute.dry_run is False
     assert execute.allow_unvalidated_profile is True and execute.resume is True
+    assert matrix.parse_args(["--execute-motion", "--allow-unvalidated-profile", "--continue-on-motion-failure"]).continue_on_motion_failure is True
 
 
 def test_matrix_writes_complete_plan_manifest_before_build_and_continues_failures(
@@ -382,6 +383,47 @@ def test_timeout_after_motion_requires_explicit_retry(matrix, tmp_path: Path):
             episode_runner=timeout_episode,
             arrow_input_builder=lambda env, task_id, resolution: {},
         )
+
+
+def test_continue_on_motion_failure_runs_later_independent_cells(matrix, tmp_path: Path):
+    closed = []
+    calls = []
+
+    class Env:
+        def close(self):
+            closed.append(True)
+
+    def episode_runner(**kwargs):
+        calls.append(kwargs["task_id"])
+        kwargs["motion_started_callback"]()
+        if kwargs["task_id"] == 0:
+            raise TimeoutError("phase descend_place exceeded 80 steps")
+        return {
+            "audit_path": None,
+            "frames": [],
+            "phase_frames": [],
+            "phases": [{"phase": "retreat", "status": "stop"}],
+            "evaluator_success": True,
+            "motion_executed": True,
+        }
+
+    summary = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[0, 1],
+        episodes_per_task=1,
+        dry_run=False,
+        execute_motion=True,
+        allow_unvalidated_profile=True,
+        continue_on_motion_failure=True,
+        env_builder=lambda *args: Env(),
+        episode_runner=episode_runner,
+        arrow_input_builder=lambda *args: {},
+    )
+    assert calls == [0, 1]
+    assert len(closed) == 2
+    assert summary["failed_cells_count"] == 1
+    assert summary["completed_cells"] == 1
+    assert summary["failure_by_class"] == {"controller_failure": 1}
 
 
 def test_settle_diagnostics_are_retained_for_environment_failures(matrix, tmp_path: Path):

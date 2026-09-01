@@ -316,6 +316,7 @@ def _protocol(
     *, task_ids: Sequence[int], episodes_per_task: int, seed_base: int,
     resolution: int, dry_run: bool, execute_motion: bool,
     allow_unvalidated_profile: bool,
+    continue_on_motion_failure: bool,
     init_state_preflight: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -330,6 +331,7 @@ def _protocol(
         "motion_mode": "dry_run" if dry_run else "execute_motion",
         "execute_motion_explicit": bool(execute_motion),
         "allow_unvalidated_profile": bool(allow_unvalidated_profile),
+        "continue_on_motion_failure": bool(continue_on_motion_failure),
         "verified_profile": {
             "task_id": VERIFIED_TASK_ID,
             "seed": VERIFIED_SEED,
@@ -644,6 +646,7 @@ def run_matrix(
     evaluator: Callable[[Any], bool] | None = None,
     resume: bool = False,
     retry_motion_began: bool = False,
+    continue_on_motion_failure: bool = False,
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
     cells = plan_cells(
@@ -700,6 +703,7 @@ def run_matrix(
         dry_run=dry_run,
         execute_motion=execute_motion,
         allow_unvalidated_profile=allow_unvalidated_profile,
+        continue_on_motion_failure=continue_on_motion_failure,
         init_state_preflight=init_state_preflight,
     )
     protocol["source_hashes"] = _source_file_hashes()
@@ -1092,7 +1096,11 @@ def run_matrix(
                 raise interrupt_exc
             # Persist first, then surface a motion-started exception so the
             # batch cannot continue into an unsafe duplicate manipulation.
-            if cell_exception is not None and cell_record["motion_began"]:
+            if (
+                cell_exception is not None
+                and cell_record["motion_began"]
+                and not continue_on_motion_failure
+            ):
                 raise cell_exception
 
     completed = [record for record in records if record.get("status") == "completed"]
@@ -1201,6 +1209,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="explicitly authorize retrying a cell whose prior attempt may have moved",
     )
+    parser.add_argument(
+        "--continue-on-motion-failure",
+        action="store_true",
+        help="continue independent cells after a motion-started cell failure; each env is closed first",
+    )
     return parser.parse_args(argv)
 
 
@@ -1217,6 +1230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_unvalidated_profile=args.allow_unvalidated_profile,
         resume=args.resume,
         retry_motion_began=args.retry_motion_began,
+        continue_on_motion_failure=args.continue_on_motion_failure,
     )
     print(json.dumps({"summary_path": summary["summary_path"], "success_rate": summary["success_rate"]}))
     return 0

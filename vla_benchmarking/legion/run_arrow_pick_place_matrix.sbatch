@@ -64,11 +64,13 @@ MATRIX_TASK_IDS="${MATRIX_TASK_IDS:-0,1,2,3,4,5,6,7,8,9}"
 MATRIX_EPISODES_PER_TASK="${MATRIX_EPISODES_PER_TASK:-10}"
 MATRIX_SEED_BASE="${MATRIX_SEED_BASE:-1000}"
 MATRIX_RESOLUTION="${MATRIX_RESOLUTION:-256}"
+MATRIX_CONTINUE_ON_MOTION_FAILURE="${MATRIX_CONTINUE_ON_MOTION_FAILURE:-0}"
 
 [[ "$MATRIX_TASK_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]] || die 'MATRIX_TASK_IDS must be comma-separated non-negative integers'
 [[ "$MATRIX_EPISODES_PER_TASK" =~ ^[1-9][0-9]*$ ]] || die 'MATRIX_EPISODES_PER_TASK must be a positive integer'
 [[ "$MATRIX_SEED_BASE" =~ ^[0-9]+$ ]] || die 'MATRIX_SEED_BASE must be a non-negative integer'
 [[ "$MATRIX_RESOLUTION" =~ ^[1-9][0-9]*$ ]] || die 'MATRIX_RESOLUTION must be a positive integer'
+[[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" =~ ^[01]$ ]] || die 'MATRIX_CONTINUE_ON_MOTION_FAILURE must be 0 or 1'
 
 [[ "$RUN_ROOT" = /* && "$OUTPUT_ROOT" = /* && "$ARCHIVE_ROOT" = /* ]] || die 'RUN_ROOT, OUTPUT_ROOT, and ARCHIVE_ROOT must be absolute paths'
 command -v realpath >/dev/null 2>&1 || die 'realpath is required for safe run/archive path validation'
@@ -168,6 +170,7 @@ matrix_tasks=$MATRIX_TASK_IDS
 matrix_episodes_per_task=$MATRIX_EPISODES_PER_TASK
 matrix_seed_base=$MATRIX_SEED_BASE
 matrix_resolution=$MATRIX_RESOLUTION
+continue_on_motion_failure=$MATRIX_CONTINUE_ON_MOTION_FAILURE
 motion_mode=execute_motion
 arrow_input_policy=hardcoded_subject_goal_bbox_renderer
 language_translation=false
@@ -198,7 +201,7 @@ nvidia-smi -L
 "$PYTHON" -c 'import torch; assert torch.cuda.is_available(), "CUDA is unavailable"; print("CUDA smoke OK", torch.cuda.get_device_name(0))'
 "$PYTHON" -c 'import libero, mujoco, robosuite; print("LIBERO/MuJoCo/robosuite imports OK")'
 
-"$PYTHON" "$REPO_ROOT/vla_benchmarking/run_arrow_pick_place_matrix.py" \
+matrix_args=( \
   --task-ids "$MATRIX_TASK_IDS" \
   --episodes-per-task "$MATRIX_EPISODES_PER_TASK" \
   --seed-base "$MATRIX_SEED_BASE" \
@@ -206,3 +209,8 @@ nvidia-smi -L
   --output-root "$OUTPUT_ROOT" \
   --execute-motion \
   --allow-unvalidated-profile
+)
+if [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" == 1 ]]; then
+  matrix_args+=(--continue-on-motion-failure)
+fi
+"$PYTHON" "$REPO_ROOT/vla_benchmarking/run_arrow_pick_place_matrix.py" "${matrix_args[@]}"
