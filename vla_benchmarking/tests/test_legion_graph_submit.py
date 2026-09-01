@@ -147,6 +147,8 @@ def test_setup_requires_live_checkpoint_and_real_libero_reset_smokes():
     assert 'scope": "actual_checkpoint_load_preprocess_cuda_inference_timeout_and_randomization"' in text
     assert 'scope": "actual_pinned_libero_terminal_reset_semantics_not_task_success"' in text
     assert 'env._env.check_success = lambda: True' in text
+    assert 'dummy_action = np.asarray(lerobot_libero.get_libero_dummy_action(), dtype=np.float32)' in text
+    assert 'env.step(dummy_action)' in text
     assert 'if int(env.init_state_id) != counter_before:' in text
     assert 'if set(by_task) != {0, 2}:' in text
     assert 'setup_archive_path="$ARCHIVE_ROOT/setup/${label}_${setup_job_id}"' in text

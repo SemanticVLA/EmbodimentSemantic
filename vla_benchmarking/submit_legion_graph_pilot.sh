@@ -406,6 +406,7 @@ export CONTEXT_MODE=scene_graph CONTEXT_FORMAT=target_natural_v1 VISUAL_CONDITIO
 # emitted evidence is a reset-semantics smoke, never a task-success result.
 "\$PYTHON" - "\$EVIDENCE/live_terminal_reset_smoke.json" <<'PY_RUNTIME_RESET'
 import hashlib, inspect, json, pathlib, sys
+import numpy as np
 from libero.libero import benchmark
 from lerobot.envs import libero as lerobot_libero
 from config import TASK_REMOVE_CONFIG
@@ -440,7 +441,8 @@ try:
     counter_before = int(env.init_state_id)
     reset_state_sha256 = sim_state_sha256(env._env.sim)
     env._env.check_success = lambda: True
-    _, _, terminated, truncated, info = env.step(lerobot_libero.get_libero_dummy_action())
+    dummy_action = np.asarray(lerobot_libero.get_libero_dummy_action(), dtype=np.float32)
+    _, _, terminated, truncated, info = env.step(dummy_action)
     compensation = getattr(env, "_paired_reset_compensation", None)
     if not terminated or truncated or not info.get("is_success"):
         raise RuntimeError("actual LiberoEnv did not take the forced terminal-success branch")
