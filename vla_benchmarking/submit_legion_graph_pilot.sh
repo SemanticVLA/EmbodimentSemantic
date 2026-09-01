@@ -47,7 +47,21 @@ ARCHIVE_ROOT='/home/hjaber/EmbodimentSemantic_archive'
 PYTHON='/home/hjaber/.conda/envs/embodiment-smolvla-py312/bin/python'
 
 [[ -d "$REPO/.git" ]] || { echo "repository missing: $REPO" >&2; exit 1; }
-[[ "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)" == "$EXPECTED_REPO_COMMIT" ]] || { echo "repository is not clean reviewed commit $EXPECTED_REPO_COMMIT" >&2; exit 1; }
+CURRENT_REPO_COMMIT="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+if [[ "$ACTION" == setup ]]; then
+  [[ "$CURRENT_REPO_COMMIT" == "$EXPECTED_REPO_COMMIT" ]] || { echo "repository is not clean reviewed commit $EXPECTED_REPO_COMMIT" >&2; exit 1; }
+else
+  # Launch may use a newer submitter-only repair while the sealed setup/train
+  # templates remain pinned to the original pipeline commit.  Require that
+  # the pipeline commit is an ancestor of this launcher checkout; the bundle
+  # and generated job hashes below still enforce the exact training sources.
+  if [[ "$CURRENT_REPO_COMMIT" != "$EXPECTED_REPO_COMMIT" ]]; then
+    git -C "$REPO" merge-base --is-ancestor "$EXPECTED_REPO_COMMIT" "$CURRENT_REPO_COMMIT" || {
+      echo "launch checkout $CURRENT_REPO_COMMIT is not a descendant of pipeline commit $EXPECTED_REPO_COMMIT" >&2
+      exit 1
+    }
+  fi
+fi
 [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] || { echo 'repository is dirty; refusing submission' >&2; exit 1; }
 [[ -d "$RUNTIME" && -d "$SCRATCH_ROOT" ]] || { echo 'required persistent or scratch runtime is missing' >&2; exit 1; }
 

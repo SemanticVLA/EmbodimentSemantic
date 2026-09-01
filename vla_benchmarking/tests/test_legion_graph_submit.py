@@ -34,6 +34,7 @@ def test_graph_pilot_submitter_has_sealed_chain_and_no_arrow_graph_run():
     assert "ExitCode=0:0" in text
     assert "setup_state_source='scontrol'" in text
     assert "setup_state_source='durable_state'" in text
+    assert "git -C \"$REPO\" merge-base --is-ancestor \"$EXPECTED_REPO_COMMIT\" \"$CURRENT_REPO_COMMIT\"" in text
     assert '"$(state_value setup_status)" == OK' in text
     assert '"$setup_archive_status" == VERIFIED' in text
     assert "-graph96-v2" in text
