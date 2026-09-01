@@ -33,6 +33,9 @@ def test_graph_pilot_submitter_has_sealed_chain_and_no_arrow_graph_run():
     assert "JobState=COMPLETED" in text
     assert "ExitCode=0:0" in text
     assert "setup_state_source='scontrol'" in text
+    assert "setup_state_source='durable_state'" in text
+    assert '"$(state_value setup_status)" == OK' in text
+    assert '"$setup_archive_status" == VERIFIED' in text
     assert "-graph96-v2" in text
     assert "-graph96\"" not in text
     assert 'input_bundle_status="$(state_value input_bundle_status)"' in text

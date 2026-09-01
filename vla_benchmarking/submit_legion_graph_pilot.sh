@@ -72,6 +72,7 @@ else
   setup_job_id="$(state_value setup_job_id)"
   train_job_id="$(state_value train_job_id)"; eval_job_id="$(state_value eval_job_id)"; train_status="$(state_value train_status)"; eval_status="$(state_value eval_status)"
   setup_template_sha256="$(state_value setup_template_sha256)"; train_template_sha256="$(state_value train_template_sha256)"; eval_template_sha256="$(state_value eval_template_sha256)"; eval_rendered_sha256="$(state_value eval_rendered_sha256)"
+  setup_state_source="$(state_value setup_state_source)"
   launch_status="$(state_value launch_status)"; launch_nonce="$(state_value launch_nonce)"
   [[ "$setup_job_id" =~ ^[0-9]+$ ]] || { echo 'setup state has no valid setup job id' >&2; exit 1; }
   [[ -z "$train_job_id" && -z "$eval_job_id" && "$train_status" == PENDING && "$eval_status" == PENDING ]] || { echo 'setup state already contains a training/evaluation submission' >&2; exit 1; }
@@ -138,6 +139,14 @@ PY_SETUP_ARCHIVE
       setup_state_source='scontrol'
     fi
   fi
+  # Legion's accounting service can be unavailable after a job has left the
+  # controller.  The setup job's durable state is fail-closed: it is written
+  # only by the setup EXIT trap after workload success and a verified archive,
+  # and the archive/bundle are re-verified above before this fallback is used.
+  if [[ "$setup_slurm_state" != COMPLETED && -z "$setup_slurm_state" && -z "${setup_controller_state:-}" && "$(state_value setup_status)" == OK && "$setup_archive_status" == VERIFIED && "$input_bundle_status" == VERIFIED ]]; then
+    setup_slurm_state='COMPLETED'
+    setup_state_source='durable_state'
+  fi
   [[ "$setup_slurm_state" == COMPLETED ]] || { echo "setup SLURM state is not COMPLETED: $setup_slurm_state" >&2; exit 1; }
   setup_status=OK
 fi
@@ -148,7 +157,7 @@ write_state() {
     printf 'expected_repo_commit=%s\nlibero_commit=%s\nbase_policy_revision=%s\n' "$EXPECTED_REPO_COMMIT" "$LIBERO_COMMIT" "$BASE_POLICY_REVISION"
     printf 'repo=%s\nscratch_root=%s\narchive_root=%s\nstate_dir=%s\n' "$REPO" "$SCRATCH_ROOT" "$ARCHIVE_ROOT" "$state_dir"
     printf 'setup_job_id=%s\ntrain_job_id=%s\neval_job_id=%s\n' "$setup_job_id" "$train_job_id" "$eval_job_id"
-    printf 'setup_status=%s\ntrain_status=%s\neval_status=%s\nlaunch_status=%s\nlaunch_nonce=%s\n' "${setup_status:-SUBMITTED}" "${train_status:-PENDING}" "${eval_status:-PENDING}" "${launch_status:-PENDING}" "${launch_nonce:-}"
+    printf 'setup_status=%s\nsetup_state_source=%s\ntrain_status=%s\neval_status=%s\nlaunch_status=%s\nlaunch_nonce=%s\n' "${setup_status:-SUBMITTED}" "${setup_state_source:-}" "${train_status:-PENDING}" "${eval_status:-PENDING}" "${launch_status:-PENDING}" "${launch_nonce:-}"
     printf 'setup_template_sha256=%s\ntrain_template_sha256=%s\neval_template_sha256=%s\neval_rendered_sha256=%s\n' "${setup_template_sha256:-}" "${train_template_sha256:-}" "${eval_template_sha256:-}" "${eval_rendered_sha256:-}"
     printf 'input_bundle_path=%s\ninput_bundle_tree_sha256=%s\ninput_bundle_status=%s\n' "${input_bundle_path:-}" "${input_bundle_tree_sha256:-}" "${input_bundle_status:-PENDING}"
     printf 'setup_archive_status=%s\nsetup_archive_tree_sha256=%s\ntrain_archive_status=%s\ntrain_archive_tree_sha256=%s\neval_archive_status=%s\neval_archive_tree_sha256=%s\n' "${setup_archive_status:-PENDING}" "${setup_archive_tree_sha256:-}" "${train_archive_status:-PENDING}" "${train_archive_tree_sha256:-}" "${eval_archive_status:-PENDING}" "${eval_archive_tree_sha256:-}"
