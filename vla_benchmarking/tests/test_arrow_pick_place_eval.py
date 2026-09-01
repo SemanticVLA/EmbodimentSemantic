@@ -387,6 +387,28 @@ def test_invalid_gripper_dwell_is_rejected(runner):
         )
 
 
+def test_motion_timeout_keeps_partial_phase_audit(runner, monkeypatch):
+    env = _MotionEnv()
+    monkeypatch.setattr(
+        runner,
+        "normalized_osc_action",
+        lambda **kwargs: np.zeros(7, dtype=np.float32),
+    )
+    with pytest.raises(TimeoutError, match="phase pregrasp exceeded 1 steps"):
+        runner._run_motion(
+            env,
+            np.ones((6, 3), dtype=np.float64),
+            _motion_proprio(),
+            phase_timeout_steps=1,
+            gripper_dwell_steps=2,
+            stop_after_phase="retreat",
+            dry_run=False,
+        )
+    assert env._arrow_phase_audit[-1]["phase"] == "pregrasp"
+    assert env._arrow_phase_audit[-1]["status"] == "timeout"
+    assert env._arrow_phase_audit[-1]["steps"] == 1
+
+
 def test_cli_defaults_use_verified_rim_profile(runner):
     args = runner.parse_args([])
     assert args.resolution == runner.DEFAULT_RESOLUTION == 256

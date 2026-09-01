@@ -997,6 +997,20 @@ def run_matrix(
                 observed_settle_diagnostics = getattr(env, "_arrow_settle_diagnostics", None)
                 if isinstance(observed_settle_diagnostics, Mapping):
                     settle_diagnostics = dict(observed_settle_diagnostics)
+                observed_phase_audit = getattr(env, "_arrow_phase_audit", None)
+                if isinstance(observed_phase_audit, list):
+                    phase_records = [dict(item) for item in observed_phase_audit if isinstance(item, Mapping)]
+                    if phase_records:
+                        if cell_record is None:
+                            cell_record = _error_record(
+                                cell, stage=stage, exc=RuntimeError("controller failed")
+                            )
+                        cell_record["phases"] = phase_records
+                        cell_record["phase_frames"] = [
+                            item["diagnostic_frame"]
+                            for item in phase_records
+                            if item.get("diagnostic_frame")
+                        ]
                 if env is not None:
                     try:
                         close = getattr(env, "close", None)
@@ -1057,6 +1071,9 @@ def run_matrix(
                 cell_record["diagnostics"] = _audit_diagnostics(cell_record["audit"])
                 if dry_run:
                     cell_record["diagnostics"]["evaluator_result"] = None
+            elif cell_record.get("phases"):
+                cell_record["diagnostics"]["phases"] = cell_record["phases"]
+                cell_record["diagnostics"]["phase_frames"] = cell_record["phase_frames"]
             cell_record["protocol"] = protocol
             cell_record["provenance"] = provenance
             cell_record["contract_hash"] = contract_hash

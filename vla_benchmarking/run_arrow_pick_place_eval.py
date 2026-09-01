@@ -603,6 +603,9 @@ def _run_motion(
     if held_rotation is None:
         raise ValueError("initial observation lacks EEF orientation proprioception")
     phase_audit: list[dict[str, Any]] = []
+    # Keep a live reference so a timeout or other controller exception can be
+    # serialized by the matrix runner even though no final audit is produced.
+    setattr(env, "_arrow_phase_audit", phase_audit)
     for phase in PHASES:
         waypoint = _phase_waypoint(waypoints, phase)
         gripper = 1.0 if phase == "close" else -1.0 if phase == "open" else 0.0
@@ -646,6 +649,14 @@ def _run_motion(
                 record["status"] = "reached"
                 break
         else:
+            record["status"] = "timeout"
+            if "eef_pos" in proprio:
+                eef_pos = np.asarray(proprio["eef_pos"][:3], dtype=np.float64)
+                record["eef_pos_m"] = eef_pos.tolist()
+                record["position_error_norm_m"] = float(
+                    np.linalg.norm(_position(waypoint)[:3] - eef_pos)
+                )
+            phase_audit.append(record)
             if is_gripper_phase:
                 raise TimeoutError(f"phase {phase} failed to complete {gripper_dwell_steps}-step dwell")
             raise TimeoutError(f"phase {phase} exceeded {phase_timeout_steps} steps")
@@ -666,6 +677,7 @@ def _run_motion(
             else:
                 record["status"] = "stop"
         phase_audit.append(record)
+        setattr(env, "_arrow_phase_audit", phase_audit)
         if not dry_run and phase_frame_callback is not None:
             try:
                 frame_path = phase_frame_callback(phase, len(phase_audit) - 1)
