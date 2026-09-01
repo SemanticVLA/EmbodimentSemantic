@@ -58,6 +58,11 @@ DEFAULT_PROFILE_NAME = "libero_spatial_akita_bowl_agentview_v1"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
+# The OSC controller can settle within a few millimetres of a waypoint while
+# contact dynamics keep the final error from crossing exactly 1 cm.  Keep this
+# explicit and conservative so task-specific diagnostics can distinguish a
+# reachable near-stop from a true runaway.
+WAYPOINT_POSITION_TOLERANCE_M = 0.015
 VERIFIED_PROFILE_TASK_ID = 0
 VERIFIED_PROFILE_SEED = 1000
 VERIFIED_PROFILE_RESOLUTION = 256
@@ -645,7 +650,7 @@ def _run_motion(
                 if step + 1 >= gripper_dwell_steps:
                     record["status"] = "dwell"
                     break
-            elif np.linalg.norm(_position(waypoint) - proprio["eef_pos"][:3]) < 0.01:
+            elif np.linalg.norm(_position(waypoint) - proprio["eef_pos"][:3]) < WAYPOINT_POSITION_TOLERANCE_M:
                 record["status"] = "reached"
                 break
         else:
