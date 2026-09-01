@@ -384,7 +384,7 @@ def test_timeout_after_motion_requires_explicit_retry(matrix, tmp_path: Path):
         )
 
 
-def test_settle_diagnostics_are_retained_for_controller_failures(matrix, tmp_path: Path):
+def test_settle_diagnostics_are_retained_for_environment_failures(matrix, tmp_path: Path):
     class Env:
         _arrow_settle_diagnostics = {
             "steps": 500,
@@ -411,11 +411,35 @@ def test_settle_diagnostics_are_retained_for_controller_failures(matrix, tmp_pat
     )
     status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
     cell = status["cells"][0]
-    assert cell["failure_class"] == "controller_failure"
+    assert cell["failure_class"] == "environment_failure"
     assert cell["settle_diagnostics"]["settled"] is False
     assert summary["diagnostic_aggregates"]["settle"] == {
         "recorded": 1,
         "settled": 0,
         "unsettled": 1,
         "max_final_velocity_m_s": 0.12,
+    }
+
+
+def test_timeout_phase_is_included_in_phase_aggregates(matrix):
+    records = [
+        {
+            "status": "failed",
+            "audit": None,
+            "phases": [
+                {"phase": "preplace", "status": "reached"},
+                {"phase": "descend_place", "status": "timeout"},
+            ],
+        }
+    ]
+    aggregates = matrix._phase_aggregates(records)
+    assert aggregates["preplace"] == {
+        "count": 1,
+        "statuses": {"reached": 1},
+        "failed": 0,
+    }
+    assert aggregates["descend_place"] == {
+        "count": 1,
+        "statuses": {"timeout": 1},
+        "failed": 1,
     }

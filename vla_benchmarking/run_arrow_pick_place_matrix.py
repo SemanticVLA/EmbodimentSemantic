@@ -357,6 +357,8 @@ def _failure_class(stage: str, exc: BaseException) -> str:
     message = str(exc).lower()
     if "profile" in message or "unvalidated" in message:
         return "profile_rejected"
+    if "not confirmed settled" in message or "settle_physics" in message:
+        return "environment_failure"
     if "evaluator" in message or "success" in message and "check" in message:
         return "evaluator_failure"
     if stage == "build_env" or stage == "close_env":
@@ -547,7 +549,12 @@ def _phase_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for record in records:
         audit = record.get("audit")
-        phases = audit.get("phases", []) if isinstance(audit, Mapping) else []
+        if isinstance(audit, Mapping):
+            phases = audit.get("phases", [])
+        else:
+            # Controller failures can occur before the final audit is written;
+            # _run_motion still preserves partial phases at record level.
+            phases = record.get("phases", [])
         if not isinstance(phases, list):
             continue
         for phase_record in phases:
