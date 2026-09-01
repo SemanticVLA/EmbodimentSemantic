@@ -397,9 +397,11 @@ def _error_record(
             "control_targets_world_m": None,
             "waypoints_world_m": None,
             "evaluator_result": None,
+            "settle_diagnostics": None,
         },
         "motion_began": bool(motion_began),
         "init_state_diagnostics": None,
+        "settle_diagnostics": None,
     })
     return record
 
@@ -566,10 +568,27 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
         "capture": {"valid": 0, "missing": 0},
         "parser": {"success": 0, "failure": 0},
         "depth": {"recorded": 0, "failure": 0},
+        "settle": {"recorded": 0, "settled": 0, "unsettled": 0, "max_final_velocity_m_s": None},
         "controller": {"success": 0, "failure": 0},
         "evaluator": {"true": 0, "false": 0, "null": 0, "error": 0},
     }
     for record in records:
+        settle = record.get("settle_diagnostics")
+        if isinstance(settle, Mapping):
+            result["settle"]["recorded"] += 1
+            if bool(settle.get("settled")):
+                result["settle"]["settled"] += 1
+            else:
+                result["settle"]["unsettled"] += 1
+            try:
+                velocity = float(settle["final_max_velocity_m_s"])
+            except (KeyError, TypeError, ValueError):
+                velocity = None
+            if velocity is not None:
+                current = result["settle"]["max_final_velocity_m_s"]
+                result["settle"]["max_final_velocity_m_s"] = (
+                    velocity if current is None else max(float(current), velocity)
+                )
         audit = record.get("audit")
         if isinstance(audit, Mapping):
             contract = audit.get("capture_contract")
@@ -850,6 +869,7 @@ def run_matrix(
                 continue
             env = None
             init_state_diagnostics: Mapping[str, Any] | None = None
+            settle_diagnostics: Mapping[str, Any] | None = None
             inputs: dict[str, Any] | None = None
             cell_exception: BaseException | None = None
             stage = "build_env"
@@ -896,6 +916,9 @@ def run_matrix(
                 candidate_init_diagnostics = getattr(env, "_arrow_init_state_diagnostics", None)
                 if isinstance(candidate_init_diagnostics, Mapping):
                     init_state_diagnostics = dict(candidate_init_diagnostics)
+                candidate_settle_diagnostics = getattr(env, "_arrow_settle_diagnostics", None)
+                if isinstance(candidate_settle_diagnostics, Mapping):
+                    settle_diagnostics = dict(candidate_settle_diagnostics)
                 if env_builder is None:
                     _validate_observed_init_state(
                         init_state_diagnostics,
@@ -971,6 +994,9 @@ def run_matrix(
                 observed_init_diagnostics = _init_state_diagnostics(env)
                 if observed_init_diagnostics is not None:
                     init_state_diagnostics = observed_init_diagnostics
+                observed_settle_diagnostics = getattr(env, "_arrow_settle_diagnostics", None)
+                if isinstance(observed_settle_diagnostics, Mapping):
+                    settle_diagnostics = dict(observed_settle_diagnostics)
                 if env is not None:
                     try:
                         close = getattr(env, "close", None)
@@ -1024,6 +1050,7 @@ def run_matrix(
             cell_record["attempt_output_dir"] = attempt_output_dir.as_posix()
             cell_record["dry_run"] = bool(dry_run)
             cell_record["init_state_diagnostics"] = init_state_diagnostics
+            cell_record["settle_diagnostics"] = settle_diagnostics
             cell_record["init_state_index"] = _init_state_index(init_state_diagnostics)
             cell_record["motion_began"] = bool(motion_began or running_record.get("motion_began"))
             if isinstance(cell_record.get("audit"), Mapping):

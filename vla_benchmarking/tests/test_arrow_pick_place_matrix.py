@@ -382,3 +382,40 @@ def test_timeout_after_motion_requires_explicit_retry(matrix, tmp_path: Path):
             episode_runner=timeout_episode,
             arrow_input_builder=lambda env, task_id, resolution: {},
         )
+
+
+def test_settle_diagnostics_are_retained_for_controller_failures(matrix, tmp_path: Path):
+    class Env:
+        _arrow_settle_diagnostics = {
+            "steps": 500,
+            "final_max_velocity_m_s": 0.12,
+            "settled": False,
+        }
+
+        def close(self):
+            pass
+
+    def episode(**kwargs):
+        raise RuntimeError("refusing motion: LIBERO physics was not confirmed settled")
+
+    summary = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[5],
+        episodes_per_task=1,
+        dry_run=False,
+        execute_motion=True,
+        allow_unvalidated_profile=True,
+        env_builder=lambda task_id, seed, resolution: Env(),
+        episode_runner=episode,
+        arrow_input_builder=lambda env, task_id, resolution: {},
+    )
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    cell = status["cells"][0]
+    assert cell["failure_class"] == "controller_failure"
+    assert cell["settle_diagnostics"]["settled"] is False
+    assert summary["diagnostic_aggregates"]["settle"] == {
+        "recorded": 1,
+        "settled": 0,
+        "unsettled": 1,
+        "max_final_velocity_m_s": 0.12,
+    }

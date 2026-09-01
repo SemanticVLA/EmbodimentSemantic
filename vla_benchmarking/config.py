@@ -42,7 +42,10 @@ DEFAULT_CAMERAS = ["agentview", "robot0_eye_in_hand"]
 LEROBOT_CAMERA_KEYS = ("agentview_image", "robot0_eye_in_hand_image")
 CAMERA_HEIGHT = 256
 CAMERA_WIDTH = 256
-SETTLE_STEPS_INIT = 100
+# Some LIBERO layouts (notably bowls initialized on supports) need more than
+# the nominal 100 steps to fall below the velocity gate before first motion.
+# Keep the deterministic settle budget bounded while covering those states.
+SETTLE_STEPS_INIT = 500
 SETTLE_STEPS_SWAP = 200
 
 # Every task receives exactly one safe distractor removal before the LIBERO env
