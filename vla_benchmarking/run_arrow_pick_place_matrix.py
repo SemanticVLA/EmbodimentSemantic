@@ -883,6 +883,8 @@ def run_matrix(
             settle_diagnostics: Mapping[str, Any] | None = None
             inputs: dict[str, Any] | None = None
             cell_exception: BaseException | None = None
+            close_exception: BaseException | None = None
+            close_succeeded = False
             stage = "build_env"
             attempt_started = time.time()
             prior_attempts = list(prior.get("attempts", [])) if isinstance(prior, Mapping) else []
@@ -1022,12 +1024,27 @@ def run_matrix(
                             for item in phase_records
                             if item.get("diagnostic_frame")
                         ]
-                if env is not None:
-                    try:
-                        close = getattr(env, "close", None)
-                        if close is not None:
+                if env is None:
+                    close_succeeded = True
+                else:
+                    close = getattr(env, "close", None)
+                    if close is None:
+                        if continue_on_motion_failure:
+                            close_exception = RuntimeError("environment close is unavailable")
+                        else:
+                            # Preserve compatibility for lightweight injected
+                            # dry-run fakes; production continuation requires a
+                            # callable teardown hook.
+                            close_succeeded = True
+                    else:
+                        try:
                             close()
-                    except BaseException as exc:
+                        except BaseException as exc:
+                            close_exception = exc
+                        else:
+                            close_succeeded = True
+                    if close_exception is not None:
+                        exc = close_exception
                         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                             interrupted = True
                             if interrupt_exc is None:
@@ -1048,6 +1065,8 @@ def run_matrix(
                                 cell_record = _error_record(cell, stage="close_env", exc=exc)
                         else:
                             cell_record["close_error"] = str(exc)
+                            cell_record["stage"] = "close_env"
+                            cell_record["failure_class"] = "environment_failure"
             # KeyboardInterrupt/SystemExit intentionally propagate after the
             # cleanup above; ordinary failures always initialize a record.
             if cell_record is None:
@@ -1074,6 +1093,7 @@ def run_matrix(
             cell_record["attempts"] = prior_attempts
             cell_record["attempt_output_dir"] = attempt_output_dir.as_posix()
             cell_record["dry_run"] = bool(dry_run)
+            cell_record["close_succeeded"] = bool(close_succeeded)
             cell_record["init_state_diagnostics"] = init_state_diagnostics
             cell_record["settle_diagnostics"] = settle_diagnostics
             cell_record["init_state_index"] = _init_state_index(init_state_diagnostics)
@@ -1094,6 +1114,11 @@ def run_matrix(
             append_manifest(cell_record)
             if interrupted and interrupt_exc is not None:
                 raise interrupt_exc
+            if close_exception is not None:
+                # Teardown failure invalidates independence even when
+                # continuation was explicitly requested; never run the next
+                # cell against an environment whose lifecycle is uncertain.
+                raise close_exception
             # Persist first, then surface a motion-started exception so the
             # batch cannot continue into an unsafe duplicate manipulation.
             if (

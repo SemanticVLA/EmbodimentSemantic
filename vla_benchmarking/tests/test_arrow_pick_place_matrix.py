@@ -426,6 +426,39 @@ def test_continue_on_motion_failure_runs_later_independent_cells(matrix, tmp_pat
     assert summary["failure_by_class"] == {"controller_failure": 1}
 
 
+def test_continue_on_motion_failure_aborts_when_close_fails(matrix, tmp_path: Path):
+    calls = []
+
+    class Env:
+        def close(self):
+            raise RuntimeError("close failed")
+
+    def episode_runner(**kwargs):
+        calls.append(kwargs["task_id"])
+        kwargs["motion_started_callback"]()
+        raise TimeoutError("phase descend_place exceeded 80 steps")
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        matrix.run_matrix(
+            output_root=tmp_path,
+            task_ids=[0, 1],
+            episodes_per_task=1,
+            dry_run=False,
+            execute_motion=True,
+            allow_unvalidated_profile=True,
+            continue_on_motion_failure=True,
+            env_builder=lambda *args: Env(),
+            episode_runner=episode_runner,
+            arrow_input_builder=lambda *args: {},
+        )
+    assert calls == [0]
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    cell = status["cells"][0]
+    assert cell["close_succeeded"] is False
+    assert cell["failure_class"] == "environment_failure"
+    assert cell["close_error"] == "close failed"
+
+
 def test_settle_diagnostics_are_retained_for_environment_failures(matrix, tmp_path: Path):
     class Env:
         _arrow_settle_diagnostics = {
