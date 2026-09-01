@@ -322,6 +322,12 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
   paired evaluation job `1912721` is **PENDING (Dependency)** on
   `afterok:1912720`. The verified setup state and sealed templates were reused;
   no second setup or dataset regeneration was performed.
+- Fresh Legion audit: `2026-09-01T14:57:59Z`. Training is on `compute-4-11`;
+  the latest log line (`14:56:13Z`) displays approximately step `6K` / epoch
+  `2.88` (about 19.2% of 29,190 steps), with loss `0.509`. Saved checkpoints
+  `001946` and `003892` are present; the latest is `003892` (`14:10:03Z`).
+  The trainer's live display rounds the step to `6K`, so this audit does not
+  claim a falsely precise current step. Evaluation `1912721` has not started.
 - Trained on: graph-text `target_natural_v1` with no visual arrows, using the
   sealed `graph_treatment`/`arrow_graph_treatment` pair.
 - Planned contract: 15 epochs, 29,190 steps, checkpoint `029190`, batch 32,
