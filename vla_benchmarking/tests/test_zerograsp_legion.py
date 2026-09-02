@@ -98,6 +98,9 @@ def test_dual_matrix_motion_mode_is_explicit_and_defaults_to_execution():
     assert "matrix_args+=(--execute-motion)" in text
     assert "matrix_args+=(--dry-run)" in text
     assert "motion_mode=$MATRIX_EXECUTION_MODE" in text
+    assert 'ZERO_GRASP_PREFLIGHT_TIMEOUT_S="${ZERO_GRASP_PREFLIGHT_TIMEOUT_S:-120}"' in text
+    assert "ZERO_GRASP_PREFLIGHT_TIMEOUT_S must be an integer in [1, 600]" in text
+    assert '--timeout-s "$ZERO_GRASP_PREFLIGHT_TIMEOUT_S"' in text
 
 
 def test_dual_matrix_preserves_expected_hashes_before_observed_digest_reuse():

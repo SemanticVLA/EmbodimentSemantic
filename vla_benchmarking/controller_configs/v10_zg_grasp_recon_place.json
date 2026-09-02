@@ -6,6 +6,7 @@
   "zerograsp": {
     "fixed_seed": 0,
     "max_candidates": 16,
+    "request_timeout_s": 120.0,
     "eef_calibration_verified": true,
     "R_grasp_eef": [[0, 0, 1], [0, 1, 0], [-1, 0, 0]],
     "tip_to_eef_residual_m": [0, 0, 0],

@@ -86,6 +86,7 @@ ZERO_GRASP_EEF_PROBE_RESOLVED=""
 ZERO_GRASP_EEF_PROBE_SHA256=""
 MATRIX_CONTINUE_ON_MOTION_FAILURE="${MATRIX_CONTINUE_ON_MOTION_FAILURE:-1}"
 MATRIX_EXECUTION_MODE="${MATRIX_EXECUTION_MODE:-execute_motion}"
+ZERO_GRASP_PREFLIGHT_TIMEOUT_S="${ZERO_GRASP_PREFLIGHT_TIMEOUT_S:-120}"
 
 if [[ -n "${CONTROLLER_CONFIG:-}" && -n "${ARROW_CONTROLLER_CONFIG:-}" && "$CONTROLLER_CONFIG" != "$ARROW_CONTROLLER_CONFIG" ]]; then
   die 'CONTROLLER_CONFIG and ARROW_CONTROLLER_CONFIG disagree'
@@ -101,6 +102,7 @@ if [[ -n "$CONTROLLER_CONFIG_INPUT" && "$CONTROLLER_VARIANT" != rgbd_arrow_v1 ]]
 fi
 [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" =~ ^[01]$ ]] || die 'MATRIX_CONTINUE_ON_MOTION_FAILURE is invalid'
 [[ "$MATRIX_EXECUTION_MODE" == execute_motion || "$MATRIX_EXECUTION_MODE" == dry_run ]] || die 'MATRIX_EXECUTION_MODE must be execute_motion or dry_run'
+[[ "$ZERO_GRASP_PREFLIGHT_TIMEOUT_S" =~ ^[1-9][0-9]*$ && "$ZERO_GRASP_PREFLIGHT_TIMEOUT_S" -le 600 ]] || die 'ZERO_GRASP_PREFLIGHT_TIMEOUT_S must be an integer in [1, 600]'
 
 [[ "$RUN_ROOT" = /* && "$OUTPUT_ROOT" = /* && "$ARCHIVE_ROOT" = /* ]] || die 'paths must be absolute'
 command -v realpath >/dev/null 2>&1 || die 'realpath is required for safe path validation'
@@ -468,7 +470,7 @@ PY
   if [[ -n "$ZERO_GRASP_ENV_LOCK_RESOLVED" ]]; then export ZERO_GRASP_ENV_LOCK="$ZERO_GRASP_ENV_LOCK_RESOLVED"; fi
   ZERO_GRASP_PREFLIGHT_RESOLVED="$(realpath -e -- "$REPO_ROOT/vla_benchmarking/legion/preflight_zerograsp_process.py")" || die 'cannot canonicalize ZeroGrasp process preflight'
   [[ -f "$ZERO_GRASP_PREFLIGHT_RESOLVED" && -r "$ZERO_GRASP_PREFLIGHT_RESOLVED" ]] || die 'ZeroGrasp process preflight is not readable'
-  preflight_reply="$("$ZERO_GRASP_PYTHON_RESOLVED" "$ZERO_GRASP_PREFLIGHT_RESOLVED" --python "$ZERO_GRASP_PYTHON_RESOLVED" --worker "$ZERO_GRASP_WORKER_RESOLVED" --repo "$ZERO_GRASP_ROOT_RESOLVED" --checkpoint "$ZERO_GRASP_CHECKPOINT_RESOLVED" --checkpoint-sha256 "$ZERO_GRASP_CHECKPOINT_SHA256" --config "$ZERO_GRASP_CONFIG_RESOLVED" --timeout-s 20)" || die 'ZeroGrasp process preflight failed'
+  preflight_reply="$("$ZERO_GRASP_PYTHON_RESOLVED" "$ZERO_GRASP_PREFLIGHT_RESOLVED" --python "$ZERO_GRASP_PYTHON_RESOLVED" --worker "$ZERO_GRASP_WORKER_RESOLVED" --repo "$ZERO_GRASP_ROOT_RESOLVED" --checkpoint "$ZERO_GRASP_CHECKPOINT_RESOLVED" --checkpoint-sha256 "$ZERO_GRASP_CHECKPOINT_SHA256" --config "$ZERO_GRASP_CONFIG_RESOLVED" --timeout-s "$ZERO_GRASP_PREFLIGHT_TIMEOUT_S")" || die 'ZeroGrasp process preflight failed'
   printf '%s\n' "$preflight_reply" > "$RUN_ROOT/zerograsp_process_preflight.json"
   "$PYTHON" - "$preflight_reply" <<'PY'
 import json
