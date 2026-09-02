@@ -374,6 +374,12 @@ actual_freeze = sorted(subprocess.check_output([sys.executable, "-m", "pip", "fr
 if not expected_freeze or expected_freeze != actual_freeze:
     raise SystemExit("ZeroGrasp runtime lock pip_freeze differs from selected interpreter")
 try:
+    import numpy
+except Exception as exc:
+    raise SystemExit(f"selected ZeroGrasp interpreter NumPy import failed: {exc}")
+if numpy.__version__ != data.get("numpy_version"):
+    raise SystemExit("ZeroGrasp runtime lock NumPy identity differs from selected interpreter")
+try:
     import torch
 except Exception as exc:
     raise SystemExit(f"selected ZeroGrasp interpreter Torch import failed: {exc}")

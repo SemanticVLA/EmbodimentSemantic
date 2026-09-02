@@ -10,8 +10,9 @@ readonly ZERO_GRASP_PIN="152f67c27269ff3f089783bd2f041d67641fa506"
 readonly ZERO_GRASP_CHECKPOINT_URL="https://drive.google.com/file/d/1xUmFdgT_Ozu4zIPIsh_1SJMcegeQUWqQ/view?usp=sharing"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly BOOTSTRAP="${SCRIPT_DIR}/bootstrap_zerograsp.sh"
-readonly OCNN_URL="https://github.com/octree-nn/ocnn-pytorch.git"
+readonly OCNN_URL="git+https://github.com/octree-nn/ocnn-pytorch.git"
 readonly OCNN_PIN="7521c22e2921a0bd8e9285044c842ff6fa2042e0"
+readonly DWCONV_URL="git+https://github.com/octree-nn/dwconv.git"
 readonly DWCONV_PIN="ae53057eaf36dab01aa2727fcc93a749fd995af5"
 readonly GRASPNETAPI_PIN="eb57dd2092d8dbe05312a29c3d0c22f3226efbfc"
 
@@ -146,6 +147,12 @@ except Exception as exc:
 torch_info = data.get("torch", {})
 if torch.__version__.split("+")[0] != torch_info.get("version") or torch.version.cuda != torch_info.get("cuda"):
     raise SystemExit("existing runtime lock Torch identity differs")
+try:
+    import numpy
+except Exception as exc:
+    raise SystemExit(f"existing runtime lock NumPy import failed: {exc}")
+if numpy.__version__ != data.get("numpy_version"):
+    raise SystemExit("existing runtime lock NumPy identity differs")
 PY
   # A lock is immutable provenance: an existing environment is verification
   # only, never a reason to reinstall packages or rewrite the lock.
@@ -154,13 +161,20 @@ PY
 fi
 if ((INSTALL)); then
   REQ_TMP="$(mktemp)"
-  cleanup() { rm -f -- "$REQ_TMP"; }
+  CONSTRAINT_TMP="$(mktemp)"
+  cleanup() { rm -f -- "$REQ_TMP" "$CONSTRAINT_TMP"; }
   trap cleanup EXIT
-  # Upstream ocnn is floating; omit it, then install the reviewed immutable ref.
-  awk '!/^ocnn[[:space:]]*@/' "$ROOT/requirements.txt" > "$REQ_TMP"
+  # Upstream VCS entries are built in isolated environments where torch is not
+  # visible. Omit both and install their reviewed immutable refs explicitly
+  # after Torch is present.
+  awk '!/^ocnn[[:space:]]*@/ && !/^dwconv[[:space:]]*@/' "$ROOT/requirements.txt" > "$REQ_TMP"
+  printf 'numpy==1.26.4\n' > "$CONSTRAINT_TMP"
+  export PIP_CONSTRAINT="$CONSTRAINT_TMP"
   export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.0+PTX}"
   "$PYTHON" -m pip install --upgrade pip setuptools wheel ninja || die 'build tools install failed'
+  "$PYTHON" -m pip install --force-reinstall --no-deps numpy==1.26.4 || die 'NumPy install failed'
   "$PYTHON" -m pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121 || die 'Torch install failed'
+  "$PYTHON" -m pip install --no-build-isolation --no-deps "dwconv @ ${DWCONV_URL}@${DWCONV_PIN}" || die 'dwconv install failed'
   "$PYTHON" -m pip install torch-scatter -f https://data.pyg.org/whl/torch-2.2.0+cu121.html || die 'torch-scatter install failed'
   "$PYTHON" -m pip install --upgrade xformers==0.0.24 --index-url https://download.pytorch.org/whl/cu121 || die 'xformers install failed'
   "$PYTHON" -m pip install -r "$REQ_TMP" || die 'ZeroGrasp requirements install failed'
@@ -169,7 +183,13 @@ if ((INSTALL)); then
   "$PYTHON" -m pip install "graspnetAPI @ git+https://github.com/graspnet/graspnetAPI.git@${GRASPNETAPI_PIN}" --no-deps || die 'graspnetAPI install failed'
   "$PYTHON" -m pip install transforms3d autolab_core cvxopt grasp_nms || die 'grasp utility install failed'
   "$PYTHON" -m pip install torch_cluster -f https://data.pyg.org/whl/torch-2.2.0+cu121.html || die 'torch_cluster install failed'
+  NUMPY_VERSION="$($PYTHON -c 'import numpy; print(numpy.__version__)')" || die 'cannot import NumPy after installation'
+  [[ "$NUMPY_VERSION" == "1.26.4" ]] || die "NumPy version drifted during installation: $NUMPY_VERSION"
+  unset PIP_CONSTRAINT
 fi
+
+NUMPY_VERSION="$($PYTHON -c 'import numpy; print(numpy.__version__)')" || die 'cannot query NumPy version'
+[[ "$NUMPY_VERSION" == "1.26.4" ]] || die "official runtime requires NumPy 1.26.4 (found $NUMPY_VERSION)"
 
 if ((SMOKE)); then
   "$PYTHON" - "$ROOT" "$CHECKPOINT" "$CONFIG" <<'PY'
@@ -177,8 +197,10 @@ import importlib, pathlib, sys
 root, checkpoint, config = map(pathlib.Path, sys.argv[1:])
 sys.path.insert(0, str(root))
 import torch
+import numpy
 assert torch.__version__.split("+")[0] == "2.2.0", torch.__version__
 assert torch.version.cuda == "12.1", torch.version.cuda
+assert numpy.__version__ == "1.26.4", numpy.__version__
 assert torch.cuda.is_available(), "CUDA unavailable; run on a GPU compute node"
 for module in ("torchvision", "torch_scatter", "torch_cluster", "xformers", "ocnn", "graspnetAPI", "zerograsp"):
     importlib.import_module(module)
@@ -212,6 +234,7 @@ data = {
     "python": pathlib.Path(python).resolve().as_posix(),
     "python_executable_sha256": python_sha,
     "python_version": python_version,
+    "numpy_version": "1.26.4",
     "gpu": gpu,
     "torch": {"version": "2.2.0", "torchvision": "0.17.0", "cuda": "12.1"},
     "ocnn_commit": "7521c22e2921a0bd8e9285044c842ff6fa2042e0",
@@ -238,6 +261,7 @@ printf 'zero_grasp_checkpoint=%s\n' "$CHECKPOINT"
 printf 'zero_grasp_checkpoint_sha256=%s\n' "$CHECKPOINT_SHA"
 printf 'zero_grasp_config=%s\n' "$CONFIG"
 printf 'zero_grasp_config_sha256=%s\n' "$CONFIG_SHA"
+printf 'zero_grasp_numpy_version=%s\n' "$NUMPY_VERSION"
 printf 'zero_grasp_env_lock=%s\n' "$LOCK"
 [[ -f "$LOCK" ]] && printf 'zero_grasp_env_lock_sha256=%s\n' "$(sha256sum "$LOCK" | awk '{print tolower($1)}')"
 printf 'zero_grasp_checkpoint_downloaded=false\n'

@@ -99,13 +99,22 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
         "torch_cluster",
         "xformers==0.0.24",
         "Python 3.11",
+        "numpy==1.26.4",
+        "numpy_version",
         "checkpoint_size_bytes",
         "pip_freeze",
         "--no-deps",
         "octree_feature_extractor_revision",
     ):
         assert value in text
-    assert "awk '!/^ocnn[[:space:]]*@/'" in text
+    assert "awk '!/^ocnn[[:space:]]*@/ && !/^dwconv[[:space:]]*@/'" in text
+    assert "&& !/^dwconv[[:space:]]*@/" in text
+    assert 'DWCONV_URL="git+https://github.com/octree-nn/dwconv.git"' in text
+    assert 'OCNN_URL="git+https://github.com/octree-nn/ocnn-pytorch.git"' in text
+    assert '"ocnn @ ${OCNN_URL}@${OCNN_PIN}"' in text
+    assert '"dwconv @ ${DWCONV_URL}@${DWCONV_PIN}"' in text
+    assert "--no-build-isolation --no-deps" in text
+    assert text.index('torch==2.2.0 torchvision==0.17.0') < text.index('"dwconv @ ${DWCONV_URL}@${DWCONV_PIN}"') < text.index('torch-scatter')
     assert "checkpoint URL is provenance only" in text
     assert "--install" in text and "--smoke" in text and "--verify-only" in text
     assert text.index("if [[ -f \"$LOCK\" ]]; then") < text.index("if ((INSTALL)); then\n  REQ_TMP")
@@ -179,6 +188,7 @@ def test_runtime_lock_rejects_stale_or_different_interpreter_identity():
     assert "selected interpreter" in launcher_text
     assert "pip_freeze differs" in launcher_text
     assert "Torch/CUDA identity differs" in launcher_text
+    assert "NumPy identity differs" in launcher_text
     assert "torchvision identity differs" in launcher_text
     assert '"python_executable_sha256": python_sha' in launcher_text
 
