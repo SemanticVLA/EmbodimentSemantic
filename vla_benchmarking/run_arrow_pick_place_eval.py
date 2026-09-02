@@ -277,6 +277,23 @@ def settle_libero_env(env: Any, *, max_steps: int) -> dict[str, Any]:
     return diagnostics
 
 
+def _close_environment_quietly(env: Any) -> None:
+    """Best-effort close used when construction fails before the caller owns env.
+
+    Cleanup must also run for ``KeyboardInterrupt``/``SystemExit`` paths, but a
+    close failure must never mask the construction exception.  This helper is
+    intentionally local to the direct runner rather than changing LIBERO's
+    lifecycle contract.
+    """
+    close = getattr(env, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except BaseException:
+        pass
+
+
 def _as_rgb(array: Any) -> np.ndarray:
     image = np.asarray(array)
     if image.ndim == 4 and image.shape[0] == 1:
@@ -800,7 +817,20 @@ def _run_motion(
                     motion_started_callback()
                 motion_notified = True
             setattr(env, "_arrow_motion_began", True)
-            observation, done, _info = _step_once(env, action)
+            try:
+                observation, done, _info = _step_once(env, action)
+            except TimeoutError as exc:
+                # Preserve a partial gripper record so run_episode can offer a
+                # bounded, explicitly-approved RGB-D recovery.  This is the
+                # real reachability seam for recovery: a transport/controller
+                # timeout during close/open, never an inferred object state.
+                if is_gripper_phase:
+                    record["status"] = "timeout"
+                    record["error_type"] = type(exc).__name__
+                    record["error"] = str(exc)
+                    phase_audit.append(record)
+                    setattr(env, "_arrow_phase_audit", phase_audit)
+                raise
             proprio = _proprioception(observation)
             if observation is None or "eef_pos" not in proprio:
                 raise RuntimeError(f"phase {phase} lost EEF proprioception; failing closed")
@@ -937,13 +967,25 @@ def _save_capture(capture: CapturedRGBD, arrow_rgb: np.ndarray, output_dir: Path
     return {name: path.as_posix() for name, path in paths.items()}
 
 
+def _persist_recovery_audit(output_dir: Path, recovery_audit: Sequence[Mapping[str, Any]]) -> str | None:
+    """Persist bounded-recovery diagnostics without masking the motion error."""
+    path = output_dir / "arrow_pick_place_recovery_audit.json"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(list(recovery_audit), indent=2), encoding="utf-8")
+        return path.as_posix()
+    except Exception:
+        return None
+
+
 def recover_grasp_or_release(
     env: Any,
-    arrow_rgb: np.ndarray,
+    arrow_rgb: np.ndarray | None,
     *,
     phase: str,
     resolution: int,
     arrow_encoding: str | Any | None = None,
+    endpoint_pixels: tuple[Sequence[float], Sequence[float]] | None = None,
     source_grasp_offset: Sequence[float] = DEFAULT_SOURCE_GRASP_OFFSET_M,
     destination_release_offset: Sequence[float] = DEFAULT_DESTINATION_RELEASE_OFFSET_M,
 ) -> dict[str, Any]:
@@ -957,9 +999,13 @@ def recover_grasp_or_release(
         raise ValueError("RGB-D recovery is only defined for close/open phases")
     recapture = capture_agentview(env, resolution=resolution)
     contract = validate_capture_contract(recapture, resolution=resolution)
-    source_uv, target_uv = decode_arrow_pixels(
-        recapture.rgb, arrow_rgb, encoding=arrow_encoding
-    )
+    if endpoint_pixels is None:
+        raise ValueError(
+            "recovery requires endpoint_pixels from the original decoded arrow; "
+            "re-decoding an old overlay against a new RGB frame is unsafe"
+        )
+    source_uv = np.asarray(endpoint_pixels[0], dtype=np.float64)
+    target_uv = np.asarray(endpoint_pixels[1], dtype=np.float64)
     source_depth = _depth_at(recapture.metric_depth, source_uv)
     target_depth = _depth_at(recapture.metric_depth, target_uv)
     source_point, source_refinement = _refine_or_deproject_endpoint(
@@ -1238,43 +1284,63 @@ def run_episode(
         ):
             phase = str(env._arrow_phase_audit[-1]["phase"])
             for attempt in range(int(recovery_attempts)):
-                proposal = recover_grasp_or_release(
-                    env,
-                    arrow_rgb,
-                    phase=phase,
-                    resolution=resolution,
-                    arrow_encoding=arrow_encoding,
-                    source_grasp_offset=source_offset,
-                    destination_release_offset=destination_offset,
-                )
-                proposal["attempt"] = attempt + 1
-                approved = bool(recovery_callback(phase, proposal)) if recovery_callback else False
-                proposal["approved"] = approved
-                proposal["executed_steps"] = 0
-                # Built-in recovery is intentionally tiny and gripper-only:
-                # hold the latest proprioceptive EEF position while repeating
-                # the contact command. No object pose or evaluator is read.
-                if recovery_steps > 0:
-                    current_pos = np.asarray(proposal.get("eef_pos_m", []), dtype=np.float64)
-                    current_quat = np.asarray(proposal.get("eef_quat", []), dtype=np.float64)
-                    if current_pos.shape == (3,) and current_quat.size:
-                        recovery_proprio = {"eef_pos": current_pos, "eef_quat": current_quat}
-                        recovery_waypoint = {"position": current_pos}
-                        recovery_gripper = 1.0 if phase == "close" else -1.0
-                        for _ in range(recovery_steps):
-                            action = normalized_action_for_waypoint(
-                                recovery_proprio, recovery_waypoint,
-                                gripper=recovery_gripper, held_rotation=current_quat,
-                            )
-                            setattr(env, "_arrow_motion_began", True)
-                            observation, _done, _info = _step_once(env, action)
-                            recovery_proprio = _proprioception(observation)
-                            if "eef_pos" not in recovery_proprio or "eef_quat" not in recovery_proprio:
-                                break
-                            proposal["executed_steps"] += 1
-                recovery_audit.append(proposal)
-                setattr(env, "_arrow_recovery_audit", recovery_audit)
-                if approved:
+                try:
+                    # Endpoint pixels are retained from the original decode.
+                    # Never decode the original overlay against this new clean
+                    # frame: that could silently choose a different command.
+                    proposal = recover_grasp_or_release(
+                        env,
+                        arrow_rgb,
+                        phase=phase,
+                        resolution=resolution,
+                        arrow_encoding=arrow_encoding,
+                        endpoint_pixels=(source_uv, target_uv),
+                        source_grasp_offset=source_offset,
+                        destination_release_offset=destination_offset,
+                    )
+                    proposal["attempt"] = attempt + 1
+                    approved = bool(recovery_callback(phase, proposal)) if recovery_callback else False
+                    proposal["approved"] = approved
+                    proposal["executed_steps"] = 0
+                    # Every recovery action is explicitly opt-in.  A proposal
+                    # or callback is not permission by itself; only a truthy
+                    # callback result may send bounded gripper commands.
+                    if approved and recovery_steps > 0:
+                        current_pos = np.asarray(proposal.get("eef_pos_m", []), dtype=np.float64)
+                        current_quat = np.asarray(proposal.get("eef_quat", []), dtype=np.float64)
+                        if current_pos.shape == (3,) and current_quat.size:
+                            recovery_proprio = {"eef_pos": current_pos, "eef_quat": current_quat}
+                            recovery_waypoint = {"position": current_pos}
+                            recovery_gripper = 1.0 if phase == "close" else -1.0
+                            for _ in range(recovery_steps):
+                                action = normalized_action_for_waypoint(
+                                    recovery_proprio, recovery_waypoint,
+                                    gripper=recovery_gripper, held_rotation=current_quat,
+                                )
+                                setattr(env, "_arrow_motion_began", True)
+                                if motion_started_callback is not None:
+                                    motion_started_callback()
+                                observation, _done, _info = _step_once(env, action)
+                                recovery_proprio = _proprioception(observation)
+                                if "eef_pos" not in recovery_proprio or "eef_quat" not in recovery_proprio:
+                                    break
+                                proposal["executed_steps"] += 1
+                    recovery_audit.append(proposal)
+                except Exception as recovery_exc:
+                    recovery_audit.append({
+                        "phase": phase,
+                        "attempt": attempt + 1,
+                        "approved": False,
+                        "executed_steps": 0,
+                        "error_type": type(recovery_exc).__name__,
+                        "error": str(recovery_exc),
+                    })
+                finally:
+                    # Make the diagnostic durable even when recapture, callback,
+                    # action construction, or an action step fails.
+                    setattr(env, "_arrow_recovery_audit", recovery_audit)
+                    _persist_recovery_audit(output_root, recovery_audit)
+                if recovery_audit and recovery_audit[-1].get("approved"):
                     break
         raise exc
     # Evaluator state is intentionally queried only after all motion phases.
@@ -1457,9 +1523,23 @@ def build_libero_env(
     seed_fn = getattr(env, "seed", None)
     if seed_fn is not None:
         seed_fn(int(seed))
-    env.reset()
+    try:
+        env.reset()
+    except BaseException:
+        _close_environment_quietly(env)
+        raise
     environment_audit: dict[str, Any] = {
         "suite_mode": suite_mode,
+        # The sealed treatment changes only the scene/BDDL realization.  This
+        # direct runner does not consume language prompts, so prompt provenance
+        # is deliberately explicit rather than implying a prompt treatment.
+        "scene_randomization": "sealed_randomized" if suite_mode == "sealed_randomized" else "vanilla",
+        "randomization_dimensions": {
+            "scene_layout": suite_mode == "sealed_randomized",
+            "object_removal": suite_mode == "sealed_randomized",
+            "prompt_variant": False,
+        },
+        "prompt_provenance": "not_applicable_direct_runner",
         "canonical_bddl_file": str(canonical_bddl_file),
         "applied_bddl_file": str(bddl_file),
         "requested_removals": removals,
@@ -1489,15 +1569,16 @@ def build_libero_env(
             selected_state = init_states[selected_index]
             projection = {"required": False, "projected": False, "source": "canonical_task_init_states"}
             if suite_mode == "sealed_randomized":
-                canonical_env = OffScreenRenderEnv(
-                    bddl_file_name=canonical_bddl_file,
-                    camera_names=[CAMERA_NAME],
-                    camera_heights=int(resolution),
-                    camera_widths=int(resolution),
-                    camera_depths=True,
-                    controller=variant.controller,
-                )
+                canonical_env = None
                 try:
+                    canonical_env = OffScreenRenderEnv(
+                        bddl_file_name=canonical_bddl_file,
+                        camera_names=[CAMERA_NAME],
+                        camera_heights=int(resolution),
+                        camera_widths=int(resolution),
+                        camera_depths=True,
+                        controller=variant.controller,
+                    )
                     canonical_env.reset()
                     from bddl_utils import extract_joint_schema, project_init_states_by_joint_name
 
@@ -1517,9 +1598,8 @@ def build_libero_env(
                         "filtered_nv": target_schema.nv,
                     }
                 finally:
-                    close_canonical = getattr(canonical_env, "close", None)
-                    if close_canonical is not None:
-                        close_canonical()
+                    if canonical_env is not None:
+                        _close_environment_quietly(canonical_env)
             env.set_init_state(selected_state)
             init_state_diagnostics.update({
                 "selected_index": int(selected_index),
@@ -1530,13 +1610,23 @@ def build_libero_env(
         # Some lightweight LIBERO installs omit LeRobot's torch loader; the
         # seeded reset remains a valid fallback and is recorded by the caller.
         if suite_mode == "sealed_randomized":
+            _close_environment_quietly(env)
             raise RuntimeError(
                 "sealed_randomized mode requires canonical init states and "
                 "joint-name projection; refusing seeded fallback"
             ) from exc
         pass
+    except BaseException:
+        # Any unexpected init-state/projection failure occurs before the
+        # caller receives ownership of env; close it before propagating.
+        _close_environment_quietly(env)
+        raise
     if suite_mode == "sealed_randomized":
-        swaps = _apply_direct_swaps(getattr(env, "env", env), int(task_id))
+        try:
+            swaps = _apply_direct_swaps(getattr(env, "env", env), int(task_id))
+        except BaseException:
+            _close_environment_quietly(env)
+            raise
         environment_audit.update({
             "requested_swaps": swaps.get("requested", []),
             "applied_swaps": swaps.get("applied", []),
@@ -1553,7 +1643,11 @@ def build_libero_env(
         environment_audit["state_hash_pre_settle_error"] = str(exc)
     from config import SETTLE_STEPS_INIT
 
-    settle_libero_env(env, max_steps=SETTLE_STEPS_INIT)
+    try:
+        settle_libero_env(env, max_steps=SETTLE_STEPS_INIT)
+    except BaseException:
+        _close_environment_quietly(env)
+        raise
     try:
         from radomize_scenes import sim_state_sha256
 

@@ -433,6 +433,38 @@ def test_controller_variant_provenance_is_canonical_and_suite_scoped(runner):
         runner.ControllerVariantConfig(suite_mode="unknown")
 
 
+def test_sealed_environment_audit_declares_scene_only_and_prompt_not_applicable(
+    runner, monkeypatch, tmp_path: Path
+):
+    _patch_episode_controller(runner, monkeypatch)
+    env = _MotionEnv()
+    env._arrow_environment_audit = {
+        "suite_mode": "sealed_randomized",
+        "scene_randomization": "sealed_randomized",
+        "randomization_dimensions": {
+            "scene_layout": True,
+            "object_removal": True,
+            "prompt_variant": False,
+        },
+        "prompt_provenance": "not_applicable_direct_runner",
+    }
+    audit = runner.run_episode(
+        env=env,
+        task_id=0,
+        seed=1000,
+        resolution=256,
+        output_dir=tmp_path,
+        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+        capture=_episode_capture(runner),
+        dry_run=True,
+        suite_mode="sealed_randomized",
+    )
+    environment = audit["environment_audit"]
+    assert environment["scene_randomization"] == "sealed_randomized"
+    assert environment["randomization_dimensions"]["prompt_variant"] is False
+    assert environment["prompt_provenance"] == "not_applicable_direct_runner"
+
+
 def test_direct_swap_adapter_reports_requested_and_applied_labels(runner, monkeypatch):
     calls = []
     fake_preview = types.ModuleType("preview_visual_arrows")
@@ -776,3 +808,118 @@ def test_large_clearance_rejects_waypoint_before_first_step(runner, monkeypatch,
             stop_after_phase="pregrasp",
         )
     assert env.actions == []
+
+
+def test_run_motion_preserves_gripper_timeout_and_marks_motion(runner, monkeypatch):
+    class _GripperTimeoutEnv(_MotionEnv):
+        def step(self, action):
+            self.actions.append(np.asarray(action).copy())
+            if float(np.asarray(action)[-1]) > 0.5:
+                raise TimeoutError("gripper transport timeout")
+            return super().step(action)
+
+    monkeypatch.setattr(
+        runner,
+        "normalized_osc_action",
+        lambda **kwargs: np.r_[np.zeros(6, dtype=np.float32), float(kwargs["gripper"])],
+    )
+    env = _GripperTimeoutEnv()
+    with pytest.raises(TimeoutError, match="gripper transport timeout"):
+        runner._run_motion(
+            env,
+            np.zeros((6, 3)),
+            _motion_proprio(),
+            phase_timeout_steps=2,
+            gripper_dwell_steps=3,
+            stop_after_phase="retreat",
+            dry_run=False,
+            stall_window_steps=0,
+        )
+    assert env._arrow_motion_began is True
+    assert env._arrow_phase_audit[-1]["phase"] == "close"
+    assert env._arrow_phase_audit[-1]["status"] == "timeout"
+    assert env._arrow_phase_audit[-1]["steps"] == 1
+
+
+def test_recovery_requires_approval_and_persists_error_audit(runner, monkeypatch, tmp_path: Path):
+    _patch_episode_controller(runner, monkeypatch)
+    env = _MotionEnv()
+
+    def timeout_motion(motion_env, *args, **kwargs):
+        motion_env._arrow_phase_audit = [{"phase": "close", "status": "timeout"}]
+        raise TimeoutError("close phase timed out")
+
+    monkeypatch.setattr(runner, "_run_motion", timeout_motion)
+    monkeypatch.setattr(
+        runner,
+        "recover_grasp_or_release",
+        lambda *args, **kwargs: {
+            "phase": kwargs["phase"],
+            "eef_pos_m": [0.0, 0.0, 0.0],
+            "eef_quat": [0.0, 0.0, 0.0, 1.0],
+        },
+    )
+    with pytest.raises(TimeoutError, match="close phase timed out"):
+        runner.run_episode(
+            env=env,
+            task_id=0,
+            seed=1000,
+            resolution=256,
+            output_dir=tmp_path,
+            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+            capture=_episode_capture(runner),
+            dry_run=False,
+            stop_after_phase="retreat",
+            recovery_attempts=1,
+            recovery_steps=3,
+        )
+    # No callback means no recovery action.  The original timeout remains the
+    # raised error, while the proposal/error audit survives on disk.
+    assert env.actions == []
+    recovery_path = tmp_path / "arrow_pick_place_recovery_audit.json"
+    assert recovery_path.is_file()
+    recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+    assert recovery[0]["approved"] is False
+    assert recovery[0]["executed_steps"] == 0
+
+
+def test_recovery_action_is_reachable_only_with_explicit_approval(runner, monkeypatch, tmp_path: Path):
+    _patch_episode_controller(runner, monkeypatch)
+    monkeypatch.setattr(
+        runner,
+        "normalized_osc_action",
+        lambda **kwargs: np.r_[np.zeros(6, dtype=np.float32), float(kwargs["gripper"])],
+    )
+    env = _MotionEnv()
+
+    def timeout_motion(motion_env, *args, **kwargs):
+        motion_env._arrow_phase_audit = [{"phase": "open", "status": "timeout"}]
+        raise TimeoutError("open phase timed out")
+
+    monkeypatch.setattr(runner, "_run_motion", timeout_motion)
+    monkeypatch.setattr(
+        runner,
+        "recover_grasp_or_release",
+        lambda *args, **kwargs: {
+            "phase": kwargs["phase"],
+            "eef_pos_m": [0.0, 0.0, 0.0],
+            "eef_quat": [0.0, 0.0, 0.0, 1.0],
+        },
+    )
+    with pytest.raises(TimeoutError):
+        runner.run_episode(
+            env=env,
+            task_id=0,
+            seed=1000,
+            resolution=256,
+            output_dir=tmp_path,
+            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+            capture=_episode_capture(runner),
+            dry_run=False,
+            stop_after_phase="retreat",
+            recovery_attempts=1,
+            recovery_steps=2,
+            recovery_callback=lambda phase, proposal: True,
+        )
+    assert len(env.actions) == 2
+    assert all(float(action[-1]) == -1.0 for action in env.actions)

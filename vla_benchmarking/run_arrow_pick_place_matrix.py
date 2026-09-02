@@ -126,17 +126,27 @@ def _sha256_file(path: Path) -> str | None:
 
 def _source_file_hashes() -> dict[str, str | None]:
     root = Path(__file__).resolve().parent
+    # Keep this inventory explicit and relative to the package root.  The
+    # matrix's suite/control contract depends on the BDDL filter, scene
+    # randomizer, direct dual-suite launcher, arrow renderer/context, and
+    # controller—not only on this bookkeeping module.  Missing files remain
+    # represented as ``None`` so dependency-light dry runs retain a complete,
+    # deterministic provenance schema rather than silently dropping a key.
+    relative_paths = (
+        "run_arrow_pick_place_matrix.py",
+        "run_arrow_pick_place_eval.py",
+        "arrow_controller.py",
+        "config.py",
+        "bddl_utils.py",
+        "radomize_scenes.py",
+        "visual_scene_graph.py",
+        "libero_live_semantic_context.py",
+        "preview_visual_arrows.py",
+        "legion/run_arrow_pick_place_dual_matrix.sbatch",
+    )
     return {
-        name: _sha256_file(root / name)
-        for name in (
-            "run_arrow_pick_place_matrix.py",
-            "run_arrow_pick_place_eval.py",
-            "arrow_controller.py",
-            "config.py",
-            "visual_scene_graph.py",
-            "libero_live_semantic_context.py",
-            "preview_visual_arrows.py",
-        )
+        relative_path: _sha256_file(root / relative_path)
+        for relative_path in relative_paths
     }
 
 
@@ -378,7 +388,10 @@ def _protocol(
         "condition_label": f"{suite_mode}__{controller_variant}",
         "suite_contract": {
             "vanilla": "canonical_libero_spatial_bddl_without_custom_randomization",
-            "sealed_randomized": "repository_sealed_removals_layout_swaps_and_prompt_variants",
+            "sealed_randomized": (
+                "repository_sealed_scene_removals_and_layout_swaps_only; "
+                "prompt_variant_not_applicable_to_arrow_runner"
+            ),
         },
         "task_ids": [int(task_id) for task_id in task_ids],
         "episodes_per_task": int(episodes_per_task),
@@ -408,6 +421,7 @@ def _protocol(
         },
         "arrow_generation": "existing_hardcoded_subject_goal_bbox_renderer",
         "language_translation": False,
+        "prompt_variant": "not_applicable",
     }
 
 
@@ -457,6 +471,7 @@ def _error_record(
             "deprojected_visual_endpoint_world_points_m": None,
             "control_targets_world_m": None,
             "waypoints_world_m": None,
+            "recovery": [],
             "evaluator_result": None,
             "settle_diagnostics": None,
         },
@@ -480,6 +495,7 @@ def _audit_diagnostics(audit: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "control_targets_world_m": audit.get("control_targets_world_m"),
         "waypoints_world_m": audit.get("waypoints_world_m"),
+        "recovery": audit.get("recovery", []),
         "evaluator_result": audit.get("evaluator_success"),
     }
 
@@ -1168,6 +1184,17 @@ def run_matrix(
                             for item in phase_records
                             if item.get("diagnostic_frame")
                         ]
+                observed_recovery_audit = getattr(env, "_arrow_recovery_audit", None)
+                if isinstance(observed_recovery_audit, list):
+                    recovery_records = [
+                        dict(item) for item in observed_recovery_audit
+                        if isinstance(item, Mapping)
+                    ]
+                    if cell_record is None:
+                        cell_record = _error_record(
+                            cell, stage=stage, exc=RuntimeError("controller failed")
+                        )
+                    cell_record["recovery"] = recovery_records
                 if env is None:
                     close_succeeded = True
                 else:
@@ -1249,6 +1276,8 @@ def run_matrix(
             elif cell_record.get("phases"):
                 cell_record["diagnostics"]["phases"] = cell_record["phases"]
                 cell_record["diagnostics"]["phase_frames"] = cell_record["phase_frames"]
+            if isinstance(cell_record.get("recovery"), list):
+                cell_record.setdefault("diagnostics", {})["recovery"] = cell_record["recovery"]
             cell_record["protocol"] = protocol
             cell_record["provenance"] = provenance
             cell_record["contract_hash"] = contract_hash

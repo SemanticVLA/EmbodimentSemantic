@@ -53,6 +53,23 @@ def test_condition_labels_are_validated(matrix):
         matrix.plan_cells(controller_variant="../unsafe")
 
 
+def test_source_hash_inventory_covers_condition_and_control_implementations(matrix):
+    hashes = matrix._source_file_hashes()
+    required = {
+        "run_arrow_pick_place_matrix.py",
+        "run_arrow_pick_place_eval.py",
+        "arrow_controller.py",
+        "config.py",
+        "bddl_utils.py",
+        "radomize_scenes.py",
+        "preview_visual_arrows.py",
+        "legion/run_arrow_pick_place_dual_matrix.sbatch",
+    }
+    assert required <= set(hashes)
+    assert all(hashes[path] for path in required)
+    assert hashes == matrix._source_file_hashes()
+
+
 def test_matrix_requires_explicit_motion_or_dry_run(matrix):
     with pytest.raises(ValueError, match="explicit --execute-motion"):
         matrix.validate_motion_authorization(

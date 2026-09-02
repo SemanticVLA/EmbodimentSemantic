@@ -251,7 +251,7 @@ combined = {
     "failed_cells_count": failed,
     "evaluated_cells": evaluated,
     "successes": successes,
-    "planned_success_rate": successes / (completed + failed) if completed + failed else None,
+    "planned_success_rate": successes / (completed + failed) if evaluated else None,
     "evaluable_success_rate": successes / evaluated if evaluated else None,
     "per_suite": {
         mode: {

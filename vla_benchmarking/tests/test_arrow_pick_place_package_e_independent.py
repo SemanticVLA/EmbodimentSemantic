@@ -201,7 +201,9 @@ def test_recovery_attempts_and_steps_have_hard_upper_bounds(episode, monkeypatch
             recovery_callback=lambda phase, proposal: False,
         )
     assert recovery_calls == ["close", "close", "close"]
-    assert len(env.actions) == 3 * 2
+    # A false approval must never send recovery actions.  The proposals are
+    # still retained for diagnostics and the original timeout remains raised.
+    assert env.actions == []
 
 
 def test_dual_wrapper_runs_vanilla_then_randomized_sequentially_and_combines_results():
@@ -218,6 +220,7 @@ def test_dual_wrapper_runs_vanilla_then_randomized_sequentially_and_combines_res
     assert "vanilla/arrow_pick_place_matrix_summary.json" in text
     assert "sealed_randomized/arrow_pick_place_matrix_summary.json" in text
     assert "planned_success_rate" in text and "evaluable_success_rate" in text
+    assert '"planned_success_rate": successes / (completed + failed) if evaluated else None' in text
     assert "set -Eeuo pipefail" in text
     # Neither suite invocation is backgrounded; a single allocation owns the
     # two runs and the second starts only after the first returns.
