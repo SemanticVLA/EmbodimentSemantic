@@ -36,7 +36,7 @@ class NoMotionSim:
 
 class PrefixedModel:
     def site_name2id(self, name: str) -> int:
-        if name != "robot0_grip_site":
+        if name != "gripper0_grip_site":
             raise KeyError(name)
         return 0
 
@@ -67,6 +67,7 @@ def test_probe_compares_grip_site_to_right_hand_rz_minus_90_without_motion():
     assert result["pass"] is True
     assert result["frame_contract"]["expected_rotation"] == "R_right_hand @ Rz(-90deg)"
     assert result["expected_axes"] == result["observed_axes"]
+    assert np.allclose(result["observed_body_to_site_rotation_matrix"], RZ_MINUS_90)
     assert result["angular"]["error_deg"] == 0.0
     assert result["position"]["site_minus_right_hand_m"] == [0.010000000000000009, 0.0, 0.0]
     assert result["position"]["status"] == "observed_metadata_only"
@@ -105,9 +106,9 @@ def test_probe_auto_resolves_robot0_names_and_unwraps_environment_without_motion
     result = probe_grip_site_frame(prefixed_env())
 
     assert result["passed"] is True
-    assert result["resolved_site_name"] == "robot0_grip_site"
+    assert result["resolved_site_name"] == "gripper0_grip_site"
     assert result["resolved_body_name"] == "robot0_right_hand"
-    assert result["frame_contract"]["site_frame"] == "robot0_grip_site"
+    assert result["frame_contract"]["site_frame"] == "gripper0_grip_site"
     assert result["frame_contract"]["body_frame"] == "robot0_right_hand"
 
 

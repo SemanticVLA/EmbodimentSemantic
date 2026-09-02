@@ -1,0 +1,29 @@
+{
+  "schema_version": "panda_graspnet_eef_calibration.v1",
+  "scope": "robosuite-1.4.0 PandaGripper grip_site to GraspNet canonical grasp frame",
+  "controller_target_frame": "grip_site",
+  "candidate_translation_reference": "grasp_center",
+  "candidate_translation_frame": "camera_graspnet",
+  "candidate_rotation_frame": "camera_graspnet",
+  "translation_rule": "center_plus_depth_x_then_R_G_E_delta_E_v1",
+  "graspnet_axes": {
+    "x": "approach_palm_to_object",
+    "y": "jaw_opening",
+    "z": "right_handed_completion"
+  },
+  "grip_site_axes": {
+    "y": "jaw_opening",
+    "z": "approach_to_fingertips",
+    "x": "right_handed_completion"
+  },
+  "R_grasp_eef": [[0, 0, 1], [0, 1, 0], [-1, 0, 0]],
+  "R_H_E": [[0, 1, 0], [-1, 0, 0], [0, 0, 1]],
+  "tip_to_eef_residual_m": [0, 0, 0],
+  "residual_basis": "GraspNet tip t_plus_depth_times_grasp_x is mapped to robosuite grip_site, documented as the grip actuation intersection; no additional offset is applied",
+  "validation": {
+    "required_live_relation": "R_world_grip_site equals R_world_right_hand times Rz(-90deg)",
+    "angular_tolerance_deg": 1.0,
+    "simulator_object_state_used_by_controller": false,
+    "evaluator_used": false
+  }
+}

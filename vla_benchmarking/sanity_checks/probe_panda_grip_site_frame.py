@@ -141,13 +141,18 @@ def probe_grip_site_frame(
     if model is None or data is None:
         raise AttributeError("sim or env.sim must expose model and data")
 
-    requested_site_names = (site_name,) if site_name else (GRIP_SITE_NAME, "robot0_grip_site")
+    requested_site_names = (
+        (site_name,)
+        if site_name
+        else (GRIP_SITE_NAME, "gripper0_grip_site", "robot0_grip_site")
+    )
     requested_body_names = (body_name,) if body_name else (RIGHT_HAND_NAME, "robot0_right_hand")
     site_id, resolved_site_name = _named_id(model, "site", requested_site_names)
     body_id, resolved_body_name = _named_id(model, "body", requested_body_names)
     site_xmat = _rotation(np.asarray(data.site_xmat)[site_id], f"data.site_xmat[{resolved_site_name}]")
     body_xmat = _rotation(np.asarray(data.body_xmat)[body_id], f"data.body_xmat[{resolved_body_name}]")
     expected = body_xmat @ RZ_MINUS_90
+    observed_body_to_site = body_xmat.T @ site_xmat
     cosine = (float(np.trace(expected.T @ site_xmat)) - 1.0) / 2.0
     angular_error_rad = float(np.arccos(np.clip(cosine, -1.0, 1.0)))
 
@@ -178,6 +183,8 @@ def probe_grip_site_frame(
         "resolved_body_name": resolved_body_name,
         "expected_rotation_matrix": expected.tolist(),
         "observed_rotation_matrix": site_xmat.tolist(),
+        "expected_body_to_site_rotation_matrix": RZ_MINUS_90.tolist(),
+        "observed_body_to_site_rotation_matrix": observed_body_to_site.tolist(),
         "expected_axes": _axes(expected),
         "observed_axes": _axes(site_xmat),
         "angular": {
