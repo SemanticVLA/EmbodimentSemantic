@@ -504,10 +504,14 @@ def rank_grasps(candidates: Sequence[GraspCandidate], T_world_camera: Any, confi
             if eef_position.size != 3 or not np.all(np.isfinite(eef_position)):
                 rejected.append({"index": index, "reason": "invalid_eef_position"})
                 continue
-            target_position = derived_eef_world[:3, 3] if derived_eef_world is not None else position
+            # The controller first travels to the calibrated pregrasp and only
+            # then performs a bounded contact descent.  Checking a direct EEF
+            # sweep into the grasp pose incorrectly treats the intended final
+            # approach near the support surface as a transit collision.
+            target_position = derived_pregrasp_world[:3, 3] if derived_pregrasp_world is not None else position
             clear, observed_clearance = observed_depth_swept_path_clear(observation, eef_position, target_position, cfg.swept_path_clearance_m, exclude_mask=source_mask)
             if not clear:
-                rejected.append({"index": index, "reason": "swept_path"})
+                rejected.append({"index": index, "reason": "pregrasp_swept_path", "observed_clearance_m": observed_clearance, "required_clearance_m": float(cfg.swept_path_clearance_m)})
                 continue
             min_clearance = min(min_clearance, observed_clearance)
         if cfg.eef_calibration_verified and derived_eef_world is not None and derived_pregrasp_world is not None:

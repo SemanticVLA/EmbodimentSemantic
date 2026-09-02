@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from zerograsp_adapter import (  # noqa: E402
     build_arrow_seeded_masks,
     dynamic_T_G_E,
+    compose_T_W_E_from_grasp,
     make_letterbox_affine,
     make_pregrasp,
     parse_grasp_array,
@@ -258,7 +259,11 @@ def test_swept_path_uses_calibrated_eef_endpoint_and_unverified_fails_closed(mon
     seen = []
     monkeypatch.setattr(zg_adapter, "observed_depth_swept_path_clear", lambda _obs, _start, end, _clearance, **_kwargs: (seen.append(np.asarray(end)) or (True, 1.0)))
     ranked = rank_grasps([candidate], np.eye(4), cfg, eef_position_world_m=np.zeros(3), observation=obs, source_mask=mask)
-    assert ranked and np.allclose(seen[0], (grasp @ dynamic_T_G_E(candidate, cfg))[:3, 3])
+    expected_pregrasp = compose_T_W_E_from_grasp(
+        make_pregrasp(grasp, cfg.pregrasp_distance_m, cfg.approach_axis_local),
+        dynamic_T_G_E(candidate, cfg),
+    )
+    assert ranked and np.allclose(seen[0], expected_pregrasp[:3, 3])
     unverified = rank_grasps([candidate], np.eye(4), ZeroGraspConfig(), eef_position_world_m=np.zeros(3), observation=obs, source_mask=mask)
     assert not unverified
 
