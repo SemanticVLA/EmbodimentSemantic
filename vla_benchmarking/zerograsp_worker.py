@@ -107,6 +107,28 @@ def _install_official_ofe_single_scene_compat(model: Any) -> str:
     return "single_scene_boundaries_v1"
 
 
+def _prepare_official_single_scene_batch(batch: Any, ofe_compatibility: str) -> Any:
+    """Convert released ``fetch_data`` masks for the pinned OFE semantics.
+
+    ``fetch_data`` emits ``(scene, object, H, W, [self, neighbor])`` masks.
+    The current pinned OFE computes the neighbor channel itself from individual
+    object masks and scene boundaries, so retain only the explicit self mask
+    and preserve a one-scene list wrapper expected by ``process_batch``.
+    """
+    if ofe_compatibility != "single_scene_boundaries_v1":
+        return batch
+    if not isinstance(batch, (tuple, list)) or len(batch) != 8:
+        raise RuntimeError("official OFE compatibility received an unexpected fetch_data batch")
+    released_masks = batch[1]
+    shape = tuple(int(value) for value in getattr(released_masks, "shape", ()))
+    if len(shape) != 5 or shape[0] != 1 or shape[-1] != 2 or shape[1] <= 0:
+        raise RuntimeError(f"official OFE compatibility received unsupported mask layout: {shape}")
+    self_masks = released_masks[..., 0]
+    prepared = list(batch)
+    prepared[1] = [self_masks]
+    return tuple(prepared)
+
+
 def camera_yaml_payload(K: Any) -> dict[str, list[float]]:
     """Build the released fetch_data-compatible YAML camera payload."""
     matrix = np.asarray(K, dtype=float)
@@ -228,6 +250,7 @@ def _load_official_backend(*, repo: str, checkpoint: str, config: str) -> Callab
             with open(camera_path, "w", encoding="utf-8") as handle:
                 json.dump(camera_yaml_payload(K), handle)
             batch = fetch_data(str(rgb_path), str(depth_path), str(mask_path), str(camera_path), model_config, 1.0, device=device)
+            batch = _prepare_official_single_scene_batch(batch, ofe_compatibility)
             with torch.no_grad():
                 output = model.model(batch)
                 z_min = batch[-2][0]

@@ -10,6 +10,7 @@ from zerograsp_worker import (
     _decode_request,
     _install_official_ofe_single_scene_compat,
     _normalise_output,
+    _prepare_official_single_scene_batch,
     _set_seed,
 )
 
@@ -173,3 +174,18 @@ def test_official_ofe_compat_rejects_unexpected_signature():
 
     with pytest.raises(RuntimeError, match="unsupported official OFE"):
         _install_official_ofe_single_scene_compat(SimpleNamespace(ofe=OFE()))
+
+
+def test_official_ofe_compat_converts_released_two_channel_masks():
+    batch = ("rgb", np.zeros((1, 3, 4, 5, 2), dtype=bool), "depth", "points", "rays", "K", "z", "frame")
+    prepared = _prepare_official_single_scene_batch(batch, "single_scene_boundaries_v1")
+    assert isinstance(prepared, tuple)
+    assert isinstance(prepared[1], list)
+    assert prepared[1][0].shape == (1, 3, 4, 5)
+    assert prepared[0] == "rgb" and prepared[2:] == batch[2:]
+
+
+def test_official_ofe_compat_rejects_ambiguous_mask_layout():
+    batch = ("rgb", np.zeros((2, 3, 4, 5, 2), dtype=bool), "depth", "points", "rays", "K", "z", "frame")
+    with pytest.raises(RuntimeError, match="unsupported mask layout"):
+        _prepare_official_single_scene_batch(batch, "single_scene_boundaries_v1")
