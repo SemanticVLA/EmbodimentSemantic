@@ -213,7 +213,11 @@ if ((INSTALL)); then
   [[ -n "$CUDA_MODULE_ID" && -n "$HOST_COMPILER_MODULE_ID" ]] || die 'explicit CUDA and host compiler module identities are required for installation provenance'
   REQ_TMP="$(mktemp)"
   CONSTRAINT_TMP="$(mktemp)"
-  cleanup() { rm -f -- "$REQ_TMP" "$CONSTRAINT_TMP"; }
+  OFE_BUILD_TMP="$(mktemp -d)"
+  cleanup() {
+    rm -f -- "$REQ_TMP" "$CONSTRAINT_TMP"
+    [[ -n "${OFE_BUILD_TMP:-}" && -d "$OFE_BUILD_TMP" ]] && rm -r -- "$OFE_BUILD_TMP"
+  }
   trap cleanup EXIT
   # Upstream VCS entries are built in isolated environments where torch is not
   # visible. Omit both and install their reviewed immutable refs explicitly
@@ -230,7 +234,10 @@ if ((INSTALL)); then
   "$PYTHON" -m pip install --upgrade xformers==0.0.24 --index-url https://download.pytorch.org/whl/cu121 || die 'xformers install failed'
   "$PYTHON" -m pip install -r "$REQ_TMP" || die 'ZeroGrasp requirements install failed'
   "$PYTHON" -m pip install --force-reinstall --no-deps "ocnn @ ${OCNN_URL}@${OCNN_PIN}" || die 'ocnn install failed'
-  (cd -- "$SUBMODULE" && "$PYTHON" setup.py install) || die 'octree_feature_extractor install failed'
+  # Legacy setup.py writes build/ and egg-info beside its source. Build from an
+  # isolated temporary copy so the pinned ZeroGrasp checkout remains clean.
+  cp -a -- "$SUBMODULE/." "$OFE_BUILD_TMP/" || die 'could not stage octree_feature_extractor build'
+  (cd -- "$OFE_BUILD_TMP" && "$PYTHON" setup.py install) || die 'octree_feature_extractor install failed'
   "$PYTHON" -m pip install "graspnetAPI @ git+https://github.com/graspnet/graspnetAPI.git@${GRASPNETAPI_PIN}" --no-deps || die 'graspnetAPI install failed'
   "$PYTHON" -m pip install transforms3d autolab_core cvxopt grasp_nms || die 'grasp utility install failed'
   # The PyG wheel host is not reliably resolvable from Legion compute nodes.

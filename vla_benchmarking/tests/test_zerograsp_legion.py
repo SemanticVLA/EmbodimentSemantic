@@ -122,6 +122,9 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
     assert "--no-build-isolation --no-deps" in text
     assert "--no-build-isolation --no-deps torch_cluster==1.6.3" in text
     assert "data.pyg.org/whl/torch-2.2.0+cu121.html" in text
+    assert 'OFE_BUILD_TMP="$(mktemp -d)"' in text
+    assert 'cp -a -- "$SUBMODULE/." "$OFE_BUILD_TMP/"' in text
+    assert '(cd -- "$SUBMODULE" && "$PYTHON" setup.py install)' not in text
     assert "CUDA_HOME with a complete CUDA toolkit and pinned host compilers is required" in text
     assert text.index('torch==2.2.0 torchvision==0.17.0') < text.index('"dwconv @ ${DWCONV_URL}@${DWCONV_PIN}"') < text.index('torch-scatter')
     assert "checkpoint URL is provenance only" in text
