@@ -746,6 +746,18 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
             workspace_bounds_m={"x": (-1, 1), "y": (-1, 1), "z": (0, 1.81)},
         )
 
+    v3 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V3_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert v3.waypoint_tolerance_m == pytest.approx(0.025)
+    assert v3.max_mask_fraction_for_motion == pytest.approx(0.40)
+    assert v3.hash not in {candidate.hash, v2.hash}
+    with pytest.raises(ValueError, match="reserved for the v3"):
+        runner.ControllerVariantConfig(
+            name=runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
+            waypoint_tolerance_m=0.02,
+        )
+
 
 def test_endpoint_depth_statistic_selection_is_deterministic(runner):
     depth = np.ones((5, 5), dtype=np.float32)
@@ -783,6 +795,24 @@ def test_endpoint_depth_statistics_and_candidate_tolerance_are_audited(
     assert audit["endpoint_depth_statistics"]["source_tail"]["statistic"] == "lower_quantile"
     assert audit["controller_variant"]["canonical"]["approach_tolerance_m"] == 0.02
     assert audit["phases"][1]["policy"]["tolerance_m"] == 0.02
+
+
+def test_v3_tolerance_applies_to_all_positional_phases(runner, monkeypatch, tmp_path: Path):
+    _patch_episode_controller(runner, monkeypatch)
+    audit = runner.run_episode(
+        env=_MotionEnv(),
+        task_id=0,
+        seed=1000,
+        resolution=256,
+        output_dir=tmp_path,
+        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+        capture=_episode_capture(runner),
+        dry_run=True,
+        controller_variant=runner.CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+    )
+    for phase in audit["phases"]:
+        if phase["phase"] not in {"close", "open"}:
+            assert phase["policy"]["tolerance_m"] == pytest.approx(0.025)
 
 
 def test_v2_mask_gate_and_workspace_override_are_audited(

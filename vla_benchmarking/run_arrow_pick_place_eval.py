@@ -74,6 +74,7 @@ DEFAULT_SUBJECT = "akita_black_bowl_1"
 DEFAULT_PROFILE_NAME = "libero_spatial_akita_bowl_agentview_v1"
 CANDIDATE_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v1"
 CANDIDATE_V2_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2"
+CANDIDATE_V3_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -150,6 +151,7 @@ CANDIDATE_ENDPOINT_DEPTH_STATISTIC = "lower_quantile"
 CANDIDATE_ENDPOINT_DEPTH_QUANTILE = 0.25
 CANDIDATE_APPROACH_TOLERANCE_M = 0.015
 CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION = 0.40
+CANDIDATE_V3_WAYPOINT_TOLERANCE_M = 0.025
 CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
     "x": WORKSPACE_BOUNDS_M["x"],
     "y": WORKSPACE_BOUNDS_M["y"],
@@ -180,6 +182,7 @@ class ControllerVariantConfig:
     endpoint_depth_statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC
     endpoint_depth_quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE
     approach_tolerance_m: float | None = None
+    waypoint_tolerance_m: float | None = None
     max_mask_fraction_for_motion: float | None = None
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
 
@@ -205,8 +208,21 @@ class ControllerVariantConfig:
                 f"approach_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
             )
         if self.approach_tolerance_m is not None and self.name != CANDIDATE_CONTROLLER_VARIANT_NAME:
-            if self.name != CANDIDATE_V2_CONTROLLER_VARIANT_NAME:
+            if self.name not in {
+                CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
+                CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+            }:
                 raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
+        if self.waypoint_tolerance_m is not None and (
+            not np.isfinite(float(self.waypoint_tolerance_m))
+            or float(self.waypoint_tolerance_m) <= 0.0
+            or float(self.waypoint_tolerance_m) > MAX_APPROACH_TOLERANCE_M
+        ):
+            raise ValueError(
+                f"waypoint_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
+            )
+        if self.waypoint_tolerance_m is not None and self.name != CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
+            raise ValueError("waypoint tolerance is reserved for the v3 candidate controller variant")
         if self.max_mask_fraction_for_motion is not None and (
             not np.isfinite(float(self.max_mask_fraction_for_motion))
             or not 0.0 <= float(self.max_mask_fraction_for_motion) <= MAX_MASK_FRACTION_FOR_MOTION
@@ -237,6 +253,9 @@ class ControllerVariantConfig:
             "endpoint_depth_quantile": float(self.endpoint_depth_quantile),
             "approach_tolerance_m": (
                 None if self.approach_tolerance_m is None else float(self.approach_tolerance_m)
+            ),
+            "waypoint_tolerance_m": (
+                None if self.waypoint_tolerance_m is None else float(self.waypoint_tolerance_m)
             ),
             "max_mask_fraction_for_motion": (
                 None if self.max_mask_fraction_for_motion is None
@@ -284,11 +303,21 @@ def _resolve_controller_variant(
     if isinstance(value, ControllerVariantConfig):
         return value
     name = str(value) if value is not None else DEFAULT_PROFILE_NAME
-    if name in {CANDIDATE_CONTROLLER_VARIANT_NAME, CANDIDATE_V2_CONTROLLER_VARIANT_NAME}:
+    if name in {
+        CANDIDATE_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+    }:
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+    waypoint_tolerance_m = None
+    if name == CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
+        waypoint_tolerance_m = CANDIDATE_V3_WAYPOINT_TOLERANCE_M
     if name == CANDIDATE_V2_CONTROLLER_VARIANT_NAME:
+        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
+    if name == CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
         max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
         workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
     return ControllerVariantConfig(
@@ -301,6 +330,7 @@ def _resolve_controller_variant(
         endpoint_depth_statistic=endpoint_depth_statistic,
         endpoint_depth_quantile=endpoint_depth_quantile,
         approach_tolerance_m=approach_tolerance_m,
+        waypoint_tolerance_m=waypoint_tolerance_m,
         max_mask_fraction_for_motion=max_mask_fraction_for_motion,
         workspace_bounds_m=workspace_bounds_m,
     )
@@ -1657,6 +1687,12 @@ def run_episode(
     if variant.approach_tolerance_m is not None:
         for approach_phase in ("descend", "descend_place"):
             phase_policies[approach_phase]["tolerance_m"] = float(variant.approach_tolerance_m)
+    if variant.waypoint_tolerance_m is not None:
+        for positional_phase in PHASES:
+            if positional_phase not in {"close", "open"}:
+                phase_policies[positional_phase]["tolerance_m"] = float(
+                    variant.waypoint_tolerance_m
+                )
 
     output_root = Path(output_dir).expanduser().resolve()
     frame_paths = _save_capture(capture, arrow_rgb, output_root)
@@ -2131,7 +2167,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--recovery-steps", type=int, default=DEFAULT_RECOVERY_STEPS)
     parser.add_argument(
         "--controller-variant",
-        choices=("default", CANDIDATE_CONTROLLER_VARIANT_NAME, CANDIDATE_V2_CONTROLLER_VARIANT_NAME),
+        choices=(
+            "default",
+            CANDIDATE_CONTROLLER_VARIANT_NAME,
+            CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
+            CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+        ),
         default="default",
     )
     parser.add_argument(
@@ -2161,8 +2202,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     candidate_variant = args.controller_variant in {
         CANDIDATE_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
     }
     candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
+    candidate_v3 = args.controller_variant == CANDIDATE_V3_CONTROLLER_VARIANT_NAME
     variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
     endpoint_depth_statistic = args.endpoint_depth_statistic or (
         CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
@@ -2175,10 +2218,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     approach_tolerance_m = args.approach_tolerance_m
     if approach_tolerance_m is None and candidate_variant:
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-    max_mask_fraction_for_motion = (
-        CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION if candidate_v2 else None
+    waypoint_tolerance_m = (
+        CANDIDATE_V3_WAYPOINT_TOLERANCE_M if candidate_v3 else None
     )
-    workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M if candidate_v2 else None
+    max_mask_fraction_for_motion = (
+        CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION if candidate_v2 or candidate_v3 else None
+    )
+    workspace_bounds_m = (
+        CANDIDATE_V2_WORKSPACE_BOUNDS_M if candidate_v2 or candidate_v3 else None
+    )
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode
     )
@@ -2233,6 +2281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 endpoint_depth_statistic=endpoint_depth_statistic,
                 endpoint_depth_quantile=endpoint_depth_quantile,
                 approach_tolerance_m=approach_tolerance_m,
+                waypoint_tolerance_m=waypoint_tolerance_m,
                 max_mask_fraction_for_motion=max_mask_fraction_for_motion,
                 workspace_bounds_m=workspace_bounds_m,
             ),
