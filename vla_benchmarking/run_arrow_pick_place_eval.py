@@ -246,6 +246,7 @@ class CapturedRGBD:
     calibration: CameraCalibration
     observation: Mapping[str, Any] | None = None
     depth_conversion_mode: str = "unknown"
+    depth_sanitization: Mapping[str, Any] | None = None
 
     @property
     def raw_depth(self) -> np.ndarray:
@@ -354,19 +355,13 @@ def _declared_depth_encoding(env: Any, *, source: str, camera_name: str) -> str:
     owners = (env, getattr(env, "env", None))
     if source == "observation" and any(
         owner is not None and (
-            owner.__class__.__module__.startswith("robosuite")
-            or owner.__class__.__name__ in {"OffScreenRenderEnv", "ControlEnv"}
+            owner.__class__.__name__ in {"OffScreenRenderEnv", "ControlEnv"}
         )
         for owner in owners
     ):
         return "normalized"
-    if source == "render" and any(
-        owner is not None and owner.__class__.__module__.startswith("robosuite")
-        for owner in owners
-    ):
-        return "metric"
     raise ValueError(
-        f"depth producer for {camera_name} is unknown; declare depth_encoding="
+        f"depth producer {source} for {camera_name} is unknown; declare depth_encoding="
         "'normalized' or 'metric'"
     )
 
@@ -441,6 +436,31 @@ def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int
     )
 
 
+def sanitize_normalized_depth(depth: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    """Mask invalid normalized sentinels without changing the preserved raw input."""
+    source = np.asarray(depth)
+    if source.ndim == 3 and source.shape[-1] == 1:
+        source = source[..., 0]
+    if source.ndim != 2:
+        raise ValueError(f"depth must be HxW, got {source.shape}")
+    finite = np.isfinite(source)
+    in_range = finite & (source >= 0.0) & (source <= 1.0)
+    candidates = source[in_range & (source > 0.0)]
+    if candidates.size == 0:
+        raise ValueError("normalized depth contains no positive finite in-range pixels")
+    masked = ~in_range
+    fallback = float(np.median(candidates))
+    sanitized = source if not np.any(masked) else np.array(source, dtype=np.float32, copy=True)
+    if np.any(masked):
+        sanitized[masked] = fallback
+    return np.ascontiguousarray(sanitized.astype(np.float32, copy=False)), {
+        "input_encoding": "normalized",
+        "masked_pixel_count": int(np.count_nonzero(masked)),
+        "fallback_value": fallback,
+        "fallback_rule": "median_positive_finite_in_range_0_1",
+    }
+
+
 def normalized_depth_to_metric(
     sim: Any, depth: np.ndarray, *, encoding: str | None = None
 ) -> np.ndarray:
@@ -460,16 +480,17 @@ def normalized_depth_to_metric(
         source = source[..., 0]
     if source.ndim != 2:
         raise ValueError(f"depth must be HxW, got {source.shape}")
-    if np.any(np.isfinite(source) & (source < 0)):
-        raise ValueError("depth contains negative finite pixels")
-    if not np.isfinite(source).any() or not np.isfinite(source[source > 0]).any():
-        raise ValueError("depth contains no positive finite pixels")
     if encoding == "metric":
+        if np.any(np.isfinite(source) & (source < 0)):
+            raise ValueError("depth contains negative finite pixels")
+        if not np.isfinite(source).any() or not np.isfinite(source[source > 0]).any():
+            raise ValueError("depth contains no positive finite pixels")
         converted = source
     else:
         if camera_utils is None:
             raise RuntimeError("robosuite camera_utils.get_real_depth_map is required")
-        converted = camera_utils.get_real_depth_map(sim, source)
+        sanitized, _sanitization = sanitize_normalized_depth(source)
+        converted = camera_utils.get_real_depth_map(sim, sanitized)
     metric = np.asarray(converted, dtype=np.float32)
     if metric.ndim == 3 and metric.shape[-1] == 1:
         metric = metric[..., 0]
@@ -498,6 +519,9 @@ def capture_agentview(
     )
     rgb = _as_rgb(rgb_raw)
     normalized = _as_depth(normalized_raw, rgb.shape[:2])
+    depth_sanitization: dict[str, Any] | None = None
+    if depth_encoding == "normalized":
+        _sanitized, depth_sanitization = sanitize_normalized_depth(normalized)
     # ``render(depth=True)`` implementations may return only pixels.  A
     # second non-visual read is allowed for EEF/gripper proprioception; it is
     # never used to reconstruct object geometry and does not affect RGB-D
@@ -508,8 +532,15 @@ def capture_agentview(
     if sim is None:
         raise RuntimeError("capture environment does not expose sim for calibration/depth conversion")
     calibration = build_camera_calibration(sim, camera_name, rgb.shape[1], rgb.shape[0])
-    metric = normalized_depth_to_metric(sim, normalized, encoding=depth_encoding)
-    depth_mode = depth_encoding
+    metric_input = _sanitized if depth_encoding == "normalized" else normalized
+    metric = normalized_depth_to_metric(sim, metric_input, encoding=depth_encoding)
+    depth_mode = (
+        "normalized_masked"
+        if depth_encoding == "normalized"
+        and depth_sanitization is not None
+        and depth_sanitization["masked_pixel_count"]
+        else depth_encoding
+    )
     return CapturedRGBD(
         rgb=rgb,
         normalized_depth=normalized,
@@ -517,6 +548,7 @@ def capture_agentview(
         calibration=calibration,
         observation=observation,
         depth_conversion_mode=depth_mode,
+        depth_sanitization=depth_sanitization,
     )
 
 
@@ -692,7 +724,10 @@ def validate_capture_contract(
         "valid": True,
         "camera_name": str(calibration.camera_name),
         "depth_conversion_mode": str(getattr(capture, "depth_conversion_mode", "unknown")),
+        "depth_sanitization": dict(getattr(capture, "depth_sanitization", None) or {}),
         "requested_resolution": int(resolution),
+        "raw_depth_shape": list(normalized_shape),
+        "depth_input_shape": list(normalized_shape),
         "rgb_shape": [height, width, 3],
         "normalized_depth_shape": list(normalized_shape),
         "metric_depth_shape": list(metric_shape),
@@ -1040,7 +1075,7 @@ def _save_capture(capture: CapturedRGBD, arrow_rgb: np.ndarray, output_dir: Path
     from PIL import Image
 
     depth_mode = str(getattr(capture, "depth_conversion_mode", "unknown"))
-    if depth_mode == "normalized":
+    if depth_mode.startswith("normalized"):
         raw_depth_path = output_dir / "agentview_depth_normalized.npy"
     elif depth_mode == "metric":
         raw_depth_path = output_dir / "agentview_depth_metric_input_m.npy"
@@ -1054,7 +1089,7 @@ def _save_capture(capture: CapturedRGBD, arrow_rgb: np.ndarray, output_dir: Path
     }
     # Keep the historical normalized_depth path only for genuinely normalized
     # producer data; metric input is never mislabeled as normalized.
-    if depth_mode == "normalized":
+    if depth_mode.startswith("normalized"):
         paths["normalized_depth"] = raw_depth_path
     elif depth_mode == "metric":
         paths["metric_depth_input"] = raw_depth_path

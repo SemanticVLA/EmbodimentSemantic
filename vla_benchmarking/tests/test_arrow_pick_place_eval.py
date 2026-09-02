@@ -166,7 +166,7 @@ def test_depth_encoding_unknown_fails_closed_and_outlier_does_not_select_units(
     converted = runner.normalized_depth_to_metric(
         _Sim(), normalized_with_outlier, encoding="normalized"
     )
-    np.testing.assert_allclose(converted, normalized_with_outlier * 2.0)
+    np.testing.assert_allclose(converted, [[1.98, 1.98]])
     assert len(calls) == 1
 
 
@@ -205,6 +205,118 @@ def test_capture_audits_already_metric_depth_mode(runner, monkeypatch):
     capture = runner.capture_agentview(_MetricEnv(), resolution=8)
     assert capture.depth_conversion_mode == "metric"
     np.testing.assert_array_equal(capture.metric_depth, 2.5)
+
+
+def test_render_producer_requires_explicit_depth_encoding(runner, monkeypatch):
+    class _RobosuiteRenderBase:
+        sim = _Sim()
+
+        def render(self, camera_name, width, height, depth=False):
+            return (
+                np.zeros((height, width, 3), dtype=np.uint8),
+                np.full((height, width), 0.5, dtype=np.float32),
+            ) if depth else np.zeros((height, width, 3), dtype=np.uint8)
+
+    RobosuiteRender = type(
+        "RobosuiteRender", (_RobosuiteRenderBase,), {"__module__": "robosuite.fake"}
+    )
+    with pytest.raises(ValueError, match="depth producer render.*unknown"):
+        runner.capture_agentview(RobosuiteRender(), resolution=2)
+
+    class _CameraUtils:
+        @staticmethod
+        def get_camera_intrinsic_matrix(sim, camera_name, camera_height, camera_width):
+            return np.asarray([[10.0, 0.0, camera_width / 2], [0.0, 10.0, camera_height / 2], [0.0, 0.0, 1.0]])
+
+        @staticmethod
+        def get_camera_extrinsic_matrix(sim, camera_name):
+            return np.eye(4)
+
+        @staticmethod
+        def get_real_depth_map(sim, depth):
+            assert np.all((depth >= 0) & (depth <= 1))
+            return depth + 1.0
+
+    Declared = type(
+        "DeclaredRobosuiteRender", (RobosuiteRender,), {"depth_encoding": "normalized"}
+    )
+    monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
+    capture = runner.capture_agentview(Declared(), resolution=2)
+    assert capture.depth_conversion_mode == "normalized"
+
+
+def test_normalized_depth_outliers_are_masked_for_conversion_but_raw_is_preserved(
+    runner, monkeypatch, tmp_path: Path
+):
+    class _OutlierEnv(_Env):
+        depth_encoding = "normalized"
+
+        def render(self, camera_name, width, height, depth=False):
+            self.render_calls.append((camera_name, width, height, depth))
+            raw = np.asarray([[0.5, -2.0], [np.nan, 1.8e34]], dtype=np.float32)
+            return (np.zeros((height, width, 3), dtype=np.uint8), raw) if depth else np.zeros((height, width, 3), dtype=np.uint8)
+
+    seen = []
+
+    class _CameraUtils:
+        @staticmethod
+        def get_camera_intrinsic_matrix(sim, camera_name, camera_height, camera_width):
+            return np.asarray([[10.0, 0.0, camera_width / 2], [0.0, 10.0, camera_height / 2], [0.0, 0.0, 1.0]])
+
+        @staticmethod
+        def get_camera_extrinsic_matrix(sim, camera_name):
+            return np.eye(4)
+
+        @staticmethod
+        def get_real_depth_map(sim, depth):
+            seen.append(np.asarray(depth).copy())
+            assert np.isfinite(depth).all()
+            assert np.all((depth >= 0.0) & (depth <= 1.0))
+            return np.asarray(depth, dtype=np.float32) + 1.0
+
+    monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
+    capture = runner.capture_agentview(_OutlierEnv(), resolution=2)
+    assert capture.depth_conversion_mode == "normalized_masked"
+    assert capture.depth_sanitization["masked_pixel_count"] == 3
+    assert capture.depth_sanitization["fallback_value"] == 0.5
+    assert np.isnan(capture.raw_depth[1, 0])
+    assert float(capture.raw_depth[1, 1]) == np.float32(1.8e34)
+    np.testing.assert_allclose(seen[0], [[0.5, 0.5], [0.5, 0.5]])
+
+    paths = runner._save_capture(capture, np.zeros((2, 2, 3), dtype=np.uint8), tmp_path)
+    assert "normalized_depth" in paths
+    saved_raw = np.load(paths["normalized_depth"])
+    assert np.array_equal(saved_raw, capture.raw_depth, equal_nan=True)
+    contract = runner.validate_capture_contract(capture, resolution=2)
+    assert contract["raw_depth_shape"] == [2, 2]
+    assert contract["depth_input_shape"] == [2, 2]
+
+    metric_capture = runner.CapturedRGBD(
+        capture.rgb,
+        np.full((2, 2), 0.5, dtype=np.float32),
+        np.full((2, 2), 0.5, dtype=np.float32),
+        capture.calibration,
+        capture.observation,
+        "metric",
+    )
+    metric_paths = runner._save_capture(
+        metric_capture, np.zeros((2, 2, 3), dtype=np.uint8), tmp_path / "metric"
+    )
+    assert "normalized_depth" not in metric_paths
+    assert "metric_depth_input" in metric_paths
+
+    unknown_capture = runner.CapturedRGBD(
+        capture.rgb,
+        capture.raw_depth,
+        capture.metric_depth,
+        capture.calibration,
+        capture.observation,
+    )
+    unknown_paths = runner._save_capture(
+        unknown_capture, np.zeros((2, 2, 3), dtype=np.uint8), tmp_path / "unknown"
+    )
+    assert "normalized_depth" not in unknown_paths
+    assert unknown_paths["depth_input"].endswith("agentview_depth_unknown_input.npy")
 
 
 def test_camera_calibration_converts_projection_v_up_to_image_v_down(runner):
