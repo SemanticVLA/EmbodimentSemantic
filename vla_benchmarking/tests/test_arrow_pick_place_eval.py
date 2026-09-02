@@ -109,6 +109,44 @@ def test_capture_requests_one_synchronized_rgb_depth_pair(runner):
     assert env.render_calls == [("agentview", 32, 32, True)]
 
 
+def test_capture_owns_renderer_buffers_before_second_observation_read(runner, monkeypatch):
+    class _ReusingEnv(_Env):
+        def render(self, camera_name, width, height, depth=False):
+            self.render_calls.append((camera_name, width, height, depth))
+            self.render_rgb = np.full((height, width, 3), 7, dtype=np.uint8)
+            self.render_depth = np.full((height, width), 0.5, dtype=np.float32)
+            return (self.render_rgb, self.render_depth) if depth else self.render_rgb
+
+        def _get_observations(self, force_update=True):
+            # Model a renderer/observation implementation that reuses its
+            # backing arrays for the subsequent proprioception read.
+            self.render_rgb[...] = 255
+            self.render_depth[...] = 0.0
+            return {"robot0_eef_pos": np.zeros(3)}
+
+    class _CameraUtils:
+        @staticmethod
+        def get_camera_intrinsic_matrix(sim, camera_name, camera_height, camera_width):
+            return np.asarray(
+                [[10.0, 0.0, camera_width / 2],
+                 [0.0, 10.0, camera_height / 2],
+                 [0.0, 0.0, 1.0]]
+            )
+
+        @staticmethod
+        def get_camera_extrinsic_matrix(sim, camera_name):
+            return np.eye(4)
+
+        @staticmethod
+        def get_real_depth_map(sim, depth):
+            return np.asarray(depth, dtype=np.float32)
+
+    monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
+    capture = runner.capture_agentview(_ReusingEnv(), resolution=4)
+    np.testing.assert_array_equal(capture.rgb, 7)
+    np.testing.assert_array_equal(capture.normalized_depth, 0.5)
+
+
 def test_metric_depth_conversion_delegates_to_robosuite_hook(runner, monkeypatch):
     calls = []
 

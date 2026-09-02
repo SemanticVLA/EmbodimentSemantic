@@ -396,7 +396,9 @@ def _as_rgb(array: Any) -> np.ndarray:
         raise ValueError(f"RGB frame must have shape HxWx3, got {image.shape}")
     if image.dtype != np.uint8:
         image = np.clip(image, 0, 255).astype(np.uint8)
-    return np.ascontiguousarray(image)
+    # Renderer outputs may be views into a reusable MuJoCo/robosuite buffer.
+    # Own the pixels before a subsequent observation read can reuse that buffer.
+    return np.array(image, dtype=np.uint8, order="C", copy=True)
 
 
 def _as_depth(array: Any, shape: tuple[int, int]) -> np.ndarray:
@@ -409,7 +411,11 @@ def _as_depth(array: Any, shape: tuple[int, int]) -> np.ndarray:
         raise ValueError(f"RGB/depth are not aligned: RGB={shape}, depth={depth.shape}")
     if not np.isfinite(depth).any():
         raise ValueError("normalized depth contains no finite pixels")
-    return np.ascontiguousarray(depth.astype(np.float32, copy=False))
+    # As with RGB, force ownership: ``capture_agentview`` may read a second
+    # observation after this point for proprioception, and some renderers reuse
+    # their depth buffer in-place.  Retaining a view can silently turn a valid
+    # frame into uninitialized/overwritten values (the sealed LIBERO symptom).
+    return np.array(depth, dtype=np.float32, order="C", copy=True)
 
 
 def _raw_observation(env: Any) -> Mapping[str, Any] | None:
