@@ -88,6 +88,7 @@ def test_dual_matrix_does_not_run_worker_for_legacy_path():
 
 def test_runtime_setup_matches_official_pinned_compute_contract():
     text = SETUP.read_text(encoding="utf-8")
+    assert "export PYTHONDONTWRITEBYTECODE=1" in text
     for value in (
         PIN,
         "779d9a110c708934b29bb4f21e8e776565fe30b6",
@@ -147,6 +148,7 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
 
 def test_runtime_setup_job_is_compute_only_and_downloads_only_official_id():
     text = SETUP_JOB.read_text(encoding="utf-8")
+    assert "export PYTHONDONTWRITEBYTECODE=1" in text
     assert "SLURM_JOB_ID" in text
     assert "module load nvhpc-nompi/25.1" in text
     assert "module load gcc/11.5.0" in text
@@ -222,6 +224,7 @@ def test_runtime_lock_rejects_stale_or_different_interpreter_identity():
     assert "setuptools identity differs" in launcher_text
     assert "torchvision identity differs" in launcher_text
     assert '"python_executable_sha256": python_sha' in launcher_text
+    assert "export PYTHONDONTWRITEBYTECODE=1" in launcher_text
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX runtime test requires bash semantics")

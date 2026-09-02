@@ -4,6 +4,7 @@
 # artifact and its exact SHA-256.
 set -Eeuo pipefail
 umask 027
+export PYTHONDONTWRITEBYTECODE=1
 
 readonly ZERO_GRASP_OFFICIAL_URL="https://github.com/sh8/ZeroGrasp.git"
 readonly ZERO_GRASP_PIN="152f67c27269ff3f089783bd2f041d67641fa506"

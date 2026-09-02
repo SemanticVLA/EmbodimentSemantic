@@ -257,8 +257,9 @@ the resolved paths, versions, and executable hashes for `nvcc`, `gcc`, and
 host, pinned `torch_cluster==1.6.3` is built once in that persistent venv with
 build isolation disabled. The legacy octree feature extractor is compiled from
 a temporary copy so its in-place build artifacts cannot dirty the immutable
-ZeroGrasp checkout. It installs `gdown==5.2.0` only on
-the compute node and fetches the official Drive file id
+ZeroGrasp checkout. The setup and matrix jobs also disable Python bytecode
+writes so importing the external model cannot add `__pycache__` files there.
+The job installs `gdown==5.2.0` only on the compute node and fetches the official Drive file id
 `1xUmFdgT_Ozu4zIPIsh_1SJMcegeQUWqQ` only when the checkpoint path is absent;
 existing checkpoint files are never overwritten. Acquisition exits before any
 runtime/model import, worker process, or checkpoint deserialization. The

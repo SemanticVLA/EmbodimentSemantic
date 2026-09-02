@@ -14,6 +14,7 @@
 
 set -Eeuo pipefail
 umask 027
+export PYTHONDONTWRITEBYTECODE=1
 die() { printf 'ZeroGrasp setup job: %s\n' "$*" >&2; exit 2; }
 [[ -n "${SLURM_JOB_ID:-}" ]] || die 'submit with sbatch; direct execution is refused'
 [[ -n "${REPO_ROOT:-}" && -d "$REPO_ROOT" ]] || die 'REPO_ROOT evaluation checkout is required'

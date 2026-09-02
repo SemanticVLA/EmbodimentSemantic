@@ -28,6 +28,7 @@
 
 set -Eeuo pipefail
 umask 027
+export PYTHONDONTWRITEBYTECODE=1
 die() { printf 'arrow dual-matrix job: %s\n' "$*" >&2; exit 2; }
 
 [[ -n "${SLURM_JOB_ID:-}" ]] || die 'submit with sbatch; direct execution is refused'
