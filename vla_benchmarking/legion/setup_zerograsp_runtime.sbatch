@@ -34,7 +34,7 @@ ZERO_GRASP_ROOT="${ZERO_GRASP_ROOT:?ZERO_GRASP_ROOT is required}"
 [[ "$ZERO_GRASP_ROOT" = /* && "$ZERO_GRASP_ROOT" != / ]] || die 'ZERO_GRASP_ROOT must be a non-root absolute path'
 RUNTIME_ROOT="${ZERO_GRASP_RUNTIME_ROOT:-${SCRATCH_FLASH:?SCRATCH_FLASH is required}/ZeroGrasp_runtime}"
 ARCHIVE_ROOT="${ZERO_GRASP_ARCHIVE_ROOT:-${HOME}/EmbodimentSemantic_archive/zerograsp_setup/${SLURM_JOB_ID}}"
-mkdir -p "$RUNTIME_ROOT" "$ARCHIVE_ROOT"
+mkdir -p "$RUNTIME_ROOT" "$ARCHIVE_ROOT" "$(dirname -- "$ZERO_GRASP_ROOT")"
 exec > >(tee -a "$ARCHIVE_ROOT/setup.log") 2>&1
 archive_on_exit() {
   rc=$?
