@@ -166,7 +166,7 @@ def test_depth_encoding_unknown_fails_closed_and_outlier_does_not_select_units(
     converted = runner.normalized_depth_to_metric(
         _Sim(), normalized_with_outlier, encoding="normalized"
     )
-    np.testing.assert_allclose(converted, [[1.98, 1.98]])
+    np.testing.assert_allclose(converted, [[1.98, np.nan]], equal_nan=True)
     assert len(calls) == 1
 
 
@@ -279,6 +279,9 @@ def test_normalized_depth_outliers_are_masked_for_conversion_but_raw_is_preserve
     assert capture.depth_conversion_mode == "normalized_masked"
     assert capture.depth_sanitization["masked_pixel_count"] == 3
     assert capture.depth_sanitization["fallback_value"] == 0.5
+    assert np.isfinite(capture.metric_depth[0, 0])
+    assert np.isnan(capture.metric_depth[1, 0])
+    assert np.isnan(capture.metric_depth[1, 1])
     assert np.isnan(capture.raw_depth[1, 0])
     assert float(capture.raw_depth[1, 1]) == np.float32(1.8e34)
     np.testing.assert_allclose(seen[0], [[0.5, 0.5], [0.5, 0.5]])
@@ -317,6 +320,50 @@ def test_normalized_depth_outliers_are_masked_for_conversion_but_raw_is_preserve
     )
     assert "normalized_depth" not in unknown_paths
     assert unknown_paths["depth_input"].endswith("agentview_depth_unknown_input.npy")
+
+
+def test_depth_sanitization_policy_rejects_near_total_invalid_map(runner):
+    capture = runner.CapturedRGBD(
+        np.zeros((8, 8, 3), dtype=np.uint8),
+        np.ones((8, 8), dtype=np.float32),
+        np.full((8, 8), np.nan, dtype=np.float32),
+        runner.CameraCalibration("agentview", 8, 8, np.eye(3).tolist(), np.eye(4).tolist()),
+        depth_conversion_mode="normalized_masked",
+        depth_sanitization={"masked_pixel_count": 63, "total_pixel_count": 64, "masked_fraction": 63 / 64},
+    )
+    policy = runner.assess_depth_sanitization_for_motion(capture, ((4.0, 4.0), (5.0, 5.0)))
+    assert policy["status"] == "rejected"
+    assert policy["rejection_reason"] == "masked_fraction_exceeds_limit"
+
+
+def test_depth_sanitization_policy_requires_valid_endpoint_neighborhood_and_allows_sparse_away(
+    runner,
+):
+    calibration = runner.CameraCalibration("agentview", 8, 8, np.eye(3).tolist(), np.eye(4).tolist())
+    invalid_endpoint = runner.CapturedRGBD(
+        np.zeros((8, 8, 3), dtype=np.uint8),
+        np.ones((8, 8), dtype=np.float32),
+        np.full((8, 8), np.nan, dtype=np.float32),
+        calibration,
+        depth_conversion_mode="normalized_masked",
+        depth_sanitization={"masked_pixel_count": 63, "total_pixel_count": 64, "masked_fraction": 63 / 64},
+    )
+    policy = runner.assess_depth_sanitization_for_motion(invalid_endpoint, ((4.0, 4.0),))
+    assert policy["endpoint_patch_valid"] == [False]
+
+    metric = np.ones((8, 8), dtype=np.float32)
+    metric[0, 0] = np.nan
+    sparse = runner.CapturedRGBD(
+        np.zeros((8, 8, 3), dtype=np.uint8),
+        np.ones((8, 8), dtype=np.float32),
+        metric,
+        calibration,
+        depth_conversion_mode="normalized_masked",
+        depth_sanitization={"masked_pixel_count": 1, "total_pixel_count": 64, "masked_fraction": 1 / 64},
+    )
+    sparse_policy = runner.assess_depth_sanitization_for_motion(sparse, ((4.0, 4.0), (5.0, 5.0)))
+    assert sparse_policy["status"] == "passed"
+    assert sparse_policy["endpoint_patch_valid"] == [True, True]
 
 
 def test_camera_calibration_converts_projection_v_up_to_image_v_down(runner):

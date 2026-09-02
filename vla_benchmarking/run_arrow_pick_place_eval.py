@@ -139,6 +139,7 @@ DEFAULT_STALL_WINDOW_STEPS = 10
 DEFAULT_STALL_DELTA_M = 1e-4
 DEFAULT_RECOVERY_ATTEMPTS = 1
 DEFAULT_RECOVERY_STEPS = 3
+MAX_NORMALIZED_MASK_FRACTION = 0.25
 
 
 @dataclass(frozen=True)
@@ -436,6 +437,14 @@ def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int
     )
 
 
+def _normalized_valid_mask(depth: np.ndarray) -> np.ndarray:
+    source = np.asarray(depth)
+    if source.ndim == 3 and source.shape[-1] == 1:
+        source = source[..., 0]
+    finite = np.isfinite(source)
+    return finite & (source >= 0.0) & (source <= 1.0)
+
+
 def sanitize_normalized_depth(depth: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
     """Mask invalid normalized sentinels without changing the preserved raw input."""
     source = np.asarray(depth)
@@ -443,8 +452,7 @@ def sanitize_normalized_depth(depth: np.ndarray) -> tuple[np.ndarray, dict[str, 
         source = source[..., 0]
     if source.ndim != 2:
         raise ValueError(f"depth must be HxW, got {source.shape}")
-    finite = np.isfinite(source)
-    in_range = finite & (source >= 0.0) & (source <= 1.0)
+    in_range = _normalized_valid_mask(source)
     candidates = source[in_range & (source > 0.0)]
     if candidates.size == 0:
         raise ValueError("normalized depth contains no positive finite in-range pixels")
@@ -456,8 +464,12 @@ def sanitize_normalized_depth(depth: np.ndarray) -> tuple[np.ndarray, dict[str, 
     return np.ascontiguousarray(sanitized.astype(np.float32, copy=False)), {
         "input_encoding": "normalized",
         "masked_pixel_count": int(np.count_nonzero(masked)),
+        "total_pixel_count": int(source.size),
+        "masked_fraction": float(np.count_nonzero(masked) / source.size),
+        "max_mask_fraction_for_motion": MAX_NORMALIZED_MASK_FRACTION,
         "fallback_value": fallback,
         "fallback_rule": "median_positive_finite_in_range_0_1",
+        "metric_mask_restore": "masked_pixels_restored_to_nan",
     }
 
 
@@ -502,6 +514,11 @@ def normalized_depth_to_metric(
         raise ValueError("metric depth contains negative finite pixels")
     if not np.isfinite(metric).any() or not np.isfinite(metric[metric > 0]).any():
         raise ValueError("metric depth contains no positive finite pixels")
+    if encoding == "normalized":
+        invalid = ~_normalized_valid_mask(source)
+        if np.any(invalid):
+            metric = np.array(metric, dtype=np.float32, copy=True)
+            metric[invalid] = np.nan
     return np.ascontiguousarray(metric)
 
 
@@ -532,8 +549,9 @@ def capture_agentview(
     if sim is None:
         raise RuntimeError("capture environment does not expose sim for calibration/depth conversion")
     calibration = build_camera_calibration(sim, camera_name, rgb.shape[1], rgb.shape[0])
-    metric_input = _sanitized if depth_encoding == "normalized" else normalized
-    metric = normalized_depth_to_metric(sim, metric_input, encoding=depth_encoding)
+    # Pass the raw normalized frame so conversion can restore masked pixels to
+    # NaN in metric output; camera_utils still receives a sanitized copy.
+    metric = normalized_depth_to_metric(sim, normalized, encoding=depth_encoding)
     depth_mode = (
         "normalized_masked"
         if depth_encoding == "normalized"
@@ -647,6 +665,49 @@ def _depth_at(depth: np.ndarray, uv: np.ndarray, radius: int = 2) -> float:
     if valid.size == 0:
         raise ValueError(f"no valid metric depth near arrow endpoint {(u, v)}")
     return float(np.median(valid))
+
+
+def assess_depth_sanitization_for_motion(
+    capture: CapturedRGBD,
+    endpoint_pixels: Sequence[Sequence[float]],
+    *,
+    max_mask_fraction: float = MAX_NORMALIZED_MASK_FRACTION,
+) -> dict[str, Any]:
+    """Apply the conservative normalized-depth validity gate before motion."""
+    details = dict(getattr(capture, "depth_sanitization", None) or {})
+    mode = str(getattr(capture, "depth_conversion_mode", "unknown"))
+    if mode != "normalized_masked":
+        return {
+            "status": "not_applicable",
+            "depth_conversion_mode": mode,
+            "masked_pixel_count": int(details.get("masked_pixel_count", 0)),
+            "masked_fraction": float(details.get("masked_fraction", 0.0)),
+            "max_mask_fraction": float(max_mask_fraction),
+            "endpoint_patch_valid": [True for _ in endpoint_pixels],
+        }
+    masked_fraction = float(details.get("masked_fraction", 1.0))
+    endpoint_valid: list[bool] = []
+    for pixel in endpoint_pixels:
+        try:
+            _depth_at(capture.metric_depth, np.asarray(pixel, dtype=np.float64))
+        except (ValueError, IndexError, TypeError):
+            endpoint_valid.append(False)
+        else:
+            endpoint_valid.append(True)
+    passed = masked_fraction <= float(max_mask_fraction) and all(endpoint_valid)
+    return {
+        "status": "passed" if passed else "rejected",
+        "depth_conversion_mode": mode,
+        "masked_pixel_count": int(details.get("masked_pixel_count", 0)),
+        "masked_fraction": masked_fraction,
+        "max_mask_fraction": float(max_mask_fraction),
+        "endpoint_patch_valid": endpoint_valid,
+        "rejection_reason": None if passed else (
+            "masked_fraction_exceeds_limit"
+            if masked_fraction > float(max_mask_fraction)
+            else "endpoint_patch_has_no_valid_metric_depth"
+        ),
+    }
 
 
 def _refine_or_deproject_endpoint(
@@ -1303,6 +1364,14 @@ def run_episode(
         except Exception as exc:
             # Diagnostics must not change the established decoder contract.
             arrow_decode_audit.update({"success": None, "error": str(exc)})
+    depth_sanitization_policy = assess_depth_sanitization_for_motion(
+        capture, (source_uv, target_uv)
+    )
+    if not dry_run and depth_sanitization_policy["status"] == "rejected":
+        raise RuntimeError(
+            "refusing motion: normalized depth sanitization policy rejected capture "
+            f"({depth_sanitization_policy['rejection_reason']})"
+        )
     source_depth = _depth_at(capture.metric_depth, source_uv)
     target_depth = _depth_at(capture.metric_depth, target_uv)
     calibration = asdict(capture.calibration)
@@ -1513,6 +1582,7 @@ def run_episode(
         "settle_diagnostics": settle_diagnostics,
         "environment_audit": getattr(env, "_arrow_environment_audit", None),
         "capture_contract": capture_contract,
+        "depth_sanitization_policy": depth_sanitization_policy,
         "profile": {
             "name": DEFAULT_PROFILE_NAME,
             "verified_conditions": profile["verified"],
