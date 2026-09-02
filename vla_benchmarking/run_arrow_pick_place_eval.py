@@ -78,6 +78,7 @@ CANDIDATE_V3_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_cand
 CANDIDATE_V4_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_gain_v4"
 CANDIDATE_V5_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_visible_anchor_v5"
 CANDIDATE_V6_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_directional_approach_v6"
+CANDIDATE_V7_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_patient_control_v7"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -158,6 +159,8 @@ CANDIDATE_V3_WAYPOINT_TOLERANCE_M = 0.025
 CANDIDATE_V4_OSC_POSITION_SCALE_M = 0.035
 ARROW_ANCHOR_POLICIES = ("bbox_center", "visible_inset")
 CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M = 0.04
+CANDIDATE_V7_PHASE_TIMEOUT_STEPS = 160
+CANDIDATE_V7_STALL_WINDOW_STEPS = 0
 CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
     "x": WORKSPACE_BOUNDS_M["x"],
     "y": WORKSPACE_BOUNDS_M["y"],
@@ -224,6 +227,7 @@ class ControllerVariantConfig:
                 CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
+                CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
             }:
                 raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
         if self.waypoint_tolerance_m is not None and (
@@ -338,6 +342,8 @@ def _resolve_controller_variant(
     suite_mode: str,
     phase_timeout_steps: int = 80,
     gripper_dwell_steps: int = DEFAULT_GRIPPER_DWELL_STEPS,
+    stall_window_steps: int = DEFAULT_STALL_WINDOW_STEPS,
+    stall_delta_m: float = DEFAULT_STALL_DELTA_M,
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
     recovery_steps: int = DEFAULT_RECOVERY_STEPS,
     endpoint_depth_statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC,
@@ -356,6 +362,7 @@ def _resolve_controller_variant(
         CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
     }:
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
@@ -395,11 +402,22 @@ def _resolve_controller_variant(
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+    if name == CANDIDATE_V7_CONTROLLER_VARIANT_NAME:
+        phase_timeout_steps = CANDIDATE_V7_PHASE_TIMEOUT_STEPS
+        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
+        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
+        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
+        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+    if name == CANDIDATE_V7_CONTROLLER_VARIANT_NAME:
+        stall_window_steps = CANDIDATE_V7_STALL_WINDOW_STEPS
     return ControllerVariantConfig(
         name=name,
         suite_mode=suite_mode,
         phase_timeout_steps=phase_timeout_steps,
         gripper_dwell_steps=gripper_dwell_steps,
+        stall_window_steps=stall_window_steps,
+        stall_delta_m=stall_delta_m,
         recovery_attempts=recovery_attempts,
         recovery_steps=recovery_steps,
         endpoint_depth_statistic=endpoint_depth_statistic,
@@ -2349,6 +2367,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
+            CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
         ),
         default="default",
     )
@@ -2383,12 +2402,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
     }
     candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
     candidate_v3 = args.controller_variant == CANDIDATE_V3_CONTROLLER_VARIANT_NAME
     candidate_v4 = args.controller_variant == CANDIDATE_V4_CONTROLLER_VARIANT_NAME
     candidate_v5 = args.controller_variant == CANDIDATE_V5_CONTROLLER_VARIANT_NAME
     candidate_v6 = args.controller_variant == CANDIDATE_V6_CONTROLLER_VARIANT_NAME
+    candidate_v7 = args.controller_variant == CANDIDATE_V7_CONTROLLER_VARIANT_NAME
     variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
     endpoint_depth_statistic = args.endpoint_depth_statistic or (
         CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
@@ -2401,17 +2422,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     approach_tolerance_m = args.approach_tolerance_m
     if approach_tolerance_m is None and candidate_variant:
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+    phase_timeout_steps = (
+        CANDIDATE_V7_PHASE_TIMEOUT_STEPS if candidate_v7 else args.phase_timeout_steps
+    )
+    stall_window_steps = (
+        CANDIDATE_V7_STALL_WINDOW_STEPS if candidate_v7 else args.stall_window_steps
+    )
     waypoint_tolerance_m = (
         CANDIDATE_V3_WAYPOINT_TOLERANCE_M if candidate_v3 else None
     )
     max_mask_fraction_for_motion = (
         CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7
         else None
     )
     workspace_bounds_m = (
         CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7
         else None
     )
     osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M if candidate_v4 else None
@@ -2464,9 +2491,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             controller_variant=ControllerVariantConfig(
                 name=variant_name,
                 suite_mode=args.suite_mode,
-                phase_timeout_steps=args.phase_timeout_steps,
+                phase_timeout_steps=phase_timeout_steps,
                 gripper_dwell_steps=args.gripper_dwell_steps,
-                stall_window_steps=args.stall_window_steps,
+                stall_window_steps=stall_window_steps,
                 stall_delta_m=args.stall_delta_m,
                 recovery_attempts=args.recovery_attempts,
                 recovery_steps=args.recovery_steps,

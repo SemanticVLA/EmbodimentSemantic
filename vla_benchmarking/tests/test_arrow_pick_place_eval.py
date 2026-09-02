@@ -795,6 +795,14 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
             approach_lateral_offset_m=0.04,
         )
 
+    v7 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V7_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert v7.phase_timeout_steps == 160
+    assert v7.stall_window_steps == 0
+    assert v7.approach_tolerance_m == pytest.approx(runner.CANDIDATE_APPROACH_TOLERANCE_M)
+    assert v7.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash, v5.hash, v6.hash}
+
 
 def test_osc_position_scale_candidate_changes_only_translational_scales(runner, monkeypatch):
     seen = {}
