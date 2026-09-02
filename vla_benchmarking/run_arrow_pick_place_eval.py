@@ -72,6 +72,14 @@ try:
 except (ImportError, ValueError):  # pragma: no cover - direct script fallback
     from controller_configs import ControllerConfigError, controller_config_hash, load_controller_config
 
+try:
+    from .zerograsp_contracts import ZeroGraspConfig, ZeroGraspObservation, serialize_audit, stable_json_hash
+except (ImportError, ValueError):  # pragma: no cover - direct script fallback
+    try:
+        from zerograsp_contracts import ZeroGraspConfig, ZeroGraspObservation, serialize_audit, stable_json_hash
+    except ImportError:  # pragma: no cover - optional ZeroGrasp runtime
+        ZeroGraspConfig = ZeroGraspObservation = serialize_audit = stable_json_hash = None
+
 
 CAMERA_NAME = "agentview"
 # The only resolution covered by the live-validated calibration/profile.  Keep
@@ -92,6 +100,8 @@ CANDIDATE_V5_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_cand
 CANDIDATE_V6_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_directional_approach_v6"
 CANDIDATE_V7_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_patient_control_v7"
 CANDIDATE_V8_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_grasp_retry_v8"
+V10_ZG_GRASP_ONLY_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_v10_zg_grasp_only"
+V10_ZG_GRASP_RECON_PLACE_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_v10_zg_grasp_recon_place"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -154,6 +164,7 @@ PHASE_POLICIES = {
     "retreat": {"role": "retreat", "tolerance_m": 0.015},
 }
 DEFAULT_OSC_SCALES = (0.05, 0.05, 0.05, 0.5, 0.5, 0.5)
+DEFAULT_ORIENTATION_TOLERANCE_RAD = 0.12
 SUITE_MODES = ("vanilla", "sealed_randomized")
 DEFAULT_SUITE_MODE = "vanilla"
 DEFAULT_STALL_WINDOW_STEPS = 10
@@ -384,13 +395,51 @@ class ControllerVariantConfig:
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
     grasp_search: GraspSearchPolicy | Mapping[str, Any] | None = None
     micro_correction: MicroCorrectionPolicy | Mapping[str, Any] | None = None
+    grasp_provider: str | None = None
+    placement_provider: str | None = None
+    zerograsp: Mapping[str, Any] | ZeroGraspConfig | None = None
+    zerograsp_policy: Mapping[str, Any] | ZeroGraspConfig | None = None
     config_source: str | None = None
     external_config_hash: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "grasp_search", GraspSearchPolicy.from_value(self.grasp_search))
         object.__setattr__(self, "micro_correction", MicroCorrectionPolicy.from_value(self.micro_correction))
-        external = self.config_source is not None or self.grasp_search is not None or self.micro_correction is not None
+        if self.grasp_provider not in (None, "classical", "zerograsp"):
+            raise ValueError("grasp_provider must be classical or zerograsp")
+        if self.placement_provider not in (None, "classical", "zerograsp_reconstruction"):
+            raise ValueError("placement_provider must be classical or zerograsp_reconstruction")
+        if self.zerograsp is not None and self.zerograsp_policy is not None:
+            left = self.zerograsp.__dict__ if hasattr(self.zerograsp, "__dict__") else dict(self.zerograsp)
+            right = self.zerograsp_policy.__dict__ if hasattr(self.zerograsp_policy, "__dict__") else dict(self.zerograsp_policy)
+            if left != right:
+                raise ValueError("zerograsp and zerograsp_policy cannot disagree")
+        policy = self.zerograsp if self.zerograsp is not None else self.zerograsp_policy
+        if policy is not None and ZeroGraspConfig is not None:
+            try:
+                # ``command``/``cwd`` are adapter-process settings, not model
+                # settings, and are intentionally kept in the runtime policy.
+                model_policy = dict(policy) if isinstance(policy, Mapping) else asdict(policy)
+                model_policy.pop("command", None)
+                model_policy.pop("cwd", None)
+                model_policy.pop("timeout_s", None)
+                # Runtime-only aliases are accepted at the boundary for
+                # compatibility with early V10 drafts, but the public
+                # ZeroGrasp config remains the flat *_sha256 schema.
+                if "calibration_hash" in model_policy and "calibration_sha256" not in model_policy:
+                    model_policy["calibration_sha256"] = model_policy["calibration_hash"]
+                if "probe_hash" in model_policy and "probe_sha256" not in model_policy:
+                    model_policy["probe_sha256"] = model_policy["probe_hash"]
+                model_policy.pop("calibration_hash", None)
+                model_policy.pop("probe_hash", None)
+                ZeroGraspConfig.from_mapping(model_policy).validate()
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid zerograsp policy: {exc}") from exc
+        object.__setattr__(self, "zerograsp", policy)
+        object.__setattr__(self, "zerograsp_policy", policy)
+        if (self.grasp_provider == "zerograsp" or self.placement_provider == "zerograsp_reconstruction") and policy is None:
+            raise ValueError("ZeroGrasp providers require an explicit zerograsp policy")
+        external = self.config_source is not None or self.grasp_search is not None or self.micro_correction is not None or self.grasp_provider is not None or self.placement_provider is not None
         if self.suite_mode not in SUITE_MODES:
             raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {self.suite_mode!r}")
         if self.phase_timeout_steps <= 0 or self.gripper_dwell_steps <= 0:
@@ -542,6 +591,16 @@ class ControllerVariantConfig:
             result["grasp_search"] = self.grasp_search.canonical()
         if self.micro_correction is not None:
             result["micro_correction"] = self.micro_correction.canonical()
+        if self.grasp_provider is not None:
+            result["grasp_provider"] = self.grasp_provider
+        if self.placement_provider is not None:
+            result["placement_provider"] = self.placement_provider
+        if self.zerograsp is not None:
+            policy = self.zerograsp
+            result["zerograsp"] = (
+                serialize_audit(policy) if serialize_audit is not None else dict(policy)
+                if isinstance(policy, Mapping) else asdict(policy)
+            )
         return result
 
     @property
@@ -588,6 +647,7 @@ def controller_variant_from_config(
         "approach_lateral_offset_m", "grasp_contact_threshold", "grasp_retry_offsets_m",
         "max_mask_fraction_for_motion", "workspace_bounds_m", "grasp_search",
         "micro_correction",
+        "grasp_provider", "placement_provider", "zerograsp", "zerograsp_policy",
     }
     unknown = set(data) - allowed
     if unknown:
@@ -1174,6 +1234,21 @@ def _apply_directional_pregrasp_offset(
     norm = float(np.linalg.norm(direction))
     if not np.isfinite(norm) or norm <= 1e-9:
         return waypoints
+    if isinstance(waypoints, Mapping):
+        adjusted = dict(waypoints)
+        first_key = "pregrasp" if "pregrasp" in adjusted else 0
+        first = adjusted.get(first_key)
+        if first is None:
+            return waypoints
+        first_position = _position(first).copy()
+        first_position[:2] += (direction / norm) * offset
+        if isinstance(first, Mapping):
+            replacement = dict(first)
+            replacement["position"] = first_position
+        else:
+            replacement = _pose_waypoint(first_position, _orientation(first), _orientation_frame(first))
+        adjusted[first_key] = replacement
+        return adjusted
     adjusted = np.asarray(waypoints, dtype=np.float64)
     if adjusted.ndim != 2 or adjusted.shape[1] != 3 or adjusted.shape[0] < 1:
         raise ValueError("directional pregrasp offset requires an Nx3 waypoint array")
@@ -1350,6 +1425,99 @@ def _refine_or_deproject_endpoint(
         "pixel_provenance": "runner_decoded_arrow_endpoint",
         "depth_provenance": "runner_depth_at_median_patch",
     }
+
+
+def _zerograsp_observation(
+    capture: CapturedRGBD,
+    arrow_rgb: np.ndarray,
+    source_uv: Sequence[float],
+    target_uv: Sequence[float],
+) -> Any:
+    """Build the strict learned-controller observation with no simulator data."""
+    if ZeroGraspObservation is None:
+        raise RuntimeError("ZeroGrasp contracts are unavailable")
+    proprio = _proprioception(capture.observation)
+    return ZeroGraspObservation(
+        clean_rgb=np.asarray(capture.rgb, dtype=np.uint8),
+        arrow_rgb=np.asarray(arrow_rgb, dtype=np.uint8),
+        depth_m=np.asarray(capture.metric_depth, dtype=np.float32),
+        K=np.asarray(capture.calibration.intrinsic, dtype=np.float64),
+        T_world_camera=np.asarray(capture.calibration.world_from_camera, dtype=np.float64),
+        source_px=(float(source_uv[0]), float(source_uv[1])),
+        destination_px=(float(target_uv[0]), float(target_uv[1])),
+        # LIBERO exposes these in different frames: position is grip_site,
+        # orientation is the right_hand body.  Keep them separate and never
+        # fabricate a synthetic SE(3) observation.
+        eef_position_world_m=proprio.get("eef_pos"),
+        eef_quaternion_right_hand_xyzw=proprio.get("eef_quat"),
+        gripper_qpos=proprio.get("gripper_qpos"),
+    )
+
+
+def _zerograsp_frame_metadata(observation: Any) -> dict[str, Any]:
+    return {
+        "camera_frame": "opencv_optical_x_right_y_down_z_forward",
+        "world_frame": "libero_mujoco_world",
+        "eef_frame": "robot0_eef_pos_grip_site",
+        "eef_position_frame": "world_grip_site",
+        "eef_orientation_frame": "world_right_hand",
+        "rgb_shape": list(np.asarray(observation.clean_rgb).shape),
+        "depth_shape": list(np.asarray(observation.depth_m).shape),
+        "source_px": list(observation.source_px),
+        "destination_px": list(observation.destination_px),
+        "transform": "T_world_camera",
+    }
+
+
+def _zerograsp_infer_select(adapter: Any, observation: Any) -> tuple[Any, Mapping[str, Any], dict[str, Any]]:
+    """Run the public adapter API and return explicit, serializable provenance."""
+    if adapter is None:
+        raise RuntimeError("ZeroGrasp provider requested but no adapter was supplied")
+    infer = getattr(adapter, "infer", None)
+    select = getattr(adapter, "select", None)
+    if not callable(infer) or not callable(select):
+        raise TypeError("ZeroGrasp adapter must expose infer(observation) and select(result, observation)")
+    result = infer(observation)
+    selected = select(result, observation)
+    if not isinstance(selected, Mapping):
+        raise TypeError("ZeroGrasp adapter select() must return a mapping")
+    audit: dict[str, Any] = {}
+    adapter_audit = getattr(adapter, "last_audit", None)
+    if isinstance(adapter_audit, Mapping):
+        audit.update(serialize_audit(adapter_audit) if serialize_audit is not None else dict(adapter_audit))
+    audit.update({
+        "status": "completed",
+        "fallback": False,
+        "request_hash": getattr(result, "request_hash", audit.get("request_hash")),
+        "output_hash": getattr(result, "output_hash", audit.get("output_hash")),
+        "runtime_hash": audit.get("runtime_hash") or getattr(adapter, "runtime_hash", None),
+        "frame_metadata": _zerograsp_frame_metadata(observation),
+    })
+    return result, selected, audit
+
+
+def _pose_waypoint(position: Any, orientation: Any | None = None, orientation_frame: str | None = None) -> dict[str, Any]:
+    result = {"position": np.asarray(position, dtype=np.float64).reshape(3)}
+    if orientation is not None:
+        result["orientation"] = np.asarray(orientation, dtype=np.float64)
+    if orientation_frame is not None:
+        result["orientation_frame"] = str(orientation_frame)
+    return result
+
+
+def _serialize_waypoints(waypoints: Any) -> list[Any] | dict[str, Any]:
+    values = waypoints.items() if isinstance(waypoints, Mapping) else enumerate(waypoints)
+    result: dict[str, Any] = {}
+    for key, waypoint in values:
+        item: dict[str, Any] = {"position": _position(waypoint)[:3].tolist()}
+        orientation = _orientation(waypoint)
+        if orientation is not None:
+            item["orientation"] = orientation.tolist()
+        frame = _orientation_frame(waypoint)
+        if frame is not None:
+            item["orientation_frame"] = str(frame)
+        result[str(key)] = item
+    return result if isinstance(waypoints, Mapping) else [result[str(index)] for index in range(len(result))]
 
 
 def validate_capture_contract(
@@ -1536,6 +1704,52 @@ def _position(waypoint: Any) -> np.ndarray:
     return np.asarray(waypoint, dtype=np.float64)[:3]
 
 
+def _as_waypoint_rotation(value: Any) -> np.ndarray:
+    arr = np.asarray(value, dtype=np.float64)
+    if arr.shape == (4, 4):
+        arr = arr[:3, :3]
+    if arr.shape == (3, 3):
+        if not np.isfinite(arr).all() or not np.allclose(arr.T @ arr, np.eye(3), atol=1e-4) or not np.isclose(np.linalg.det(arr), 1.0, atol=1e-4):
+            raise ValueError("waypoint orientation must be a proper orthonormal rotation")
+        return arr
+    flat = arr.reshape(-1)
+    if flat.size != 4 or not np.isfinite(flat).all() or np.linalg.norm(flat) <= 1e-9:
+        raise ValueError("waypoint orientation must be a 3x3 rotation or quaternion")
+    x, y, z, w = flat / np.linalg.norm(flat)
+    return np.array(((1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)), (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)), (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y))), dtype=np.float64)
+
+
+def _orientation(waypoint: Any) -> np.ndarray | None:
+    """Return an optional waypoint rotation in the controller's accepted form."""
+    value = None
+    if isinstance(waypoint, Mapping):
+        for key in ("orientation", "rotation", "target_rot", "eef_quat", "quaternion"):
+            if key in waypoint:
+                value = waypoint[key]
+                break
+    else:
+        for key in ("orientation", "rotation", "target_rot", "eef_quat", "quaternion"):
+            if hasattr(waypoint, key):
+                value = getattr(waypoint, key)
+                break
+    if value is None:
+        return None
+    return _as_waypoint_rotation(value)
+
+
+def _orientation_frame(waypoint: Any) -> str | None:
+    if isinstance(waypoint, Mapping):
+        return waypoint.get("orientation_frame")
+    return getattr(waypoint, "orientation_frame", None)
+
+
+
+def _rotation_error_rad(current: Any, target: Any) -> float:
+    """Compute shortest SO(3) error for orientation convergence auditing."""
+    relative = _as_waypoint_rotation(target) @ _as_waypoint_rotation(current).T
+    return float(np.arccos(np.clip((np.trace(relative) - 1.0) / 2.0, -1.0, 1.0)))
+
+
 def _phase_waypoint(waypoints: Any, phase: str) -> Any:
     if isinstance(waypoints, Mapping):
         if phase in waypoints:
@@ -1554,6 +1768,7 @@ def normalized_action_for_waypoint(
     current_proprio: Mapping[str, np.ndarray], waypoint: Any, *, gripper: float,
     held_rotation: np.ndarray | None = None,
     osc_position_scale_m: float | None = None,
+    eef_orientation_transform: np.ndarray | None = None,
 ) -> np.ndarray:
     """Produce one finite, seven-dimensional normalized OSC_POSE action."""
     current = current_proprio.get("eef_pos")
@@ -1565,6 +1780,13 @@ def normalized_action_for_waypoint(
         raise ValueError("EEF orientation proprioception is required for OSC action generation")
     if held_rotation is None:
         held_rotation = current_rot
+    target_rotation = _orientation(waypoint)
+    if target_rotation is None:
+        target_rotation = held_rotation
+    if target_rotation is not None and _orientation_frame(waypoint) == "grip_site":
+        if eef_orientation_transform is None:
+            raise ValueError("grip_site waypoint requires explicit right_hand-to-grip_site calibration")
+        current_rot = _as_waypoint_rotation(current_rot) @ _as_waypoint_rotation(eef_orientation_transform)
     scales = DEFAULT_OSC_SCALES
     if osc_position_scale_m is not None:
         position_scale = float(osc_position_scale_m)
@@ -1577,7 +1799,7 @@ def normalized_action_for_waypoint(
         current_pos=current[:3],
         current_rot=current_rot,
         target_pos=target[:3],
-        target_rot=held_rotation,
+        target_rot=target_rotation,
         gripper=float(gripper),
         scales=scales,
     )
@@ -1625,6 +1847,8 @@ def _run_motion(
     start_phase: str | None = None,
     action_budget: int | None = None,
     micro_action_budget: _ActionBudget | None = None,
+    orientation_tolerance_rad: float = DEFAULT_ORIENTATION_TOLERANCE_RAD,
+    eef_orientation_transform: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     if phase_timeout_steps <= 0:
         raise ValueError("phase_timeout_steps must be positive")
@@ -1638,6 +1862,8 @@ def _run_motion(
         raise ValueError("stall_window_steps and stall_delta_m must be finite and non-negative")
     if action_budget is not None and int(action_budget) <= 0:
         raise ValueError("action_budget must be positive when supplied")
+    if not np.isfinite(orientation_tolerance_rad) or orientation_tolerance_rad <= 0:
+        raise ValueError("orientation_tolerance_rad must be finite and positive")
     policies = phase_policies or PHASE_POLICIES
     # Preserve a failure-safe motion marker for batch diagnostics.  A phase can
     # fail during its first simulator step, before an episode audit is written;
@@ -1675,6 +1901,7 @@ def _run_motion(
         if phase_tolerance is None:
             phase_tolerance = WAYPOINT_POSITION_TOLERANCE_M
         phase_tolerance = float(phase_tolerance)
+        waypoint_orientation = _orientation(waypoint)
         required_steps = gripper_dwell_steps if is_gripper_phase else phase_timeout_steps
         record = {
             "phase": phase,
@@ -1684,6 +1911,9 @@ def _run_motion(
             "dwell_steps": int(gripper_dwell_steps) if is_gripper_phase else 0,
             "policy": dict(policies.get(phase, {})),
         }
+        if waypoint_orientation is not None:
+            record["target_orientation_matrix"] = waypoint_orientation.tolist()
+            record["orientation_tolerance_rad"] = float(orientation_tolerance_rad)
         error_history: list[float] = []
         correction_target = _position(waypoint)[:3]
         correction_remaining = 0
@@ -1692,12 +1922,24 @@ def _run_motion(
         phase_correction_events: list[dict[str, Any]] = []
         for step in range(required_steps):
             correction_was_active = correction_remaining > 0
+            # Micro-correction changes only the positional target.  Preserve
+            # any learned pose orientation (and its explicit frame) when
+            # rebuilding the per-step waypoint; otherwise the action path
+            # would silently command the legacy held orientation while the
+            # convergence check still waited for the learned one.
+            action_waypoint: dict[str, Any] = {"position": correction_target}
+            if waypoint_orientation is not None:
+                action_waypoint["orientation"] = waypoint_orientation
+                frame = _orientation_frame(waypoint)
+                if frame is not None:
+                    action_waypoint["orientation_frame"] = frame
             action = normalized_action_for_waypoint(
                 proprio,
-                {"position": correction_target},
+                action_waypoint,
                 gripper=gripper,
                 held_rotation=held_rotation,
                 osc_position_scale_m=osc_position_scale_m,
+                eef_orientation_transform=eef_orientation_transform,
             )
             record["last_action"] = action.tolist()
             record["steps"] = step + 1
@@ -1749,7 +1991,18 @@ def _run_motion(
                 if step + 1 >= gripper_dwell_steps:
                     record["status"] = "dwell"
                     break
-            elif np.linalg.norm(_position(waypoint) - proprio["eef_pos"][:3]) < phase_tolerance:
+            elif (
+                np.linalg.norm(_position(waypoint) - proprio["eef_pos"][:3]) < phase_tolerance
+                and (
+                    waypoint_orientation is None
+                    or _rotation_error_rad(
+                        _as_waypoint_rotation(proprio.get("eef_quat")) @ _as_waypoint_rotation(eef_orientation_transform)
+                        if _orientation_frame(waypoint) == "grip_site" and eef_orientation_transform is not None
+                        else proprio.get("eef_quat"), waypoint_orientation
+                    )
+                    <= float(orientation_tolerance_rad)
+                )
+            ):
                 record["status"] = "reached"
                 break
             elif "eef_pos" in proprio:
@@ -1849,6 +2102,20 @@ def _run_motion(
                 record["position_error_norm_m"] = float(
                     np.linalg.norm(_position(waypoint)[:3] - eef_pos)
                 )
+                if waypoint_orientation is not None and proprio.get("eef_quat") is not None:
+                    timeout_orientation = proprio["eef_quat"]
+                    if _orientation_frame(waypoint) == "grip_site":
+                        if eef_orientation_transform is None:
+                            raise ValueError(
+                                "grip_site timeout audit requires explicit right_hand-to-grip_site calibration"
+                            )
+                        timeout_orientation = (
+                            _as_waypoint_rotation(proprio["eef_quat"])
+                            @ _as_waypoint_rotation(eef_orientation_transform)
+                        )
+                    record["orientation_error_rad"] = _rotation_error_rad(
+                        timeout_orientation, waypoint_orientation
+                    )
             phase_audit.append(record)
             if is_gripper_phase:
                 raise ControllerMotionTimeout(f"phase {phase} failed to complete {gripper_dwell_steps}-step dwell")
@@ -2087,6 +2354,7 @@ def run_episode(
     motion_started_callback: Callable[[], None] | None = None,
     controller_variant: ControllerVariantConfig | str | None = None,
     suite_mode: str | None = None,
+    zerograsp_adapter: Any | None = None,
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
     recovery_steps: int = DEFAULT_RECOVERY_STEPS,
     recovery_callback: Callable[[str, Mapping[str, Any]], bool] | None = None,
@@ -2215,6 +2483,89 @@ def run_episode(
     })
     setattr(env, "_arrow_decode_audit", dict(arrow_decode_audit))
     setattr(env, "_arrow_input_arrow_audit", dict(arrow_audit))
+    zerograsp_result = None
+    zerograsp_selected: Mapping[str, Any] | None = None
+    zerograsp_audit: dict[str, Any] | None = None
+    eef_orientation_transform: np.ndarray | None = None
+    if variant.grasp_provider == "zerograsp" or variant.placement_provider == "zerograsp_reconstruction":
+        policy = variant.zerograsp
+        calibration_policy = (
+            dict(policy) if isinstance(policy, Mapping)
+            else asdict(policy) if policy is not None and hasattr(policy, "__dataclass_fields__")
+            else None
+        )
+        if not isinstance(calibration_policy, Mapping) or calibration_policy.get("eef_calibration_verified") is not True:
+            zerograsp_audit = {
+                "status": "rejected",
+                "fallback": False,
+                "error": "explicit verified flat ZeroGrasp EEF calibration is required before motion",
+                "calibration": dict(calibration_policy) if isinstance(calibration_policy, Mapping) else None,
+                "frame_metadata": {"camera_frame": "opencv_optical_x_right_y_down_z_forward", "world_frame": "libero_mujoco_world"},
+            }
+            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
+            raise RuntimeError(zerograsp_audit["error"])
+        translation_rule = str(calibration_policy.get("translation_rule", ""))
+        if translation_rule != "center_plus_depth_x_then_R_G_E_delta_E_v1":
+            message = "ZeroGrasp calibration must declare the exact dynamic candidate-depth local-X translation rule"
+            zerograsp_audit = {"status": "rejected", "fallback": False, "error": message, "calibration": dict(calibration_policy)}
+            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
+            raise RuntimeError(message)
+        eef_orientation_transform = np.asarray(calibration_policy.get("R_H_E"), dtype=np.float64)
+        if eef_orientation_transform.shape != (3, 3) or not np.allclose(
+            eef_orientation_transform.T @ eef_orientation_transform, np.eye(3), atol=1e-5
+        ) or not np.isclose(np.linalg.det(eef_orientation_transform), 1.0, atol=1e-5):
+            message = "ZeroGrasp pose calibration requires a verified R_H_E right-hand to grip-site rotation"
+            zerograsp_audit = {"status": "rejected", "fallback": False, "error": message, "calibration": dict(calibration_policy)}
+            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
+            raise RuntimeError(message)
+        zerograsp_audit = {
+            "status": "pending",
+            "fallback": False,
+            "provider": {"grasp": variant.grasp_provider, "placement": variant.placement_provider},
+            "calibration": dict(calibration_policy),
+        }
+        setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
+        try:
+            learned_observation = _zerograsp_observation(capture, arrow_rgb, source_uv, target_uv)
+            zerograsp_result, zerograsp_selected, inference_audit = _zerograsp_infer_select(
+                zerograsp_adapter, learned_observation
+            )
+            zerograsp_audit.update(inference_audit)
+            zerograsp_audit["provenance"] = serialize_audit(zerograsp_selected) if serialize_audit is not None else dict(zerograsp_selected)
+            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
+        except BaseException as exc:
+            # Preserve the adapter's partial provenance even when inference or
+            # selection fails before _zerograsp_infer_select can return.  This
+            # is required for complete failed-cell diagnostics and never
+            # enables a fallback path.
+            adapter_audit = getattr(zerograsp_adapter, "last_audit", None)
+            if isinstance(adapter_audit, Mapping):
+                zerograsp_audit.update(
+                    serialize_audit(adapter_audit) if serialize_audit is not None else dict(adapter_audit)
+                )
+            zerograsp_audit["runtime_hash"] = (
+                zerograsp_audit.get("runtime_hash")
+                or getattr(zerograsp_adapter, "runtime_hash", None)
+            )
+            frame_metadata = zerograsp_audit.get("frame_metadata")
+            if not isinstance(frame_metadata, Mapping):
+                frame_metadata = _zerograsp_frame_metadata(
+                    locals().get("learned_observation")
+                    if locals().get("learned_observation") is not None
+                    else _zerograsp_observation(capture, arrow_rgb, source_uv, target_uv)
+                )
+            else:
+                merged_frame_metadata = _zerograsp_frame_metadata(
+                    locals().get("learned_observation")
+                    if locals().get("learned_observation") is not None
+                    else _zerograsp_observation(capture, arrow_rgb, source_uv, target_uv)
+                )
+                merged_frame_metadata.update(dict(frame_metadata))
+                frame_metadata = merged_frame_metadata
+            zerograsp_audit["frame_metadata"] = dict(frame_metadata)
+            zerograsp_audit.update({"status": "failed", "fallback": False, "error_type": type(exc).__name__, "error": str(exc)})
+            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
+            raise
     depth_sanitization_policy = assess_depth_sanitization_for_motion(
         capture, (source_uv, target_uv), max_mask_fraction=max_mask_fraction_for_motion
     )
@@ -2268,6 +2619,31 @@ def run_episode(
     )
     bowl_point = source_visual_point + source_offset
     destination_point = destination_visual_point + destination_offset
+    classical_destination_point = np.asarray(destination_point, dtype=np.float64).copy()
+    classical_source_point = np.asarray(bowl_point, dtype=np.float64).copy()
+    zg_source_pose = None
+    zg_pregrasp_pose = None
+    zg_placement_pose = None
+    if zerograsp_selected is not None and variant.grasp_provider == "zerograsp":
+        zg_source_pose = np.asarray(zerograsp_selected.get("T_W_E"), dtype=np.float64)
+        if zg_source_pose.shape != (4, 4):
+            raise ValueError("ZeroGrasp selected T_W_E must be a 4x4 calibrated EEF pose")
+        if "T_W_E_pregrasp" not in zerograsp_selected:
+            raise ValueError("ZeroGrasp selection must provide only the calibrated T_W_E_pregrasp EEF pose")
+        zg_pregrasp_pose = np.asarray(zerograsp_selected["T_W_E_pregrasp"], dtype=np.float64)
+        if zg_pregrasp_pose.shape != (4, 4):
+            raise ValueError("ZeroGrasp selected T_W_E_pregrasp must be a 4x4 calibrated EEF pose")
+        bowl_point = zg_source_pose[:3, 3].copy()
+    if zerograsp_selected is not None and variant.placement_provider == "zerograsp_reconstruction":
+        placement = zerograsp_selected.get("placement")
+        placement_value = (
+            placement.get("T_world_eef") if isinstance(placement, Mapping)
+            else getattr(placement, "T_world_eef", None)
+        )
+        zg_placement_pose = np.asarray(placement_value, dtype=np.float64)
+        if zg_placement_pose.shape != (4, 4):
+            raise ValueError("ZeroGrasp reconstruction placement must provide a 4x4 T_world_eef")
+        destination_point = zg_placement_pose[:3, 3].copy()
     setattr(env, "_arrow_deprojected_visual_endpoint_world_points_m", {
         "source_tail": source_visual_point.tolist(),
         "destination_head": destination_visual_point.tolist(),
@@ -2291,11 +2667,42 @@ def run_episode(
     initial_proprio = _proprioception(capture.observation)
     if not np.isfinite(clearance_m) or clearance_m <= 0:
         raise ValueError("clearance_m must be finite and positive")
+    # Build the shared safe-Z transit from the actual source/destination poses
+    # that will be executed.  A calibrated ZeroGrasp source can sit above the
+    # classical arrow-derived endpoint; using the latter here could make the
+    # lift descend into the bowl or carried object.
+    transfer_source_point = (
+        zg_source_pose[:3, 3].copy() if zg_source_pose is not None else bowl_point
+    )
     waypoints = _require(build_bowl_waypoints, "build_bowl_waypoints")(
-        bowl_point, destination_point,
+        transfer_source_point, destination_point,
         initial_proprio.get("eef_quat"),
         {"lift_height_m": float(clearance_m)},
     )
+    if zg_source_pose is not None:
+        waypoint_values = list(waypoints)
+        source_rotation = zg_source_pose[:3, :3]
+        waypoint_values[0] = _pose_waypoint(zg_pregrasp_pose[:3, 3], source_rotation, "grip_site")
+        waypoint_values[1] = _pose_waypoint(zg_source_pose[:3, 3], source_rotation, "grip_site")
+        waypoint_values[2] = _pose_waypoint(
+            np.array((zg_source_pose[0, 3], zg_source_pose[1, 3], _position(waypoint_values[2])[2])),
+            source_rotation, "grip_site",
+        )
+        waypoint_values[3] = _pose_waypoint(_position(waypoint_values[3]), source_rotation, "grip_site")
+        # Carry the selected grip-site orientation through release and
+        # retreat.  C10 keeps the classical destination position but must not
+        # fall back to the initial right-hand orientation; C11 replaces the
+        # release orientation with the reconstruction-selected EEF pose.
+        release_rotation = (
+            zg_placement_pose[:3, :3] if zg_placement_pose is not None else source_rotation
+        )
+        release_position = (
+            zg_placement_pose[:3, 3] if zg_placement_pose is not None
+            else _position(waypoint_values[4])
+        )
+        waypoint_values[4] = _pose_waypoint(release_position, release_rotation, "grip_site")
+        waypoint_values[5] = _pose_waypoint(_position(waypoint_values[5]), release_rotation, "grip_site")
+        waypoints = waypoint_values
     waypoints = _apply_directional_pregrasp_offset(
         waypoints,
         source_visual_point,
@@ -2410,6 +2817,7 @@ def run_episode(
             micro_correction=variant.micro_correction,
             micro_action_budget=micro_action_budget,
             post_phase_callback=_after_motion_phase,
+            eef_orientation_transform=eef_orientation_transform,
         )
     except (_GraspSearchRequested, TimeoutError) as exc:
         phase_audit = list(getattr(env, "_arrow_phase_audit", []) or [])
@@ -2768,6 +3176,19 @@ def run_episode(
         except Exception as exc:
             success = None
             evaluator_error = {"type": type(exc).__name__, "error": str(exc)}
+    waypoints_have_pose = any(
+        _orientation(value) is not None
+        for value in (
+            waypoints.values() if isinstance(waypoints, Mapping) else waypoints
+        )
+    )
+    # Keep the historical list-of-XYZ audit schema for classical v1-v9
+    # trajectories.  Pose waypoints use the additive serialized form so V10
+    # orientation/frame provenance is retained without changing old hashes or
+    # consumers.
+    serialized_waypoints = _serialize_waypoints(waypoints)
+    if not waypoints_have_pose and not isinstance(waypoints, Mapping):
+        serialized_waypoints = np.asarray(waypoints, dtype=np.float64).tolist()
     audit = {
         "schema_version": "arrow_pick_place_mvp.v1",
         "task_id": int(task_id),
@@ -2786,6 +3207,7 @@ def run_episode(
         "grasp_retries": grasp_retry_audit,
         "grasp_search": grasp_search_audit,
         "micro_corrections": micro_correction_audit,
+        "zerograsp": zerograsp_audit,
         "settle_diagnostics": settle_diagnostics,
         "environment_audit": getattr(env, "_arrow_environment_audit", None),
         "capture_contract": capture_contract,
@@ -2824,7 +3246,8 @@ def run_episode(
             "source_grasp": bowl_point.tolist(),
             "destination_release": destination_point.tolist(),
         },
-        "waypoints_world_m": np.asarray(waypoints, dtype=np.float64).tolist(),
+        "classical_destination_release_target_m": classical_destination_point.tolist(),
+        "waypoints_world_m": serialized_waypoints,
         "source_grasp_offset_m": source_offset.tolist(),
         "destination_release_offset_m": destination_offset.tolist(),
         "offset_profile": DEFAULT_PROFILE_NAME,

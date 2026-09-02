@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -13,6 +15,42 @@ from typing import Any, Mapping, Sequence
 DEFAULT_CANARY_TASK_IDS = (4, 6, 9)
 DEFAULT_CANARY_SEEDS = tuple(range(1000, 1010))
 DEFAULT_EXPECTED_SUITES = ("vanilla", "sealed_randomized")
+
+# This is an explicit comparison graph, rather than a positional convention
+# inferred from filenames.  Hashes are the semantic (canonical JSON) hashes
+# emitted in ``controller_config.config_hash``.  A caller may supply an
+# equivalent graph to ``evaluate_gate`` for a relocated/custom config, while
+# these defaults make accidental C10/C11 baseline swaps fail closed.
+V10_COMPARISON_GRAPH = {
+    "C10": {
+        "candidate": {
+            "controller_name": "libero_spatial_akita_bowl_agentview_v10_zg_grasp_only",
+            "canonical_config_hash": None,
+        },
+        "baseline": {
+            "label": "v9_patient_base/control",
+            "controller_name": "libero_spatial_akita_bowl_agentview_v9_patient_control",
+            "canonical_config_hash": None,
+        },
+        # C10 introduces ZeroGrasp.  Its runtime is therefore candidate-only;
+        # LIBERO protocol, harness, dependencies, and source hashes remain
+        # held constant against the v9 control.
+        "held_constant": ("task_ids", "suite_modes", "seeds", "protocol", "harness", "source_hashes"),
+        "candidate_only": ("runtime_provenance",),
+    },
+    "C11": {
+        "candidate": {
+            "controller_name": "libero_spatial_akita_bowl_agentview_v10_zg_grasp_recon_place",
+            "canonical_config_hash": None,
+        },
+        "baseline": {
+            "label": "C10",
+            "controller_name": "libero_spatial_akita_bowl_agentview_v10_zg_grasp_only",
+            "canonical_config_hash": None,
+        },
+        "held_constant": ("task_ids", "suite_modes", "seeds", "protocol", "harness", "source_hashes", "runtime_provenance"),
+    },
+}
 
 
 def _resolve_reference(source: Path, value: Any, fallback: str) -> Path:
@@ -137,6 +175,15 @@ def _bool_success(record: Mapping[str, Any]) -> bool:
     return value is True
 
 
+def _non_terminal_cells(records: Sequence[Mapping[str, Any]]) -> list[Any]:
+    terminal_statuses = {"completed", "failed", "interrupted"}
+    return [
+        record.get("cell_index", index)
+        for index, record in enumerate(records)
+        if record.get("status") not in terminal_statuses
+    ]
+
+
 def _substantive(value: Any) -> bool:
     if value is None or value is False or value == "":
         return False
@@ -207,10 +254,297 @@ def _observed_config(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return value if isinstance(value, Mapping) else None
 
 
+def _zerograsp_observed(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    for container in (record, record.get("audit"), record.get("diagnostics"), record.get("partial_audit")):
+        if isinstance(container, Mapping) and isinstance(container.get("zerograsp"), Mapping):
+            return container["zerograsp"]
+    return None
+
+
+def _zerograsp_configured(declarations: Sequence[Mapping[str, Any]]) -> bool:
+    for declaration in declarations:
+        canonical = declaration.get("canonical", declaration)
+        if not isinstance(canonical, Mapping):
+            continue
+        if canonical.get("grasp_provider") == "zerograsp" or canonical.get("placement_provider") == "zerograsp_reconstruction":
+            return True
+    return False
+
+
+_FRAME_INVARIANT_FIELDS = (
+    "camera_frame", "world_frame", "eef_frame", "eef_position_frame",
+    "eef_orientation_frame", "transform", "rgb_shape", "depth_shape",
+)
+_EXPECTED_FRAME_TAGS = {
+    "camera_frame": "opencv_optical_x_right_y_down_z_forward",
+    "world_frame": "libero_mujoco_world",
+    "eef_frame": "robot0_eef_pos_grip_site",
+    "eef_position_frame": "world_grip_site",
+    "eef_orientation_frame": "world_right_hand",
+    "transform": "T_world_camera",
+}
+
+
+def _frame_invariants(frame_metadata: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: frame_metadata.get(key)
+        for key in _FRAME_INVARIANT_FIELDS
+    }
+
+
+def _finite_in_bounds_pixel(value: Any, frame_metadata: Mapping[str, Any]) -> bool:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 2:
+        return False
+    try:
+        u, v = float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(u) or not math.isfinite(v):
+        return False
+    shape = frame_metadata.get("rgb_shape")
+    if not isinstance(shape, Sequence) or isinstance(shape, (str, bytes)) or len(shape) < 2:
+        return False
+    try:
+        height, width = int(shape[0]), int(shape[1])
+    except (TypeError, ValueError):
+        return False
+    return width > 0 and height > 0 and 0.0 <= u < width and 0.0 <= v < height
+
+
+def _frame_metadata_errors(frame_metadata: Mapping[str, Any], record: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for key, expected in _EXPECTED_FRAME_TAGS.items():
+        if frame_metadata.get(key) != expected:
+            errors.append(f"ZeroGrasp frame metadata {key} missing or invalid for cell {record.get('cell_index')}")
+    rgb_shape = frame_metadata.get("rgb_shape")
+    depth_shape = frame_metadata.get("depth_shape")
+    if (
+        not isinstance(rgb_shape, Sequence) or isinstance(rgb_shape, (str, bytes)) or len(rgb_shape) != 3
+        or not isinstance(depth_shape, Sequence) or isinstance(depth_shape, (str, bytes)) or len(depth_shape) != 2
+    ):
+        errors.append(f"ZeroGrasp RGB/depth shapes incomplete for cell {record.get('cell_index')}")
+        return errors
+    try:
+        rgb_height, rgb_width, channels = (int(rgb_shape[0]), int(rgb_shape[1]), int(rgb_shape[2]))
+        depth_height, depth_width = int(depth_shape[0]), int(depth_shape[1])
+    except (TypeError, ValueError):
+        errors.append(f"ZeroGrasp RGB/depth shapes invalid for cell {record.get('cell_index')}")
+        return errors
+    if channels != 3 or rgb_height <= 0 or rgb_width <= 0 or depth_height != rgb_height or depth_width != rgb_width:
+        errors.append(f"ZeroGrasp RGB/depth shape mismatch for cell {record.get('cell_index')}")
+    protocol = record.get("protocol")
+    resolution = protocol.get("resolution") if isinstance(protocol, Mapping) else None
+    try:
+        if isinstance(resolution, Sequence) and not isinstance(resolution, (str, bytes)):
+            expected_height, expected_width = int(resolution[0]), int(resolution[1])
+        elif resolution is not None:
+            expected_height = expected_width = int(resolution)
+        else:
+            expected_height = expected_width = rgb_height
+        if (rgb_height, rgb_width) != (expected_height, expected_width):
+            errors.append(f"ZeroGrasp frame resolution disagrees with protocol for cell {record.get('cell_index')}")
+    except (TypeError, ValueError, IndexError):
+        errors.append(f"ZeroGrasp protocol resolution invalid for cell {record.get('cell_index')}")
+    return errors
+
+
 def _canonical_equal(left: Any, right: Any) -> bool:
     if isinstance(left, Mapping) and isinstance(right, Mapping):
         return json.dumps(left, sort_keys=True, separators=(",", ":")) == json.dumps(right, sort_keys=True, separators=(",", ":"))
     return left == right
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+_HELD_PROTOCOL_FIELDS = (
+    "name", "schema_version", "camera", "suite_contract", "seed_policy",
+    "seed_base", "resolution", "motion_mode", "allow_unvalidated_profile",
+    "continue_on_motion_failure",
+)
+_HELD_PROVENANCE_FIELDS = (
+    "launcher_path", "repository_root", "episode_runner", "git", "python",
+    "platform", "dependency_versions", "runtime_provenance",
+)
+
+
+def _artifact_identity(metadata: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Extract comparison identity without trusting output filenames."""
+    suites = sorted({identity[1] for record in records if (identity := _cell_identity(record)) is not None})
+    declarations = [_config_declaration(metadata, suite) for suite in suites]
+    declarations = [item for item in declarations if item is not None]
+    controller_name = metadata.get("controller_variant")
+    if not isinstance(controller_name, str) and declarations:
+        canonical = declarations[0].get("canonical")
+        controller_name = canonical.get("name") if isinstance(canonical, Mapping) else None
+    config_hashes = {str(item.get("config_hash")) for item in declarations if item.get("config_hash")}
+    if not config_hashes:
+        config_hashes = {str(record.get("controller_config_hash")) for record in records if record.get("controller_config_hash")}
+    return {
+        "controller_name": controller_name,
+        "canonical_config_hashes": sorted(config_hashes),
+        "configured": bool(declarations or config_hashes),
+    }
+
+
+def _comparison_snapshot(metadata: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Return the material identity that must remain fixed across a factor."""
+    identities = sorted(identity for record in records if (identity := _cell_identity(record)) is not None)
+    suite_metadata = metadata.get("_suite_metadata")
+    metadata_by_suite: dict[str, Mapping[str, Any]] = {}
+    if isinstance(suite_metadata, Mapping):
+        metadata_by_suite.update({str(key): value for key, value in suite_metadata.items() if isinstance(value, Mapping)})
+    if not metadata_by_suite:
+        for suite in {identity[1] for identity in identities}:
+            metadata_by_suite[suite] = metadata
+
+    protocol: dict[str, Any] = {}
+    harness: dict[str, Any] = {}
+    runtime: dict[str, Any] = {}
+    sources: dict[str, Any] = {}
+    for suite in sorted(metadata_by_suite):
+        item = metadata_by_suite[suite]
+        item_protocol = item.get("protocol") if isinstance(item.get("protocol"), Mapping) else item
+        item_provenance = item.get("provenance") if isinstance(item.get("provenance"), Mapping) else {}
+        protocol[suite] = {key: item_protocol.get(key) for key in _HELD_PROTOCOL_FIELDS if key in item_protocol}
+        harness[suite] = {key: item_provenance.get(key) for key in _HELD_PROVENANCE_FIELDS if key in item_provenance}
+        runtime_value = item.get("runtime_provenance")
+        if runtime_value is None:
+            runtime_value = {
+                key: item[key]
+                for key in ("zerograsp_runtime", "external_runtime", "runtime")
+                if key in item
+            }
+        runtime[suite] = runtime_value
+        if isinstance(item_protocol.get("source_hashes"), Mapping):
+            sources[suite] = item_protocol["source_hashes"]
+    # If protocol metadata is absent, terminal records still carry a source
+    # hash and it remains part of the comparison contract.
+    if not sources:
+        source_values = {
+            json.dumps(record["protocol"]["source_hashes"], sort_keys=True, separators=(",", ":"))
+            for record in records
+            if isinstance(record.get("protocol"), Mapping) and isinstance(record["protocol"].get("source_hashes"), Mapping)
+        }
+        sources["records"] = sorted(source_values)
+    # Dual summaries keep shared external-runtime provenance at the root;
+    # retain it even though per-suite summaries are used for suite-specific
+    # protocol/harness fields.
+    root_runtime = {
+        key: metadata[key]
+        for key in ("zerograsp_runtime", "external_runtime", "runtime")
+        if key in metadata
+    }
+    if root_runtime:
+        runtime["__root__"] = root_runtime
+    return {
+        "task_suite_seed": identities,
+        "protocol": protocol,
+        "harness": harness,
+        "source_hashes": sources,
+        "runtime_provenance": runtime,
+    }
+
+
+def _comparison_check(
+    *, candidate_metadata: Mapping[str, Any], candidate_records: Sequence[Mapping[str, Any]],
+    baseline_metadata: Mapping[str, Any], baseline_records: Sequence[Mapping[str, Any]],
+    comparison_id: str, graph: Mapping[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    errors: list[str] = []
+    spec = graph.get(comparison_id)
+    if not isinstance(spec, Mapping):
+        return [f"unknown comparison graph node {comparison_id!r}"], {"comparison_id": comparison_id}
+    candidate_spec = spec.get("candidate") if isinstance(spec.get("candidate"), Mapping) else {}
+    baseline_spec = spec.get("baseline") if isinstance(spec.get("baseline"), Mapping) else {}
+    for label, item in (("candidate", candidate_spec), ("baseline", baseline_spec)):
+        if not isinstance(item.get("controller_name"), str) or not item.get("controller_name"):
+            errors.append(f"{comparison_id} comparison manifest missing {label} controller name")
+        if not isinstance(item.get("canonical_config_hash"), str) or not item.get("canonical_config_hash"):
+            errors.append(f"{comparison_id} comparison manifest missing {label} calibrated canonical config hash")
+        elif not _is_sha256_hex(item["canonical_config_hash"]):
+            errors.append(f"{comparison_id} comparison manifest {label} canonical config hash is not lowercase SHA-256")
+    candidate_identity = _artifact_identity(candidate_metadata, candidate_records)
+    baseline_identity = _artifact_identity(baseline_metadata, baseline_records)
+    for label, observed, expected in (
+        ("candidate controller name", candidate_identity.get("controller_name"), candidate_spec.get("controller_name")),
+        ("baseline controller name", baseline_identity.get("controller_name"), baseline_spec.get("controller_name")),
+    ):
+        if expected is not None and observed != expected:
+            errors.append(f"{comparison_id} {label} mismatch: expected {expected!r}, observed {observed!r}")
+    for label, observed, expected in (
+        ("candidate canonical config hash", candidate_identity.get("canonical_config_hashes"), candidate_spec.get("canonical_config_hash")),
+        ("baseline canonical config hash", baseline_identity.get("canonical_config_hashes"), baseline_spec.get("canonical_config_hash")),
+    ):
+        if any(not _is_sha256_hex(value) for value in observed):
+            errors.append(f"{comparison_id} {label} observed canonical config hash is not lowercase SHA-256")
+        if expected is not None and observed != [str(expected)]:
+            errors.append(f"{comparison_id} {label} mismatch")
+
+    candidate_snapshot = _comparison_snapshot(candidate_metadata, candidate_records)
+    baseline_snapshot = _comparison_snapshot(baseline_metadata, baseline_records)
+    held_constant = spec.get("held_constant", _HELD_PROVENANCE_FIELDS)
+    held_constant = tuple(str(item) for item in held_constant) if isinstance(held_constant, Sequence) and not isinstance(held_constant, (str, bytes)) else tuple(_HELD_PROVENANCE_FIELDS)
+    snapshot_fields = {
+        "task_ids": candidate_snapshot["task_suite_seed"],
+        "suite_modes": sorted({item[1] for item in candidate_snapshot["task_suite_seed"]}),
+        "seeds": sorted({item[2] for item in candidate_snapshot["task_suite_seed"]}),
+        "protocol": candidate_snapshot["protocol"],
+        "harness": candidate_snapshot["harness"],
+        "source_hashes": candidate_snapshot["source_hashes"],
+        "runtime_provenance": candidate_snapshot["runtime_provenance"],
+    }
+    baseline_fields = {
+        "task_ids": baseline_snapshot["task_suite_seed"],
+        "suite_modes": sorted({item[1] for item in baseline_snapshot["task_suite_seed"]}),
+        "seeds": sorted({item[2] for item in baseline_snapshot["task_suite_seed"]}),
+        "protocol": baseline_snapshot["protocol"],
+        "harness": baseline_snapshot["harness"],
+        "source_hashes": baseline_snapshot["source_hashes"],
+        "runtime_provenance": baseline_snapshot["runtime_provenance"],
+    }
+    for field in held_constant:
+        if snapshot_fields.get(field) != baseline_fields.get(field):
+            errors.append(f"{comparison_id} held-constant provenance mismatch: {field}")
+        if field == "runtime_provenance":
+            if not _substantive(snapshot_fields.get(field)):
+                errors.append(f"{comparison_id} runtime provenance missing or empty for candidate")
+            if not _substantive(baseline_fields.get(field)):
+                errors.append(f"{comparison_id} runtime provenance missing or empty for baseline")
+    candidate_only = spec.get("candidate_only", ())
+    candidate_only = tuple(str(item) for item in candidate_only) if isinstance(candidate_only, Sequence) and not isinstance(candidate_only, (str, bytes)) else ()
+    for field in candidate_only:
+        candidate_value = snapshot_fields.get(field)
+        baseline_value = baseline_fields.get(field)
+        if not _substantive(candidate_value):
+            errors.append(f"{comparison_id} candidate-only provenance missing: {field}")
+        if _substantive(baseline_value):
+            errors.append(f"{comparison_id} candidate-only provenance present in baseline: {field}")
+    return errors, {
+        "comparison_id": comparison_id,
+        "candidate": candidate_identity,
+        "baseline": baseline_identity,
+        "held_constant": {field: {"candidate": snapshot_fields.get(field), "baseline": baseline_fields.get(field)} for field in held_constant},
+        "candidate_only": {field: {"candidate": snapshot_fields.get(field), "baseline": baseline_fields.get(field)} for field in candidate_only},
+    }
+
+
+def _load_comparison_manifest(value: Mapping[str, Any] | str | Path) -> Mapping[str, Any]:
+    """Load an operator-declared comparison graph, including calibrated hashes."""
+    if isinstance(value, Mapping):
+        payload: Any = value
+    else:
+        path = Path(value).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("comparison manifest must be an object")
+    graph = payload.get("comparison_graph", payload.get("graph", payload))
+    if not isinstance(graph, Mapping):
+        raise ValueError("comparison manifest graph must be an object")
+    return graph
 
 
 def evaluate_gate(
@@ -224,6 +558,10 @@ def evaluate_gate(
     hard_tasks: Sequence[int] = DEFAULT_CANARY_TASK_IDS,
     minimum_hard_task_successes: int = 9,
     baseline: str | Path | None = None,
+    comparison_id: str | None = None,
+    comparison: str | None = None,
+    comparison_graph: Mapping[str, Any] | None = None,
+    comparison_manifest: Mapping[str, Any] | str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate a matrix artifact and return a machine-readable gate report."""
     metadata, records = _read_records(artifact)
@@ -261,8 +599,14 @@ def evaluate_gate(
         errors.append("hard-task IDs must be included in expected task IDs")
 
     observed_hashes = {str(r.get("contract_hash")) for r in records if r.get("contract_hash")}
+    contract_hashes_by_suite: dict[str, set[str]] = defaultdict(set)
+    for record in records:
+        identity = _cell_identity(record)
+        if identity is not None and record.get("contract_hash"):
+            contract_hashes_by_suite[identity[1]].add(str(record["contract_hash"]))
     observed_config_hashes = {str(r.get("controller_config_hash")) for r in records if r.get("controller_config_hash")}
     observed_runtime_hashes: set[str] = set()
+    observed_zerograsp_runtime_hashes: set[str] = set()
     source_hash_documents = {
         json.dumps(r["protocol"]["source_hashes"], sort_keys=True, separators=(",", ":"))
         for r in records
@@ -280,6 +624,8 @@ def evaluate_gate(
             observed_hashes.add(str(value))
     if expected_hash and observed_hashes != {str(expected_hash)}:
         errors.append("contract hash mismatch or inconsistency")
+    elif any(len(values) > 1 for values in contract_hashes_by_suite.values()):
+        errors.append("contract hashes are inconsistent within a suite")
 
     declared_configs: dict[str, Mapping[str, Any]] = {}
     for suite_mode in expected_suite_set:
@@ -308,6 +654,47 @@ def evaluate_gate(
             errors.append(f"controller config runtime hash mismatch for cell {record.get('cell_index')}")
         if "canonical" in declaration and not _canonical_equal(observed.get("canonical"), declaration.get("canonical")):
             errors.append(f"controller config canonical mismatch for cell {record.get('cell_index')}")
+    # ZeroGrasp is a learned external runtime.  A matrix is not gateable if
+    # any cell can silently use a fallback or if its model/frame provenance is
+    # missing.  These checks are conditional so v1-v9 artifacts retain their
+    # historical gate behavior.
+    if _zerograsp_configured(list(declared_configs.values())):
+        zg_runtime_hashes: set[str] = set()
+        zg_frame_documents: set[str] = set()
+        zg_pixel_count = 0
+        for record in records:
+            observed_zg = _zerograsp_observed(record)
+            if observed_zg is None:
+                errors.append(f"ZeroGrasp audit missing for cell {record.get('cell_index')}")
+                continue
+            if observed_zg.get("fallback") is not False:
+                errors.append(f"ZeroGrasp fallback must be false for cell {record.get('cell_index')}")
+            runtime_hash = observed_zg.get("runtime_hash")
+            frame_metadata = observed_zg.get("frame_metadata")
+            if not isinstance(runtime_hash, str) or not runtime_hash:
+                errors.append(f"ZeroGrasp runtime hash missing for cell {record.get('cell_index')}")
+            else:
+                zg_runtime_hashes.add(runtime_hash)
+                observed_zerograsp_runtime_hashes.add(runtime_hash)
+            if not isinstance(frame_metadata, Mapping):
+                errors.append(f"ZeroGrasp frame metadata incomplete for cell {record.get('cell_index')}")
+            else:
+                errors.extend(_frame_metadata_errors(frame_metadata, record))
+                # Frame schema/convention is invariant, but pixel seeds are
+                # episode-specific.  Comparing the complete object would
+                # incorrectly reject a valid matrix whose arrows differ.
+                zg_frame_documents.add(json.dumps(_frame_invariants(frame_metadata), sort_keys=True, separators=(",", ":")))
+                for pixel_name in ("source_px", "destination_px"):
+                    if pixel_name not in frame_metadata or not _finite_in_bounds_pixel(frame_metadata[pixel_name], frame_metadata):
+                        errors.append(f"ZeroGrasp {pixel_name} invalid or out of bounds for cell {record.get('cell_index')}")
+                    else:
+                        zg_pixel_count += 1
+        if len(zg_runtime_hashes) > 1:
+            errors.append("ZeroGrasp runtime hashes are inconsistent across cells")
+        if len(zg_frame_documents) > 1:
+            errors.append("ZeroGrasp frame metadata are inconsistent across cells")
+        if records and zg_pixel_count != 2 * len(records):
+            errors.append("ZeroGrasp per-cell pixel provenance is incomplete")
     metadata_config = metadata.get("controller_config")
     if isinstance(metadata_config, Mapping) and metadata_config.get("config_hash"):
         declared_config_hash = str(metadata_config["config_hash"])
@@ -317,6 +704,9 @@ def evaluate_gate(
     incomplete = [r.get("cell_index") for r in records if not _diagnostics_complete(r)]
     if incomplete:
         errors.append(f"diagnostics incomplete for cells {incomplete[:10]}")
+    non_terminal = _non_terminal_cells(records)
+    if non_terminal:
+        errors.append(f"non-terminal cell statuses for cells {non_terminal[:10]}")
     successes = sum(_bool_success(r) for r in records)
     strata: dict[str, dict[str, int]] = defaultdict(lambda: {"total": 0, "successes": 0})
     for record in records:
@@ -335,7 +725,11 @@ def evaluate_gate(
                 hard_failures[key] = dict(value)
     if hard_failures:
         errors.append("hard-task stratum gate failed")
+    if comparison_id is not None and comparison is not None and comparison_id != comparison:
+        errors.append("comparison_id and comparison disagree")
+    comparison_id = comparison_id or comparison
     baseline_report = None
+    comparison_report = None
     if baseline is not None:
         baseline_report = evaluate_gate(
             baseline, expected_task_ids=expected_task_ids, expected_seeds=expected_seeds,
@@ -343,12 +737,39 @@ def evaluate_gate(
             expected_controller_config_hash=None, hard_tasks=hard_tasks,
             minimum_hard_task_successes=minimum_hard_task_successes,
         )
+        # A comparison may use a weak but valid baseline.  It may not use a
+        # structurally corrupt one.  The hard-task threshold is deliberately
+        # excluded here: that threshold is the candidate promotion criterion,
+        # not a prerequisite for a historical control artifact.
+        baseline_structural_errors = [
+            error for error in baseline_report["errors"]
+            if error != "hard-task stratum gate failed"
+        ]
+        for error in baseline_structural_errors:
+            errors.append(f"baseline integrity failure: {error}")
         if successes <= int(baseline_report["conservative_successes"]):
             errors.append("factor positive-signal rule failed: no strict conservative improvement")
         for key, current in strata.items():
             prior = baseline_report["strata"].get(key)
             if prior and current["successes"] < prior["successes"]:
                 errors.append(f"factor positive-signal rule failed: stratum drop in {key}")
+        if comparison_id is not None:
+            baseline_metadata, baseline_records = _read_records(baseline)
+            if comparison_manifest is None and comparison_graph is None:
+                errors.append(f"{comparison_id} comparison requires an operator-supplied manifest with calibrated hashes")
+            else:
+                try:
+                    graph = _load_comparison_manifest(comparison_manifest or comparison_graph)  # type: ignore[arg-type]
+                    comparison_errors, comparison_report = _comparison_check(
+                        candidate_metadata=metadata, candidate_records=records,
+                        baseline_metadata=baseline_metadata, baseline_records=baseline_records,
+                        comparison_id=str(comparison_id), graph=graph,
+                    )
+                    errors.extend(comparison_errors)
+                except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    errors.append(f"{comparison_id} comparison manifest invalid: {exc}")
+    elif comparison_id is not None:
+        errors.append(f"{comparison_id} comparison requires a baseline artifact")
     return {
         "passed": not errors,
         "artifact": str(Path(artifact).expanduser().resolve()),
@@ -360,9 +781,11 @@ def evaluate_gate(
         "observed_contract_hashes": sorted(observed_hashes),
         "observed_controller_config_hashes": sorted(observed_config_hashes),
         "observed_controller_runtime_hashes": sorted(observed_runtime_hashes),
+        "observed_zerograsp_runtime_hashes": sorted(observed_zerograsp_runtime_hashes),
         "diagnostics_incomplete_cells": incomplete,
         "errors": errors,
         "baseline": baseline_report,
+        "comparison": comparison_report,
     }
 
 
@@ -374,6 +797,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--expected-seeds", default=None)
     parser.add_argument("--expected-contract-hash", default=None)
     parser.add_argument("--expected-controller-config-hash", default=None)
+    parser.add_argument("--comparison-id", choices=tuple(V10_COMPARISON_GRAPH), default=None)
+    parser.add_argument("--comparison-manifest", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
     parse_ints = lambda value: None if value is None else [int(part) for part in value.split(",") if part]
@@ -382,6 +807,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_task_ids=parse_ints(args.expected_task_ids), expected_seeds=parse_ints(args.expected_seeds),
         expected_hash=args.expected_contract_hash,
         expected_controller_config_hash=args.expected_controller_config_hash,
+        comparison_id=args.comparison_id,
+        comparison_manifest=args.comparison_manifest,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output is not None:

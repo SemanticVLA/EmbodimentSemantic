@@ -6,6 +6,14 @@
 #   ARROW_CONTROLLER_VARIANT legacy controller label; defaults to rgbd_arrow_v1
 #   CONTROLLER_CONFIG or ARROW_CONTROLLER_CONFIG external JSON controller config;
 #                    mutually exclusive with a non-default controller variant
+# ZeroGrasp is opt-in through the expanded controller config. When selected,
+# these values are required and remain separate from the LIBERO environment:
+#   ZERO_GRASP_ROOT clean checkout at the pinned official revision
+#   ZERO_GRASP_PYTHON executable; the adapter is this evaluation checkout's
+#                    vla_benchmarking/zerograsp_worker.py
+#   ZERO_GRASP_CHECKPOINT plus ZERO_GRASP_CHECKPOINT_SHA256
+#   ZERO_GRASP_CONFIG plus ZERO_GRASP_CONFIG_SHA256
+#   ZERO_GRASP_ENV_LOCK and ZERO_GRASP_ENV_LOCK_SHA256 (mandatory for V10)
 
 #SBATCH --job-name=arrow_pick_place_dual_matrix
 #SBATCH --partition=gpu_a40
@@ -52,6 +60,19 @@ CONTROLLER_CONFIG_PATH=""
 CONTROLLER_CONFIG_FILE_SHA256=""
 CONTROLLER_CONFIG_HASH=""
 CONTROLLER_CONFIG_CANONICAL_PATH=""
+ZERO_GRASP_SELECTED=0
+ZERO_GRASP_ROOT_RESOLVED=""
+ZERO_GRASP_PYTHON_RESOLVED=""
+ZERO_GRASP_PYTHON_SHA256=""
+ZERO_GRASP_WORKER_RESOLVED=""
+ZERO_GRASP_WORKER_SHA256=""
+ZERO_GRASP_REVISION=""
+ZERO_GRASP_CHECKPOINT_RESOLVED=""
+ZERO_GRASP_CHECKPOINT_SHA256=""
+ZERO_GRASP_CONFIG_RESOLVED=""
+ZERO_GRASP_CONFIG_SHA256=""
+ZERO_GRASP_ENV_LOCK_RESOLVED=""
+ZERO_GRASP_ENV_LOCK_SHA256=""
 MATRIX_CONTINUE_ON_MOTION_FAILURE="${MATRIX_CONTINUE_ON_MOTION_FAILURE:-1}"
 
 if [[ -n "${CONTROLLER_CONFIG:-}" && -n "${ARROW_CONTROLLER_CONFIG:-}" && "$CONTROLLER_CONFIG" != "$ARROW_CONTROLLER_CONFIG" ]]; then
@@ -143,6 +164,21 @@ archive_on_exit() {
     printf 'controller_config_file_sha256=%s\n' "$CONTROLLER_CONFIG_FILE_SHA256"
     printf 'controller_config_hash=%s\n' "$CONTROLLER_CONFIG_HASH"
     printf 'controller_config_canonical_path=%s\n' "$CONTROLLER_CONFIG_CANONICAL_PATH"
+    if [[ "$ZERO_GRASP_SELECTED" == 1 ]]; then
+      printf 'zero_grasp_selected=1\n'
+      printf 'zero_grasp_root=%s\n' "$ZERO_GRASP_ROOT_RESOLVED"
+      printf 'zero_grasp_revision=%s\n' "$ZERO_GRASP_REVISION"
+      printf 'zero_grasp_python=%s\n' "$ZERO_GRASP_PYTHON_RESOLVED"
+      printf 'zero_grasp_python_sha256=%s\n' "$ZERO_GRASP_PYTHON_SHA256"
+      printf 'zero_grasp_worker=%s\n' "$ZERO_GRASP_WORKER_RESOLVED"
+      printf 'zero_grasp_worker_sha256=%s\n' "$ZERO_GRASP_WORKER_SHA256"
+      printf 'zero_grasp_checkpoint=%s\n' "$ZERO_GRASP_CHECKPOINT_RESOLVED"
+      printf 'zero_grasp_checkpoint_sha256=%s\n' "$ZERO_GRASP_CHECKPOINT_SHA256"
+      printf 'zero_grasp_config=%s\n' "$ZERO_GRASP_CONFIG_RESOLVED"
+      printf 'zero_grasp_config_sha256=%s\n' "$ZERO_GRASP_CONFIG_SHA256"
+      printf 'zero_grasp_env_lock=%s\n' "$ZERO_GRASP_ENV_LOCK_RESOLVED"
+      printf 'zero_grasp_env_lock_sha256=%s\n' "$ZERO_GRASP_ENV_LOCK_SHA256"
+    fi
     printf 'run_root=%s\n' "$RUN_ROOT"
     printf 'output_root=%s\n' "$OUTPUT_ROOT"
     printf 'archive_root=%s\n' "$ARCHIVE_ROOT"
@@ -218,6 +254,185 @@ PY
   } >> "$RUN_ROOT/job_context.env"
 fi
 
+# The learned provider is selected only by the fully expanded external config.
+# This probe is deliberately kept out of the legacy path: no ZeroGrasp
+# environment, imports, or worker process are touched for v1--v9/classical
+# configurations.
+if [[ -n "$CONTROLLER_CONFIG_CANONICAL_PATH" ]]; then
+  ZERO_GRASP_SELECTED="$($PYTHON - "$CONTROLLER_CONFIG_CANONICAL_PATH" <<'PY'
+import json
+import sys
+from collections.abc import Mapping
+
+def is_zero(value):
+    if isinstance(value, str):
+        token = "".join(ch for ch in value.lower() if ch.isalnum())
+        return token == "zerograsp" or token.endswith("zerograsp")
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+            if normalized in {"zerograsp", "zerograspprovider", "zerograspbackend"}:
+                if child is False:
+                    continue
+                return True
+            if is_zero(child):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(is_zero(item) for item in value)
+    return False
+
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print("1" if is_zero(payload) else "0")
+PY
+  )" || die 'controller config ZeroGrasp selection probe failed'
+  [[ "$ZERO_GRASP_SELECTED" =~ ^[01]$ ]] || die 'ZeroGrasp selection probe returned invalid output'
+fi
+
+if [[ "$ZERO_GRASP_SELECTED" == 1 ]]; then
+  ZERO_GRASP_PIN="152f67c27269ff3f089783bd2f041d67641fa506"
+  ZERO_GRASP_ROOT_INPUT="${ZERO_GRASP_ROOT:-}"
+  ZERO_GRASP_PYTHON_INPUT="${ZERO_GRASP_PYTHON:-}"
+  ZERO_GRASP_CHECKPOINT_INPUT="${ZERO_GRASP_CHECKPOINT:-}"
+  ZERO_GRASP_CHECKPOINT_EXPECTED="${ZERO_GRASP_CHECKPOINT_SHA256:-}"
+  ZERO_GRASP_CONFIG_INPUT="${ZERO_GRASP_CONFIG:-}"
+  ZERO_GRASP_CONFIG_EXPECTED="${ZERO_GRASP_CONFIG_SHA256:-}"
+  ZERO_GRASP_ENV_LOCK_INPUT="${ZERO_GRASP_ENV_LOCK:-}"
+  ZERO_GRASP_ENV_LOCK_EXPECTED="${ZERO_GRASP_ENV_LOCK_SHA256:-}"
+
+  [[ -n "$ZERO_GRASP_ROOT_INPUT" && "$ZERO_GRASP_ROOT_INPUT" = /* ]] || die 'ZERO_GRASP_ROOT must be an absolute path'
+  [[ "$ZERO_GRASP_ROOT_INPUT" != / && "$ZERO_GRASP_ROOT_INPUT" != "$REPO_ROOT" ]] || die 'ZERO_GRASP_ROOT points at an unsafe/shared checkout'
+  ZERO_GRASP_ROOT_RESOLVED="$(realpath -e -- "$ZERO_GRASP_ROOT_INPUT")" || die 'cannot canonicalize ZERO_GRASP_ROOT'
+  [[ "$ZERO_GRASP_ROOT_RESOLVED" != "$REPO_ROOT" ]] || die 'ZERO_GRASP_ROOT resolves to the active/shared checkout'
+  [[ -d "$ZERO_GRASP_ROOT_RESOLVED/.git" || -f "$ZERO_GRASP_ROOT_RESOLVED/.git" ]] || die 'ZERO_GRASP_ROOT is not a Git checkout'
+  ZERO_GRASP_REVISION="$(git -C "$ZERO_GRASP_ROOT_RESOLVED" rev-parse HEAD 2>/dev/null)" || die 'cannot read ZeroGrasp revision'
+  [[ "$ZERO_GRASP_REVISION" == "$ZERO_GRASP_PIN" ]] || die "ZeroGrasp checkout differs: $ZERO_GRASP_REVISION"
+  [[ -z "$(git -C "$ZERO_GRASP_ROOT_RESOLVED" status --porcelain --untracked-files=all)" ]] || die 'ZERO_GRASP_ROOT is dirty'
+
+  [[ -n "$ZERO_GRASP_PYTHON_INPUT" && "$ZERO_GRASP_PYTHON_INPUT" = /* ]] || die 'ZERO_GRASP_PYTHON must be an absolute executable path'
+  ZERO_GRASP_PYTHON_RESOLVED="$(realpath -e -- "$ZERO_GRASP_PYTHON_INPUT")" || die 'cannot canonicalize ZERO_GRASP_PYTHON'
+  [[ -x "$ZERO_GRASP_PYTHON_RESOLVED" ]] || die 'ZERO_GRASP_PYTHON is not executable'
+  [[ "$ZERO_GRASP_PYTHON_RESOLVED" != "$(realpath -e -- "$PYTHON")" ]] || die 'ZeroGrasp must not reuse the LIBERO Python environment'
+  ZERO_GRASP_PYTHON_SHA256="$(sha256sum -- "$ZERO_GRASP_PYTHON_RESOLVED" | awk '{print $1}')" || die 'cannot hash ZERO_GRASP_PYTHON'
+  [[ "$ZERO_GRASP_PYTHON_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'ZeroGrasp Python SHA-256 is invalid'
+
+  ZERO_GRASP_WORKER_RESOLVED="$(realpath -e -- "$REPO_ROOT/vla_benchmarking/zerograsp_worker.py")" || die 'cannot canonicalize the ZeroGrasp worker adapter'
+  [[ -f "$ZERO_GRASP_WORKER_RESOLVED" && -r "$ZERO_GRASP_WORKER_RESOLVED" ]] || die 'ZERO_GRASP_WORKER is not a readable regular file'
+  ZERO_GRASP_WORKER_SHA256="$(sha256sum -- "$ZERO_GRASP_WORKER_RESOLVED" | awk '{print $1}')" || die 'cannot hash ZERO_GRASP_WORKER'
+  [[ "$ZERO_GRASP_WORKER_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'ZeroGrasp worker SHA-256 is invalid'
+
+  [[ -n "$ZERO_GRASP_CHECKPOINT_INPUT" ]] || die 'ZERO_GRASP_CHECKPOINT is required'
+  [[ -n "$ZERO_GRASP_CHECKPOINT_EXPECTED" && "$ZERO_GRASP_CHECKPOINT_EXPECTED" =~ ^[0-9a-f]{64}$ ]] || die 'ZERO_GRASP_CHECKPOINT_SHA256 must be a lowercase 64-character SHA'
+  ZERO_GRASP_CHECKPOINT_RESOLVED="$(realpath -e -- "$ZERO_GRASP_CHECKPOINT_INPUT")" || die 'cannot canonicalize ZERO_GRASP_CHECKPOINT'
+  [[ -f "$ZERO_GRASP_CHECKPOINT_RESOLVED" && -r "$ZERO_GRASP_CHECKPOINT_RESOLVED" ]] || die 'ZERO_GRASP_CHECKPOINT is not a readable regular file'
+  ZERO_GRASP_CHECKPOINT_SHA256="$(sha256sum -- "$ZERO_GRASP_CHECKPOINT_RESOLVED" | awk '{print $1}')" || die 'cannot hash ZERO_GRASP_CHECKPOINT'
+  [[ "$ZERO_GRASP_CHECKPOINT_SHA256" == "$ZERO_GRASP_CHECKPOINT_EXPECTED" ]] || die 'ZeroGrasp checkpoint SHA-256 mismatch'
+
+  [[ -n "$ZERO_GRASP_CONFIG_INPUT" ]] || die 'ZERO_GRASP_CONFIG is required'
+  [[ -n "$ZERO_GRASP_CONFIG_EXPECTED" && "$ZERO_GRASP_CONFIG_EXPECTED" =~ ^[0-9a-f]{64}$ ]] || die 'ZERO_GRASP_CONFIG_SHA256 must be a lowercase 64-character SHA'
+  ZERO_GRASP_CONFIG_RESOLVED="$(realpath -e -- "$ZERO_GRASP_CONFIG_INPUT")" || die 'cannot canonicalize ZERO_GRASP_CONFIG'
+  [[ -f "$ZERO_GRASP_CONFIG_RESOLVED" && -r "$ZERO_GRASP_CONFIG_RESOLVED" ]] || die 'ZERO_GRASP_CONFIG is not a readable regular file'
+  ZERO_GRASP_CONFIG_SHA256="$(sha256sum -- "$ZERO_GRASP_CONFIG_RESOLVED" | awk '{print $1}')" || die 'cannot hash ZERO_GRASP_CONFIG'
+  [[ "$ZERO_GRASP_CONFIG_SHA256" == "$ZERO_GRASP_CONFIG_EXPECTED" ]] || die 'ZeroGrasp config SHA-256 mismatch'
+
+  [[ -n "$ZERO_GRASP_ENV_LOCK_INPUT" ]] || die 'ZERO_GRASP_ENV_LOCK is mandatory for every ZeroGrasp matrix'
+  [[ -n "$ZERO_GRASP_ENV_LOCK_EXPECTED" && "$ZERO_GRASP_ENV_LOCK_EXPECTED" =~ ^[0-9a-f]{64}$ ]] || die 'ZERO_GRASP_ENV_LOCK_SHA256 must be a lowercase 64-character SHA'
+  ZERO_GRASP_ENV_LOCK_RESOLVED="$(realpath -e -- "$ZERO_GRASP_ENV_LOCK_INPUT")" || die 'cannot canonicalize ZERO_GRASP_ENV_LOCK'
+  [[ -f "$ZERO_GRASP_ENV_LOCK_RESOLVED" && -r "$ZERO_GRASP_ENV_LOCK_RESOLVED" ]] || die 'ZERO_GRASP_ENV_LOCK is not a readable regular file'
+  ZERO_GRASP_ENV_LOCK_SHA256="$(sha256sum -- "$ZERO_GRASP_ENV_LOCK_RESOLVED" | awk '{print $1}')" || die 'cannot hash ZERO_GRASP_ENV_LOCK'
+  [[ "$ZERO_GRASP_ENV_LOCK_SHA256" == "$ZERO_GRASP_ENV_LOCK_EXPECTED" ]] || die 'ZeroGrasp environment lock SHA-256 mismatch'
+  ZERO_GRASP_PYTHON_VERSION="$($ZERO_GRASP_PYTHON_RESOLVED -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" || die 'cannot query ZeroGrasp Python version'
+  "$ZERO_GRASP_PYTHON_RESOLVED" - "$ZERO_GRASP_ENV_LOCK_RESOLVED" "$ZERO_GRASP_ROOT_RESOLVED" "$ZERO_GRASP_REVISION" "$ZERO_GRASP_CHECKPOINT_RESOLVED" "$ZERO_GRASP_CHECKPOINT_SHA256" "$ZERO_GRASP_CONFIG_RESOLVED" "$ZERO_GRASP_CONFIG_SHA256" "$ZERO_GRASP_PYTHON_VERSION" "$ZERO_GRASP_PYTHON_RESOLVED" "$ZERO_GRASP_PYTHON_SHA256" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+lock_path, root, revision, checkpoint, checkpoint_sha, config, config_sha, python_version, python, python_sha = sys.argv[1:]
+try:
+    data = json.loads(pathlib.Path(lock_path).read_text(encoding="utf-8"))
+except Exception as exc:
+    raise SystemExit(f"invalid ZeroGrasp runtime lock: {exc}")
+selected_python = pathlib.Path(python).resolve().as_posix()
+selected_venv = pathlib.Path(selected_python).parent.parent.as_posix()
+expected = {
+    "official_revision": revision,
+    "venv": selected_venv,
+    "python": selected_python,
+    "python_executable_sha256": python_sha,
+    "checkpoint": pathlib.Path(checkpoint).resolve().as_posix(),
+    "checkpoint_sha256": checkpoint_sha,
+    "config": pathlib.Path(config).resolve().as_posix(),
+    "config_sha256": config_sha,
+    "python_version": python_version,
+}
+for key, value in expected.items():
+    if data.get(key) != value:
+        raise SystemExit(f"ZeroGrasp runtime lock {key} does not match selected artifact")
+expected_freeze = sorted(data.get("pip_freeze", []))
+actual_freeze = sorted(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True).splitlines())
+if not expected_freeze or expected_freeze != actual_freeze:
+    raise SystemExit("ZeroGrasp runtime lock pip_freeze differs from selected interpreter")
+try:
+    import torch
+except Exception as exc:
+    raise SystemExit(f"selected ZeroGrasp interpreter Torch import failed: {exc}")
+torch_info = data.get("torch", {})
+actual_torch = torch.__version__.split("+")[0]
+actual_cuda = torch.version.cuda
+if actual_torch != torch_info.get("version") or actual_cuda != torch_info.get("cuda"):
+    raise SystemExit("ZeroGrasp runtime lock Torch/CUDA identity differs from selected interpreter")
+try:
+    from importlib.metadata import version as package_version
+    actual_torchvision = package_version("torchvision").split("+")[0]
+except Exception as exc:
+    raise SystemExit(f"selected ZeroGrasp interpreter torchvision lookup failed: {exc}")
+if actual_torchvision != torch_info.get("torchvision"):
+    raise SystemExit("ZeroGrasp runtime lock torchvision identity differs from selected interpreter")
+PY
+
+  # This is the only ZeroGrasp process launch and must happen before the
+  # first LIBERO/MuJoCo import or environment construction. The checked-in
+  # preflight starts the JSONL worker, waits for protocol-ready, then closes it;
+  # model/checkpoint readiness is verified separately by the setup job.
+  export ZERO_GRASP_ROOT="$ZERO_GRASP_ROOT_RESOLVED"
+  export ZERO_GRASP_PYTHON="$ZERO_GRASP_PYTHON_RESOLVED"
+  export ZERO_GRASP_WORKER="$ZERO_GRASP_WORKER_RESOLVED"
+  export ZERO_GRASP_CHECKPOINT="$ZERO_GRASP_CHECKPOINT_RESOLVED"
+  export ZERO_GRASP_CONFIG="$ZERO_GRASP_CONFIG_RESOLVED"
+  if [[ -n "$ZERO_GRASP_ENV_LOCK_RESOLVED" ]]; then export ZERO_GRASP_ENV_LOCK="$ZERO_GRASP_ENV_LOCK_RESOLVED"; fi
+  ZERO_GRASP_PREFLIGHT_RESOLVED="$(realpath -e -- "$REPO_ROOT/vla_benchmarking/legion/preflight_zerograsp_process.py")" || die 'cannot canonicalize ZeroGrasp process preflight'
+  [[ -f "$ZERO_GRASP_PREFLIGHT_RESOLVED" && -r "$ZERO_GRASP_PREFLIGHT_RESOLVED" ]] || die 'ZeroGrasp process preflight is not readable'
+  preflight_reply="$("$ZERO_GRASP_PYTHON_RESOLVED" "$ZERO_GRASP_PREFLIGHT_RESOLVED" --python "$ZERO_GRASP_PYTHON_RESOLVED" --worker "$ZERO_GRASP_WORKER_RESOLVED" --repo "$ZERO_GRASP_ROOT_RESOLVED" --checkpoint "$ZERO_GRASP_CHECKPOINT_RESOLVED" --checkpoint-sha256 "$ZERO_GRASP_CHECKPOINT_SHA256" --config "$ZERO_GRASP_CONFIG_RESOLVED" --timeout-s 20)" || die 'ZeroGrasp process preflight failed'
+  printf '%s\n' "$preflight_reply" > "$RUN_ROOT/zerograsp_process_preflight.json"
+  "$PYTHON" - "$preflight_reply" <<'PY'
+import json
+import sys
+
+reply = json.loads(sys.argv[1])
+if reply.get("protocol") != "zerograsp-jsonl-v1" or reply.get("protocol_ready") is not True or reply.get("closed") is not True:
+    raise SystemExit("worker did not complete a successful ready/close preflight")
+PY
+  {
+    printf 'zero_grasp_selected=1\n'
+    printf 'zero_grasp_root=%s\n' "$ZERO_GRASP_ROOT_RESOLVED"
+    printf 'zero_grasp_revision=%s\n' "$ZERO_GRASP_REVISION"
+    printf 'zero_grasp_python=%s\n' "$ZERO_GRASP_PYTHON_RESOLVED"
+    printf 'zero_grasp_python_sha256=%s\n' "$ZERO_GRASP_PYTHON_SHA256"
+    printf 'zero_grasp_worker=%s\n' "$ZERO_GRASP_WORKER_RESOLVED"
+    printf 'zero_grasp_worker_sha256=%s\n' "$ZERO_GRASP_WORKER_SHA256"
+    printf 'zero_grasp_process_preflight=%s\n' "$RUN_ROOT/zerograsp_process_preflight.json"
+    printf 'zero_grasp_protocol_ready=true\n'
+    printf 'zero_grasp_process_closed=true\n'
+    printf 'zero_grasp_checkpoint=%s\n' "$ZERO_GRASP_CHECKPOINT_RESOLVED"
+    printf 'zero_grasp_checkpoint_sha256=%s\n' "$ZERO_GRASP_CHECKPOINT_SHA256"
+    printf 'zero_grasp_config=%s\n' "$ZERO_GRASP_CONFIG_RESOLVED"
+    printf 'zero_grasp_config_sha256=%s\n' "$ZERO_GRASP_CONFIG_SHA256"
+    printf 'zero_grasp_env_lock=%s\n' "$ZERO_GRASP_ENV_LOCK_RESOLVED"
+    printf 'zero_grasp_env_lock_sha256=%s\n' "$ZERO_GRASP_ENV_LOCK_SHA256"
+  } >> "$RUN_ROOT/job_context.env"
+fi
+
 command -v nvidia-smi >/dev/null 2>&1 || die 'nvidia-smi is unavailable inside the allocation'
 nvidia-smi -L
 "$PYTHON" -c 'import torch; assert torch.cuda.is_available(), "CUDA is unavailable"; print("CUDA smoke OK", torch.cuda.get_device_name(0))'
@@ -275,7 +490,7 @@ run_suite sealed_randomized "$RANDOMIZED_ROOT" 1
 [[ -s "$VANILLA_ROOT/arrow_pick_place_matrix_summary.json" ]] || die 'vanilla summary is missing'
 [[ -s "$RANDOMIZED_ROOT/arrow_pick_place_matrix_summary.json" ]] || die 'sealed-randomized summary is missing'
 
-"$PYTHON" - "$VANILLA_ROOT/arrow_pick_place_matrix_summary.json" "$RANDOMIZED_ROOT/arrow_pick_place_matrix_summary.json" "$COMBINED_SUMMARY" "$expected_cells_per_suite" "$expected_cells_total" "$CONTROLLER_VARIANT" "$CONTROLLER_CONFIG_PATH" "$CONTROLLER_CONFIG_FILE_SHA256" "$CONTROLLER_CONFIG_HASH" <<'PY'
+"$PYTHON" - "$VANILLA_ROOT/arrow_pick_place_matrix_summary.json" "$RANDOMIZED_ROOT/arrow_pick_place_matrix_summary.json" "$COMBINED_SUMMARY" "$expected_cells_per_suite" "$expected_cells_total" "$CONTROLLER_VARIANT" "$CONTROLLER_CONFIG_PATH" "$CONTROLLER_CONFIG_FILE_SHA256" "$CONTROLLER_CONFIG_HASH" "$ZERO_GRASP_SELECTED" "$ZERO_GRASP_ROOT_RESOLVED" "$ZERO_GRASP_REVISION" "$ZERO_GRASP_PYTHON_RESOLVED" "$ZERO_GRASP_PYTHON_SHA256" "$ZERO_GRASP_WORKER_RESOLVED" "$ZERO_GRASP_WORKER_SHA256" "$ZERO_GRASP_CHECKPOINT_RESOLVED" "$ZERO_GRASP_CHECKPOINT_SHA256" "$ZERO_GRASP_CONFIG_RESOLVED" "$ZERO_GRASP_CONFIG_SHA256" "$ZERO_GRASP_ENV_LOCK_RESOLVED" "$ZERO_GRASP_ENV_LOCK_SHA256" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -290,6 +505,19 @@ from pathlib import Path
     config_path,
     config_file_sha256,
     config_hash,
+    zerograsp_selected,
+    zerograsp_root,
+    zerograsp_revision,
+    zerograsp_python,
+    zerograsp_python_sha256,
+    zerograsp_worker,
+    zerograsp_worker_sha256,
+    zerograsp_checkpoint,
+    zerograsp_checkpoint_sha256,
+    zerograsp_config,
+    zerograsp_config_sha256,
+    zerograsp_env_lock,
+    zerograsp_env_lock_sha256,
 ) = sys.argv[1:]
 expected_each = int(expected_each)
 expected_total = int(expected_total)
@@ -359,6 +587,22 @@ combined = {
         for mode, path in (("vanilla", vanilla_path), ("sealed_randomized", randomized_path))
     },
 }
+if zerograsp_selected == "1":
+    combined["zerograsp_runtime"] = {
+        "selected": True,
+        "root": zerograsp_root,
+        "revision": zerograsp_revision,
+        "python": zerograsp_python,
+        "python_sha256": zerograsp_python_sha256,
+        "worker": zerograsp_worker,
+        "worker_sha256": zerograsp_worker_sha256,
+        "checkpoint": zerograsp_checkpoint,
+        "checkpoint_sha256": zerograsp_checkpoint_sha256,
+        "config": zerograsp_config,
+        "config_sha256": zerograsp_config_sha256,
+        "env_lock": zerograsp_env_lock or None,
+        "env_lock_sha256": zerograsp_env_lock_sha256 or None,
+    }
 Path(combined_path).write_text(json.dumps(combined, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 

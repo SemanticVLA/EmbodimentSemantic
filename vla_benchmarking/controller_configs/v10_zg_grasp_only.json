@@ -1,0 +1,18 @@
+{
+  "extends": "v9_patient_base.json",
+  "name": "libero_spatial_akita_bowl_agentview_v10_zg_grasp_only",
+  "grasp_provider": "zerograsp",
+  "placement_provider": "classical",
+  "zerograsp": {
+    "fixed_seed": 0,
+    "max_candidates": 16,
+    "eef_calibration_verified": false,
+    "R_grasp_eef": [[0, 0, 1], [0, 1, 0], [-1, 0, 0]],
+    "tip_to_eef_residual_m": [0, 0, 0],
+    "R_H_E": [[0, 1, 0], [-1, 0, 0], [0, 0, 1]],
+    "translation_rule": "center_plus_depth_x_then_R_G_E_delta_E_v1",
+    "calibration_source": "UNVERIFIED_PENDING_LIVE_PROBE",
+    "calibration_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "probe_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

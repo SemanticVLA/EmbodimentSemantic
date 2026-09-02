@@ -183,7 +183,8 @@ PREFLIGHT="$REPO_ROOT/vla_benchmarking/legion/preflight_zerograsp_process.py"
 # legacy worker --handshake flag it exercises process startup and readiness.
 preflight_reply="$($PYTHON "$PREFLIGHT" \
   --python "$PYTHON" --worker "$WORKER" --repo "$ZERO_GRASP_ROOT" \
-  --checkpoint "$CHECKPOINT" --config "$CONFIG" --timeout-s 20)" \
+  --checkpoint "$CHECKPOINT" --checkpoint-sha256 "$CHECKPOINT_SHA" \
+  --config "$CONFIG" --timeout-s 20)" \
   || die 'ZeroGrasp process ready/close preflight failed'
 printf '%s\n' "$preflight_reply" > "$ARCHIVE_ROOT/zerograsp_process_preflight.json"
 "$PYTHON" - "$preflight_reply" <<'PY'
