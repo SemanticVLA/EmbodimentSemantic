@@ -690,6 +690,18 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
     with pytest.raises(ValueError, match="reserved for the candidate"):
         runner.ControllerVariantConfig(name=runner.DEFAULT_PROFILE_NAME, approach_tolerance_m=0.02)
 
+    v2 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert v2.max_mask_fraction_for_motion == pytest.approx(0.40)
+    assert v2.workspace_bounds_m["z"] == (0.0, 1.8)
+    assert v2.hash != candidate.hash
+    with pytest.raises(ValueError, match="cannot exceed 1.8"):
+        runner.ControllerVariantConfig(
+            name=runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
+            workspace_bounds_m={"x": (-1, 1), "y": (-1, 1), "z": (0, 1.81)},
+        )
+
 
 def test_endpoint_depth_statistic_selection_is_deterministic(runner):
     depth = np.ones((5, 5), dtype=np.float32)
@@ -727,6 +739,54 @@ def test_endpoint_depth_statistics_and_candidate_tolerance_are_audited(
     assert audit["endpoint_depth_statistics"]["source_tail"]["statistic"] == "lower_quantile"
     assert audit["controller_variant"]["canonical"]["approach_tolerance_m"] == 0.02
     assert audit["phases"][1]["policy"]["tolerance_m"] == 0.02
+
+
+def test_v2_mask_gate_and_workspace_override_are_audited(
+    runner, monkeypatch, tmp_path: Path
+):
+    _patch_episode_controller(runner, monkeypatch)
+    base = _episode_capture(runner)
+    capture = runner.CapturedRGBD(
+        base.rgb,
+        base.normalized_depth,
+        base.metric_depth,
+        base.calibration,
+        base.observation,
+        "normalized_masked",
+        {"masked_pixel_count": 22, "total_pixel_count": 64, "masked_fraction": 22 / 64},
+    )
+    with pytest.raises(RuntimeError, match="sanitization policy rejected"):
+        runner.run_episode(
+            env=_MotionEnv(),
+            task_id=0,
+            seed=1000,
+            resolution=256,
+            output_dir=tmp_path / "default",
+            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+            capture=capture,
+            dry_run=False,
+            stop_after_phase="pregrasp",
+        )
+
+    v2 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    env = _MotionEnv()
+    audit = runner.run_episode(
+        env=env,
+        task_id=0,
+        seed=1000,
+        resolution=256,
+        output_dir=tmp_path / "v2",
+        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+        capture=capture,
+        dry_run=False,
+        stop_after_phase="pregrasp",
+        controller_variant=v2,
+    )
+    assert audit["depth_sanitization_policy"]["max_mask_fraction"] == pytest.approx(0.40)
+    assert audit["workspace_bounds_m"]["z"] == [0.0, 1.8]
+    assert audit["workspace_validation"]["bounds_m"]["z"] == [0.0, 1.8]
 
 
 def test_randomization_dimensions_are_task_actual_not_suite_wide(runner):

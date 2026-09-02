@@ -72,6 +72,7 @@ DEFAULT_SUBJECT = "akita_black_bowl_1"
 # simulator object coordinates.
 DEFAULT_PROFILE_NAME = "libero_spatial_akita_bowl_agentview_v1"
 CANDIDATE_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v1"
+CANDIDATE_V2_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -147,7 +148,14 @@ DEFAULT_ENDPOINT_DEPTH_QUANTILE = 0.25
 CANDIDATE_ENDPOINT_DEPTH_STATISTIC = "lower_quantile"
 CANDIDATE_ENDPOINT_DEPTH_QUANTILE = 0.25
 CANDIDATE_APPROACH_TOLERANCE_M = 0.015
+CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION = 0.40
+CANDIDATE_V2_WORKSPACE_BOUNDS_M = {
+    "x": WORKSPACE_BOUNDS_M["x"],
+    "y": WORKSPACE_BOUNDS_M["y"],
+    "z": (WORKSPACE_BOUNDS_M["z"][0], 1.8),
+}
 MAX_APPROACH_TOLERANCE_M = 0.025
+MAX_MASK_FRACTION_FOR_MOTION = 0.50
 
 
 @dataclass(frozen=True)
@@ -171,6 +179,8 @@ class ControllerVariantConfig:
     endpoint_depth_statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC
     endpoint_depth_quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE
     approach_tolerance_m: float | None = None
+    max_mask_fraction_for_motion: float | None = None
+    workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
 
     def __post_init__(self) -> None:
         if self.suite_mode not in SUITE_MODES:
@@ -194,7 +204,22 @@ class ControllerVariantConfig:
                 f"approach_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
             )
         if self.approach_tolerance_m is not None and self.name != CANDIDATE_CONTROLLER_VARIANT_NAME:
-            raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
+            if self.name != CANDIDATE_V2_CONTROLLER_VARIANT_NAME:
+                raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
+        if self.max_mask_fraction_for_motion is not None and (
+            not np.isfinite(float(self.max_mask_fraction_for_motion))
+            or not 0.0 <= float(self.max_mask_fraction_for_motion) <= MAX_MASK_FRACTION_FOR_MOTION
+        ):
+            raise ValueError(
+                f"max_mask_fraction_for_motion must be in [0, {MAX_MASK_FRACTION_FOR_MOTION}]"
+            )
+        if self.workspace_bounds_m is not None:
+            for axis in ("x", "y", "z"):
+                limits = np.asarray(self.workspace_bounds_m.get(axis, ()), dtype=np.float64).reshape(-1)
+                if limits.shape != (2,) or not np.isfinite(limits).all() or limits[0] > limits[1]:
+                    raise ValueError(f"workspace_bounds_m[{axis!r}] must be two finite ordered values")
+            if float(self.workspace_bounds_m["z"][1]) > 1.8:
+                raise ValueError("workspace_bounds_m z max cannot exceed 1.8 m")
 
     def canonical(self) -> dict[str, Any]:
         return {
@@ -211,6 +236,16 @@ class ControllerVariantConfig:
             "endpoint_depth_quantile": float(self.endpoint_depth_quantile),
             "approach_tolerance_m": (
                 None if self.approach_tolerance_m is None else float(self.approach_tolerance_m)
+            ),
+            "max_mask_fraction_for_motion": (
+                None if self.max_mask_fraction_for_motion is None
+                else float(self.max_mask_fraction_for_motion)
+            ),
+            "workspace_bounds_m": (
+                None if self.workspace_bounds_m is None else {
+                    axis: [float(value) for value in self.workspace_bounds_m[axis]]
+                    for axis in ("x", "y", "z")
+                }
             ),
         }
 
@@ -242,14 +277,19 @@ def _resolve_controller_variant(
     endpoint_depth_statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC,
     endpoint_depth_quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE,
     approach_tolerance_m: float | None = None,
+    max_mask_fraction_for_motion: float | None = None,
+    workspace_bounds_m: Mapping[str, Sequence[float]] | None = None,
 ) -> ControllerVariantConfig:
     if isinstance(value, ControllerVariantConfig):
         return value
     name = str(value) if value is not None else DEFAULT_PROFILE_NAME
-    if name == CANDIDATE_CONTROLLER_VARIANT_NAME:
+    if name in {CANDIDATE_CONTROLLER_VARIANT_NAME, CANDIDATE_V2_CONTROLLER_VARIANT_NAME}:
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+    if name == CANDIDATE_V2_CONTROLLER_VARIANT_NAME:
+        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
     return ControllerVariantConfig(
         name=name,
         suite_mode=suite_mode,
@@ -260,6 +300,8 @@ def _resolve_controller_variant(
         endpoint_depth_statistic=endpoint_depth_statistic,
         endpoint_depth_quantile=endpoint_depth_quantile,
         approach_tolerance_m=approach_tolerance_m,
+        max_mask_fraction_for_motion=max_mask_fraction_for_motion,
+        workspace_bounds_m=workspace_bounds_m,
     )
 
 
@@ -1393,6 +1435,19 @@ def run_episode(
     recovery_steps = int(variant.recovery_steps)
     endpoint_depth_statistic = variant.endpoint_depth_statistic
     endpoint_depth_quantile = float(variant.endpoint_depth_quantile)
+    max_mask_fraction_for_motion = (
+        MAX_NORMALIZED_MASK_FRACTION
+        if variant.max_mask_fraction_for_motion is None
+        else float(variant.max_mask_fraction_for_motion)
+    )
+    workspace_bounds = {
+        axis: tuple(limits)
+        for axis, limits in (
+            variant.workspace_bounds_m.items()
+            if variant.workspace_bounds_m is not None
+            else WORKSPACE_BOUNDS_M.items()
+        )
+    }
     if resolution <= 0:
         raise ValueError("resolution must be positive")
     if gripper_dwell_steps <= 0:
@@ -1466,7 +1521,7 @@ def run_episode(
             # Diagnostics must not change the established decoder contract.
             arrow_decode_audit.update({"success": None, "error": str(exc)})
     depth_sanitization_policy = assess_depth_sanitization_for_motion(
-        capture, (source_uv, target_uv)
+        capture, (source_uv, target_uv), max_mask_fraction=max_mask_fraction_for_motion
     )
     setattr(env, "_arrow_depth_sanitization_policy", dict(depth_sanitization_policy))
     if not dry_run and depth_sanitization_policy["status"] == "rejected":
@@ -1551,9 +1606,13 @@ def run_episode(
                 "source_grasp_target": bowl_point,
                 "destination_release_target": destination_point,
                 **waypoint_points,
-            }
+            },
+            bounds=workspace_bounds,
         )
         workspace_validation["status"] = "passed"
+    workspace_validation["bounds_m"] = {
+        axis: list(limits) for axis, limits in workspace_bounds.items()
+    }
 
     phase_policies = {name: dict(policy) for name, policy in PHASE_POLICIES.items()}
     if variant.approach_tolerance_m is not None:
@@ -1702,6 +1761,7 @@ def run_episode(
         "environment_audit": getattr(env, "_arrow_environment_audit", None),
         "capture_contract": capture_contract,
         "depth_sanitization_policy": depth_sanitization_policy,
+        "workspace_bounds_m": {axis: list(limits) for axis, limits in workspace_bounds.items()},
         "profile": {
             "name": DEFAULT_PROFILE_NAME,
             "verified_conditions": profile["verified"],
@@ -2020,7 +2080,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--recovery-steps", type=int, default=DEFAULT_RECOVERY_STEPS)
     parser.add_argument(
         "--controller-variant",
-        choices=("default", CANDIDATE_CONTROLLER_VARIANT_NAME),
+        choices=("default", CANDIDATE_CONTROLLER_VARIANT_NAME, CANDIDATE_V2_CONTROLLER_VARIANT_NAME),
         default="default",
     )
     parser.add_argument(
@@ -2047,8 +2107,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    candidate_variant = args.controller_variant == CANDIDATE_CONTROLLER_VARIANT_NAME
-    variant_name = CANDIDATE_CONTROLLER_VARIANT_NAME if candidate_variant else DEFAULT_PROFILE_NAME
+    candidate_variant = args.controller_variant in {
+        CANDIDATE_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
+    }
+    candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
+    variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
     endpoint_depth_statistic = args.endpoint_depth_statistic or (
         CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
     )
@@ -2060,6 +2124,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     approach_tolerance_m = args.approach_tolerance_m
     if approach_tolerance_m is None and candidate_variant:
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+    max_mask_fraction_for_motion = (
+        CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION if candidate_v2 else None
+    )
+    workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M if candidate_v2 else None
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode
     )
@@ -2114,6 +2182,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 endpoint_depth_statistic=endpoint_depth_statistic,
                 endpoint_depth_quantile=endpoint_depth_quantile,
                 approach_tolerance_m=approach_tolerance_m,
+                max_mask_fraction_for_motion=max_mask_fraction_for_motion,
+                workspace_bounds_m=workspace_bounds_m,
             ),
             stop_after_phase=args.stop_after_phase,
             source_grasp_offset=args.source_grasp_offset,
