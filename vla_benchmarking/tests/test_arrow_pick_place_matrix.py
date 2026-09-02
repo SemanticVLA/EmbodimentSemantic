@@ -29,6 +29,28 @@ def test_default_plan_has_100_cells_unique_seeds_and_paths(matrix, tmp_path: Pat
     assert all(cell["resolution"] == 256 for cell in cells)
     assert sum(cell["profile_validated"] for cell in cells) == 1
     assert len({(cell["task_id"], cell["init_state_index"]) for cell in cells}) == 100
+    assert {cell["suite_mode"] for cell in cells} == {"vanilla"}
+    assert {cell["controller_variant"] for cell in cells} == {matrix.DEFAULT_CONTROLLER_VARIANT}
+    assert all(
+        Path(cell["output_dir"]).parts[-4:-2]
+        == ("vanilla", matrix.DEFAULT_CONTROLLER_VARIANT)
+        for cell in cells
+    )
+    randomized = matrix.plan_cells(
+        task_ids=[0], episodes_per_task=1, output_root=tmp_path,
+        suite_mode="sealed_randomized", controller_variant="rgbd_arrow_v2",
+    )[0]
+    assert randomized["profile_validated"] is False
+    assert Path(randomized["output_dir"]).parts[-4:-2] == (
+        "sealed_randomized", "rgbd_arrow_v2"
+    )
+
+
+def test_condition_labels_are_validated(matrix):
+    with pytest.raises(ValueError, match="suite_mode must be one of"):
+        matrix.plan_cells(suite_mode="random")
+    with pytest.raises(ValueError, match="controller_variant"):
+        matrix.plan_cells(controller_variant="../unsafe")
 
 
 def test_matrix_requires_explicit_motion_or_dry_run(matrix):
@@ -63,6 +85,52 @@ def test_cli_requires_mode_and_parses_safety_flags(matrix):
     assert execute.execute_motion is True and execute.dry_run is False
     assert execute.allow_unvalidated_profile is True and execute.resume is True
     assert matrix.parse_args(["--execute-motion", "--allow-unvalidated-profile", "--continue-on-motion-failure"]).continue_on_motion_failure is True
+    condition = matrix.parse_args([
+        "--dry-run", "--suite-mode", "sealed_randomized",
+        "--controller-variant", "rgbd_arrow_v2",
+    ])
+    assert condition.suite_mode == "sealed_randomized"
+    assert condition.controller_variant == "rgbd_arrow_v2"
+
+
+def test_condition_metadata_is_forwarded_only_when_seam_accepts_it(matrix, tmp_path: Path):
+    seen = {}
+
+    class Env:
+        def close(self):
+            pass
+
+    def build_env(task_id, seed, resolution, suite_mode):
+        seen["builder"] = (task_id, seed, resolution, suite_mode)
+        return Env()
+
+    def build_inputs(env, task_id, resolution, suite_mode, controller_variant):
+        seen["inputs"] = (suite_mode, controller_variant)
+        return {}
+
+    def episode_runner(**kwargs):
+        seen["episode"] = (kwargs["suite_mode"], kwargs["controller_variant"])
+        return {"evaluator_success": None, "motion_executed": False}
+
+    summary = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[0], episodes_per_task=1, dry_run=True,
+        suite_mode="sealed_randomized", controller_variant="rgbd_arrow_v2",
+        env_builder=build_env, arrow_input_builder=build_inputs,
+        episode_runner=episode_runner,
+    )
+    assert seen["builder"] == (0, 1000, 256, "sealed_randomized")
+    assert seen["inputs"] == ("sealed_randomized", "rgbd_arrow_v2")
+    assert seen["episode"] == ("sealed_randomized", "rgbd_arrow_v2")
+    assert summary["suite_mode"] == "sealed_randomized"
+    assert summary["controller_variant"] == "rgbd_arrow_v2"
+    assert summary["protocol"]["condition_label"] == "sealed_randomized__rgbd_arrow_v2"
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    assert status["suite_mode"] == "sealed_randomized"
+    assert status["controller_variant"] == "rgbd_arrow_v2"
+    record = status["cells"][0]
+    assert record["suite_mode"] == "sealed_randomized"
+    assert record["controller_variant"] == "rgbd_arrow_v2"
 
 
 def test_matrix_writes_complete_plan_manifest_before_build_and_continues_failures(

@@ -14,6 +14,7 @@ reviewing the generated artifacts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import time
@@ -34,14 +35,29 @@ except ImportError:  # pragma: no cover - dependency-free import guard
     _settle_physics = None
 
 try:
-    from arrow_controller import (
+    # Prefer package-relative imports so ``vla_benchmarking`` callers use the
+    # same pure controller seam as the direct Legion script entrypoint.
+    from .arrow_controller import (
         build_bowl_waypoints,
         decode_arrow,
+        decode_arrow_diagnostics,
         deproject_endpoint,
+        refine_rgbd_endpoint,
         normalized_osc_action,
     )
-except ImportError:  # pragma: no cover - a clear error is raised on use
-    build_bowl_waypoints = decode_arrow = deproject_endpoint = normalized_osc_action = None
+except (ImportError, ValueError):  # pragma: no cover - direct script fallback
+    try:
+        from arrow_controller import (
+            build_bowl_waypoints,
+            decode_arrow,
+            decode_arrow_diagnostics,
+            deproject_endpoint,
+            refine_rgbd_endpoint,
+            normalized_osc_action,
+        )
+    except ImportError:  # pragma: no cover - a clear error is raised on use
+        build_bowl_waypoints = decode_arrow = decode_arrow_diagnostics = None
+        deproject_endpoint = refine_rgbd_endpoint = normalized_osc_action = None
 
 
 CAMERA_NAME = "agentview"
@@ -103,7 +119,104 @@ PHASE_WAYPOINT_INDEX = {
     "open": 4,
     "retreat": 5,
 }
+# Named policy metadata is kept separate from controller geometry.  Callers can
+# still override the common timeout, while the audit records the intended
+# phase-specific tolerance and action role.
+PHASE_POLICIES = {
+    "pregrasp": {"role": "transit", "tolerance_m": 0.015},
+    "descend": {"role": "approach", "tolerance_m": 0.010},
+    "close": {"role": "grasp_dwell", "tolerance_m": None},
+    "lift": {"role": "carry_clearance", "tolerance_m": 0.015},
+    "preplace": {"role": "transit", "tolerance_m": 0.015},
+    "descend_place": {"role": "approach", "tolerance_m": 0.010},
+    "open": {"role": "release_dwell", "tolerance_m": None},
+    "retreat": {"role": "retreat", "tolerance_m": 0.015},
+}
 DEFAULT_OSC_SCALES = (0.05, 0.05, 0.05, 0.5, 0.5, 0.5)
+SUITE_MODES = ("vanilla", "sealed_randomized")
+DEFAULT_SUITE_MODE = "vanilla"
+DEFAULT_STALL_WINDOW_STEPS = 10
+DEFAULT_STALL_DELTA_M = 1e-4
+DEFAULT_RECOVERY_ATTEMPTS = 1
+DEFAULT_RECOVERY_STEPS = 3
+
+
+@dataclass(frozen=True)
+class ControllerVariantConfig:
+    """Canonical, hashable controller/runtime configuration provenance.
+
+    The hash covers control policy knobs, not observations or simulator state.
+    This makes paired runs auditable while preserving the old function-level
+    arguments as the compatibility surface.
+    """
+
+    name: str = DEFAULT_PROFILE_NAME
+    controller: str = "OSC_POSE"
+    suite_mode: str = DEFAULT_SUITE_MODE
+    phase_timeout_steps: int = 80
+    gripper_dwell_steps: int = DEFAULT_GRIPPER_DWELL_STEPS
+    stall_window_steps: int = DEFAULT_STALL_WINDOW_STEPS
+    stall_delta_m: float = DEFAULT_STALL_DELTA_M
+    recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS
+    recovery_steps: int = DEFAULT_RECOVERY_STEPS
+
+    def __post_init__(self) -> None:
+        if self.suite_mode not in SUITE_MODES:
+            raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {self.suite_mode!r}")
+        if self.phase_timeout_steps <= 0 or self.gripper_dwell_steps <= 0:
+            raise ValueError("controller phase and gripper step limits must be positive")
+        if self.stall_window_steps < 0 or self.stall_delta_m < 0 or self.recovery_attempts < 0 or self.recovery_steps < 0:
+            raise ValueError("stall/recovery limits must be non-negative")
+
+    def canonical(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "controller": self.controller,
+            "suite_mode": self.suite_mode,
+            "phase_timeout_steps": int(self.phase_timeout_steps),
+            "gripper_dwell_steps": int(self.gripper_dwell_steps),
+            "stall_window_steps": int(self.stall_window_steps),
+            "stall_delta_m": float(self.stall_delta_m),
+            "recovery_attempts": int(self.recovery_attempts),
+            "recovery_steps": int(self.recovery_steps),
+        }
+
+    @property
+    def config_hash(self) -> str:
+        payload = json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @property
+    def hash(self) -> str:
+        """Short compatibility spelling for callers storing variant hashes."""
+        return self.config_hash
+
+    def canonical_json(self) -> str:
+        return json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"))
+
+    def provenance(self) -> dict[str, Any]:
+        return {"canonical": self.canonical(), "config_hash": self.config_hash}
+
+
+def _resolve_controller_variant(
+    value: ControllerVariantConfig | str | None,
+    *,
+    suite_mode: str,
+    phase_timeout_steps: int = 80,
+    gripper_dwell_steps: int = DEFAULT_GRIPPER_DWELL_STEPS,
+    recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
+    recovery_steps: int = DEFAULT_RECOVERY_STEPS,
+) -> ControllerVariantConfig:
+    if isinstance(value, ControllerVariantConfig):
+        return value
+    return ControllerVariantConfig(
+        name=str(value) if value is not None else DEFAULT_PROFILE_NAME,
+        suite_mode=suite_mode,
+        phase_timeout_steps=phase_timeout_steps,
+        gripper_dwell_steps=gripper_dwell_steps,
+        recovery_attempts=recovery_attempts,
+        recovery_steps=recovery_steps,
+    )
 
 
 @dataclass(frozen=True)
@@ -374,11 +487,17 @@ def _endpoint(value: Any, names: Sequence[str]) -> np.ndarray:
     raise ValueError(f"arrow controller did not return an endpoint with fields {names}")
 
 
-def decode_arrow_pixels(clean_rgb: np.ndarray, arrow_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def decode_arrow_pixels(
+    clean_rgb: np.ndarray,
+    arrow_rgb: np.ndarray,
+    *,
+    encoding: str | Any | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Decode source-tail and destination-head pixels from the arrow controller."""
-    decoded = _call_controller(
-        _require(decode_arrow, "decode_arrow"), clean_rgb=clean_rgb, arrow_rgb=arrow_rgb
-    )
+    kwargs = {"clean_rgb": clean_rgb, "arrow_rgb": arrow_rgb}
+    if encoding is not None:
+        kwargs["encoding"] = encoding
+    decoded = _call_controller(_require(decode_arrow, "decode_arrow"), **kwargs)
     source = _endpoint(decoded, ("source_uv", "tail_uv", "source", "tail", "source_xy"))
     target = _endpoint(decoded, ("target_uv", "head_uv", "destination_uv", "target", "head", "target_xy"))
     if source.shape != (2,) or target.shape != (2,):
@@ -395,6 +514,37 @@ def _depth_at(depth: np.ndarray, uv: np.ndarray, radius: int = 2) -> float:
     if valid.size == 0:
         raise ValueError(f"no valid metric depth near arrow endpoint {(u, v)}")
     return float(np.median(valid))
+
+
+def _refine_or_deproject_endpoint(
+    pixel: np.ndarray,
+    depth: float,
+    K: Any,
+    T_world_camera: Any,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Use the stable RGBD refinement API when available, preserving test seams."""
+    if (
+        refine_rgbd_endpoint is not None
+        and str(getattr(deproject_endpoint, "__module__", "")).endswith("arrow_controller")
+    ):
+        refined = refine_rgbd_endpoint(pixel, depth, K, T_world_camera)
+        world = np.asarray(refined.world_xyz, dtype=np.float64).reshape(-1)
+        return world, {
+            "method": refined.method,
+            "pixel_provenance": refined.pixel_provenance,
+            "depth_provenance": refined.depth_provenance,
+        }
+    world = np.asarray(
+        _require(deproject_endpoint, "deproject_endpoint")(
+            pixel, depth, K, T_world_camera
+        ),
+        dtype=np.float64,
+    ).reshape(-1)
+    return world, {
+        "method": "runner_deproject_endpoint_with_robust_depth_scalar",
+        "pixel_provenance": "runner_decoded_arrow_endpoint",
+        "depth_provenance": "runner_depth_at_median_patch",
+    }
 
 
 def validate_capture_contract(
@@ -590,6 +740,9 @@ def _run_motion(
     dry_run: bool,
     phase_frame_callback: Callable[[str, int], str | Path | None] | None = None,
     motion_started_callback: Callable[[], None] | None = None,
+    stall_window_steps: int = DEFAULT_STALL_WINDOW_STEPS,
+    stall_delta_m: float = DEFAULT_STALL_DELTA_M,
+    phase_policies: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if phase_timeout_steps <= 0:
         raise ValueError("phase_timeout_steps must be positive")
@@ -597,6 +750,9 @@ def _run_motion(
         raise ValueError("gripper_dwell_steps must be positive")
     if stop_after_phase not in PHASES:
         raise ValueError(f"stop_after_phase must be one of {PHASES}, got {stop_after_phase!r}")
+    if stall_window_steps < 0 or stall_delta_m < 0 or not np.isfinite(stall_delta_m):
+        raise ValueError("stall_window_steps and stall_delta_m must be finite and non-negative")
+    policies = phase_policies or PHASE_POLICIES
     # Preserve a failure-safe motion marker for batch diagnostics.  A phase can
     # fail during its first simulator step, before an episode audit is written;
     # the matrix runner must still distinguish "motion never began" from a
@@ -615,6 +771,10 @@ def _run_motion(
         waypoint = _phase_waypoint(waypoints, phase)
         gripper = 1.0 if phase == "close" else -1.0 if phase == "open" else 0.0
         is_gripper_phase = phase in {"close", "open"}
+        phase_tolerance = policies.get(phase, {}).get("tolerance_m", WAYPOINT_POSITION_TOLERANCE_M)
+        if phase_tolerance is None:
+            phase_tolerance = WAYPOINT_POSITION_TOLERANCE_M
+        phase_tolerance = float(phase_tolerance)
         required_steps = gripper_dwell_steps if is_gripper_phase else phase_timeout_steps
         record = {
             "phase": phase,
@@ -622,7 +782,9 @@ def _run_motion(
             "status": "dry_run" if dry_run else "pending",
             "gripper_command": float(gripper),
             "dwell_steps": int(gripper_dwell_steps) if is_gripper_phase else 0,
+            "policy": dict(policies.get(phase, {})),
         }
+        error_history: list[float] = []
         for step in range(required_steps):
             action = normalized_action_for_waypoint(
                 proprio, waypoint, gripper=gripper, held_rotation=held_rotation
@@ -650,9 +812,24 @@ def _run_motion(
                 if step + 1 >= gripper_dwell_steps:
                     record["status"] = "dwell"
                     break
-            elif np.linalg.norm(_position(waypoint) - proprio["eef_pos"][:3]) < WAYPOINT_POSITION_TOLERANCE_M:
+            elif np.linalg.norm(_position(waypoint) - proprio["eef_pos"][:3]) < phase_tolerance:
                 record["status"] = "reached"
                 break
+            elif stall_window_steps and "eef_pos" in proprio:
+                error = float(np.linalg.norm(_position(waypoint)[:3] - proprio["eef_pos"][:3]))
+                error_history.append(error)
+                if (
+                    len(error_history) >= stall_window_steps
+                    and max(error_history[-stall_window_steps:])
+                    - min(error_history[-stall_window_steps:]) <= stall_delta_m
+                ):
+                    record["status"] = "stall"
+                    record["stall_window_steps"] = int(stall_window_steps)
+                    record["stall_delta_m"] = float(stall_delta_m)
+                    record["position_error_norm_m"] = error
+                    phase_audit.append(record)
+                    setattr(env, "_arrow_phase_audit", phase_audit)
+                    raise TimeoutError(f"phase {phase} stalled for {stall_window_steps} steps")
         else:
             record["status"] = "timeout"
             if "eef_pos" in proprio:
@@ -760,6 +937,69 @@ def _save_capture(capture: CapturedRGBD, arrow_rgb: np.ndarray, output_dir: Path
     return {name: path.as_posix() for name, path in paths.items()}
 
 
+def recover_grasp_or_release(
+    env: Any,
+    arrow_rgb: np.ndarray,
+    *,
+    phase: str,
+    resolution: int,
+    arrow_encoding: str | Any | None = None,
+    source_grasp_offset: Sequence[float] = DEFAULT_SOURCE_GRASP_OFFSET_M,
+    destination_release_offset: Sequence[float] = DEFAULT_DESTINATION_RELEASE_OFFSET_M,
+) -> dict[str, Any]:
+    """Re-observe a stalled grasp/release using only RGB-D, arrow pixels, and EEF state.
+
+    This helper deliberately returns a bounded recovery proposal; it never reads
+    simulator object poses or evaluator state. A caller may approve the proposal
+    through ``recovery_callback`` in :func:`run_episode`.
+    """
+    if phase not in {"close", "open"}:
+        raise ValueError("RGB-D recovery is only defined for close/open phases")
+    recapture = capture_agentview(env, resolution=resolution)
+    contract = validate_capture_contract(recapture, resolution=resolution)
+    source_uv, target_uv = decode_arrow_pixels(
+        recapture.rgb, arrow_rgb, encoding=arrow_encoding
+    )
+    source_depth = _depth_at(recapture.metric_depth, source_uv)
+    target_depth = _depth_at(recapture.metric_depth, target_uv)
+    source_point, source_refinement = _refine_or_deproject_endpoint(
+        source_uv, source_depth, recapture.calibration.intrinsic,
+        recapture.calibration.world_from_camera,
+    )
+    target_point, target_refinement = _refine_or_deproject_endpoint(
+        target_uv, target_depth, recapture.calibration.intrinsic,
+        recapture.calibration.world_from_camera,
+    )
+    proprio = _proprioception(recapture.observation)
+    if source_point.shape != (3,) or target_point.shape != (3,):
+        raise ValueError("recovery deprojection must return finite 3D points")
+    return {
+        "phase": phase,
+        "capture_contract": contract,
+        "arrow_endpoints_uv": {
+            "source_tail": source_uv.tolist(), "destination_head": target_uv.tolist()
+        },
+        "endpoint_depths_m": {
+            "source_tail": float(source_depth), "destination_head": float(target_depth)
+        },
+        "deprojected_visual_endpoint_world_points_m": {
+            "source_tail": source_point.tolist(), "destination_head": target_point.tolist()
+        },
+        "control_targets_world_m": {
+            "source_grasp": (source_point + np.asarray(source_grasp_offset, dtype=np.float64)).tolist(),
+            "destination_release": (target_point + np.asarray(destination_release_offset, dtype=np.float64)).tolist(),
+        },
+        "endpoint_refinement": {
+            "source_tail": source_refinement,
+            "destination_head": target_refinement,
+        },
+        "eef_pos_m": proprio.get("eef_pos", np.asarray([], dtype=np.float64)).tolist(),
+        "eef_quat": proprio.get("eef_quat", np.asarray([], dtype=np.float64)).tolist(),
+        "gripper_qpos": proprio.get("gripper_qpos", np.asarray([], dtype=np.float64)).tolist(),
+        "source": "rgbd_recapture_arrow_roi_proprioception",
+    }
+
+
 def run_episode(
     *,
     env: Any,
@@ -772,6 +1012,7 @@ def run_episode(
     resolution: int = DEFAULT_RESOLUTION,
     goal_object: str = DEFAULT_GOAL_OBJECT,
     subject: str = DEFAULT_SUBJECT,
+    arrow_encoding: str | Any | None = None,
     phase_timeout_steps: int = 80,
     gripper_dwell_steps: int = DEFAULT_GRIPPER_DWELL_STEPS,
     stop_after_phase: str = "retreat",
@@ -782,8 +1023,36 @@ def run_episode(
     capture: CapturedRGBD | None = None,
     allow_unvalidated_profile: bool = False,
     motion_started_callback: Callable[[], None] | None = None,
+    controller_variant: ControllerVariantConfig | str | None = None,
+    suite_mode: str | None = None,
+    recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
+    recovery_steps: int = DEFAULT_RECOVERY_STEPS,
+    recovery_callback: Callable[[str, Mapping[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     """Capture, decode, and optionally execute one bounded arrow episode."""
+    variant_suite_mode = (
+        controller_variant.suite_mode
+        if isinstance(controller_variant, ControllerVariantConfig)
+        else DEFAULT_SUITE_MODE
+    )
+    requested_suite_mode = suite_mode or variant_suite_mode
+    variant = _resolve_controller_variant(
+        controller_variant,
+        suite_mode=requested_suite_mode,
+        phase_timeout_steps=phase_timeout_steps,
+        gripper_dwell_steps=gripper_dwell_steps,
+        recovery_attempts=recovery_attempts,
+        recovery_steps=recovery_steps,
+    )
+    suite_mode = requested_suite_mode
+    if suite_mode not in SUITE_MODES:
+        raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {suite_mode!r}")
+    if variant.suite_mode != suite_mode:
+        raise ValueError("controller_variant.suite_mode must match suite_mode")
+    phase_timeout_steps = int(variant.phase_timeout_steps)
+    gripper_dwell_steps = int(variant.gripper_dwell_steps)
+    recovery_attempts = int(variant.recovery_attempts)
+    recovery_steps = int(variant.recovery_steps)
     if resolution <= 0:
         raise ValueError("resolution must be positive")
     if gripper_dwell_steps <= 0:
@@ -827,24 +1096,48 @@ def run_episode(
         if arrow_rgb.shape != capture.rgb.shape:
             raise ValueError("clean RGB and arrow RGB must have identical shape")
         arrow_audit = {"controller_input": "caller_supplied_one_arrow"}
+    arrow_audit["encoding"] = getattr(arrow_encoding, "version", arrow_encoding or "legacy")
 
     # Controller receives no bboxes, names, evaluator, or env handle.
-    source_uv, target_uv = decode_arrow_pixels(capture.rgb, arrow_rgb)
+    source_uv, target_uv = decode_arrow_pixels(
+        capture.rgb, arrow_rgb, encoding=arrow_encoding
+    )
+    arrow_decode_audit: dict[str, Any] = {"source": "decode_arrow"}
+    if decode_arrow_diagnostics is not None:
+        try:
+            decoded_diagnostics = decode_arrow_diagnostics(
+                capture.rgb, arrow_rgb, encoding=arrow_encoding
+            )
+            arrow_decode_audit.update({
+                "success": bool(
+                    getattr(
+                        decoded_diagnostics,
+                        "ok",
+                        getattr(decoded_diagnostics, "success", False),
+                    )
+                ),
+                "reason": getattr(decoded_diagnostics, "reason", None),
+                "encoding": getattr(decoded_diagnostics, "encoding_version", None),
+                "changed_pixel_count": getattr(decoded_diagnostics, "changed_pixel_count", None),
+                "component_count": getattr(decoded_diagnostics, "component_count", None),
+            })
+        except Exception as exc:
+            # Diagnostics must not change the established decoder contract.
+            arrow_decode_audit.update({"success": None, "error": str(exc)})
     source_depth = _depth_at(capture.metric_depth, source_uv)
     target_depth = _depth_at(capture.metric_depth, target_uv)
     calibration = asdict(capture.calibration)
     K = capture.calibration.intrinsic
     T_world_camera = capture.calibration.world_from_camera
-    deproject = _require(deproject_endpoint, "deproject_endpoint")
     # Deproject with the exact robust scalar depth audited below.  Passing the
     # whole depth image would allow a controller/helper to silently choose a
     # different neighborhood than the one used for provenance.
-    source_visual_point = np.asarray(
-        deproject(source_uv, source_depth, K, T_world_camera), dtype=np.float64
-    ).reshape(-1)
-    destination_visual_point = np.asarray(
-        deproject(target_uv, target_depth, K, T_world_camera), dtype=np.float64
-    ).reshape(-1)
+    source_visual_point, source_refinement = _refine_or_deproject_endpoint(
+        source_uv, source_depth, K, T_world_camera
+    )
+    destination_visual_point, destination_refinement = _refine_or_deproject_endpoint(
+        target_uv, target_depth, K, T_world_camera
+    )
     if source_visual_point.shape != (3,) or destination_visual_point.shape != (3,):
         raise ValueError("deproject_endpoint must return finite 3D points")
     source_offset = np.asarray(source_grasp_offset, dtype=np.float64).reshape(-1)
@@ -920,20 +1213,83 @@ def run_episode(
         phase_frame_paths.append(path.as_posix())
         return path
 
-    phase_audit = _run_motion(
-        env,
-        waypoints,
-        capture.observation,
-        phase_timeout_steps=phase_timeout_steps,
-        gripper_dwell_steps=gripper_dwell_steps,
-        stop_after_phase=stop_after_phase,
-        dry_run=dry_run,
-        phase_frame_callback=phase_frame_callback if not dry_run else None,
-        motion_started_callback=motion_started_callback if not dry_run else None,
-    )
+    recovery_audit: list[dict[str, Any]] = []
+    try:
+        phase_audit = _run_motion(
+            env,
+            waypoints,
+            capture.observation,
+            phase_timeout_steps=phase_timeout_steps,
+            gripper_dwell_steps=gripper_dwell_steps,
+            stop_after_phase=stop_after_phase,
+            dry_run=dry_run,
+            phase_frame_callback=phase_frame_callback if not dry_run else None,
+            motion_started_callback=motion_started_callback if not dry_run else None,
+            stall_window_steps=variant.stall_window_steps,
+            stall_delta_m=variant.stall_delta_m,
+        )
+    except TimeoutError as exc:
+        if (
+            not dry_run
+            and recovery_attempts > 0
+            and isinstance(getattr(env, "_arrow_phase_audit", None), list)
+            and env._arrow_phase_audit
+            and env._arrow_phase_audit[-1].get("phase") in {"close", "open"}
+        ):
+            phase = str(env._arrow_phase_audit[-1]["phase"])
+            for attempt in range(int(recovery_attempts)):
+                proposal = recover_grasp_or_release(
+                    env,
+                    arrow_rgb,
+                    phase=phase,
+                    resolution=resolution,
+                    arrow_encoding=arrow_encoding,
+                    source_grasp_offset=source_offset,
+                    destination_release_offset=destination_offset,
+                )
+                proposal["attempt"] = attempt + 1
+                approved = bool(recovery_callback(phase, proposal)) if recovery_callback else False
+                proposal["approved"] = approved
+                proposal["executed_steps"] = 0
+                # Built-in recovery is intentionally tiny and gripper-only:
+                # hold the latest proprioceptive EEF position while repeating
+                # the contact command. No object pose or evaluator is read.
+                if recovery_steps > 0:
+                    current_pos = np.asarray(proposal.get("eef_pos_m", []), dtype=np.float64)
+                    current_quat = np.asarray(proposal.get("eef_quat", []), dtype=np.float64)
+                    if current_pos.shape == (3,) and current_quat.size:
+                        recovery_proprio = {"eef_pos": current_pos, "eef_quat": current_quat}
+                        recovery_waypoint = {"position": current_pos}
+                        recovery_gripper = 1.0 if phase == "close" else -1.0
+                        for _ in range(recovery_steps):
+                            action = normalized_action_for_waypoint(
+                                recovery_proprio, recovery_waypoint,
+                                gripper=recovery_gripper, held_rotation=current_quat,
+                            )
+                            setattr(env, "_arrow_motion_began", True)
+                            observation, _done, _info = _step_once(env, action)
+                            recovery_proprio = _proprioception(observation)
+                            if "eef_pos" not in recovery_proprio or "eef_quat" not in recovery_proprio:
+                                break
+                            proposal["executed_steps"] += 1
+                recovery_audit.append(proposal)
+                setattr(env, "_arrow_recovery_audit", recovery_audit)
+                if approved:
+                    break
+        raise exc
     # Evaluator state is intentionally queried only after all motion phases.
     full_execution = stop_after_phase == "retreat"
-    success = None if dry_run or not full_execution else (bool(evaluator(env)) if evaluator is not None else None)
+    evaluator_error: dict[str, str] | None = None
+    if dry_run or not full_execution or evaluator is None:
+        success = None
+    else:
+        try:
+            success = bool(evaluator(env))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            success = None
+            evaluator_error = {"type": type(exc).__name__, "error": str(exc)}
     audit = {
         "schema_version": "arrow_pick_place_mvp.v1",
         "task_id": int(task_id),
@@ -945,7 +1301,11 @@ def run_episode(
         "stop_after_phase": stop_after_phase,
         "full_state_machine_completed": bool(full_execution and not dry_run),
         "gripper_dwell_steps": int(gripper_dwell_steps),
+        "controller_variant": variant.provenance(),
+        "suite_mode": suite_mode,
+        "recovery": recovery_audit,
         "settle_diagnostics": settle_diagnostics,
+        "environment_audit": getattr(env, "_arrow_environment_audit", None),
         "capture_contract": capture_contract,
         "profile": {
             "name": DEFAULT_PROFILE_NAME,
@@ -958,10 +1318,15 @@ def run_episode(
         "allow_unvalidated_profile": bool(allow_unvalidated_profile),
         "controller_input": "pixels_depth_calibration",
         "arrow": arrow_audit,
+        "arrow_decode_diagnostics": arrow_decode_audit,
         "arrow_endpoints_uv": {"source_tail": source_uv.tolist(), "destination_head": target_uv.tolist()},
         "endpoint_depths_m": {
             "source_tail": float(source_depth),
             "destination_head": float(target_depth),
+        },
+        "endpoint_refinement": {
+            "source_tail": source_refinement,
+            "destination_head": destination_refinement,
         },
         "deprojected_visual_endpoint_world_points_m": {
             "source_tail": source_visual_point.tolist(),
@@ -997,17 +1362,69 @@ def run_episode(
         },
         "phases": phase_audit,
         "evaluator_success": success,
+        "evaluator_error": evaluator_error,
         "evaluator_read_after_action": bool(not dry_run and full_execution),
         "timestamp_unix": time.time(),
     }
     audit_path = output_root / "arrow_pick_place_audit.json"
     audit_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     audit["audit_path"] = audit_path.as_posix()
+    if evaluator_error is not None:
+        raise RuntimeError(f"evaluator failure: {evaluator_error['error']}")
     return audit
 
 
-def build_libero_env(task_id: int, seed: int, resolution: int) -> Any:
-    """Construct direct LIBERO OffScreenRenderEnv with aligned camera depth."""
+def _apply_direct_swaps(inner_env: Any, task_id: int) -> dict[str, Any]:
+    """Apply configured distractor swaps and return explicit audit evidence."""
+    from config import TASK_SWAP_CONFIG
+
+    requested = [list(item) for item in TASK_SWAP_CONFIG.get(int(task_id), [])]
+    if not requested:
+        return {"requested": [], "applied": [], "skipped": []}
+    try:
+        from preview_visual_arrows import _apply_task_swaps
+
+        _apply_task_swaps(inner_env, int(task_id))
+        return {
+            "requested": requested,
+            "applied": [label for pair in requested for label in pair],
+            "skipped": [],
+            "source": "preview_visual_arrows._apply_task_swaps",
+        }
+    except ImportError:
+        from radomize_scenes import swap_objects
+
+        applied: list[str] = []
+        skipped: list[Any] = []
+        for left, right in requested:
+            result = swap_objects(inner_env, left, right, verbose=False)
+            applied.extend(result.get("applied", []))
+            skipped.extend(result.get("skipped", []))
+        if skipped or sorted(applied) != sorted(label for pair in requested for label in pair):
+            raise RuntimeError(f"configured swaps were not fully applied: {skipped}")
+        return {"requested": requested, "applied": applied, "skipped": skipped, "source": "radomize_scenes.swap_objects"}
+
+
+def build_libero_env(
+    task_id: int,
+    seed: int,
+    resolution: int,
+    *,
+    suite_mode: str | None = None,
+    controller_variant: ControllerVariantConfig | str | None = None,
+) -> Any:
+    """Construct direct LIBERO OffScreenRenderEnv with explicit suite semantics."""
+    if suite_mode is None:
+        suite_mode = (
+            controller_variant.suite_mode
+            if isinstance(controller_variant, ControllerVariantConfig)
+            else DEFAULT_SUITE_MODE
+        )
+    if suite_mode not in SUITE_MODES:
+        raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {suite_mode!r}")
+    if isinstance(controller_variant, ControllerVariantConfig) and controller_variant.suite_mode != suite_mode:
+        raise ValueError("controller_variant.suite_mode must match suite_mode")
+    variant = _resolve_controller_variant(controller_variant, suite_mode=suite_mode)
     try:
         from libero.libero import benchmark
         from libero.libero.envs import OffScreenRenderEnv
@@ -1016,7 +1433,15 @@ def build_libero_env(task_id: int, seed: int, resolution: int) -> Any:
     from config import BENCHMARK_NAME
 
     suite = benchmark.get_benchmark_dict()[BENCHMARK_NAME]()
-    bddl_file = suite.get_task_bddl_file_path(int(task_id))
+    canonical_bddl_file = suite.get_task_bddl_file_path(int(task_id))
+    removals: list[str] = []
+    bddl_file = canonical_bddl_file
+    if suite_mode == "sealed_randomized":
+        from config import TASK_REMOVE_CONFIG
+        from bddl_utils import make_filtered_bddl
+
+        removals = list(TASK_REMOVE_CONFIG.get(int(task_id), []))
+        bddl_file = make_filtered_bddl(canonical_bddl_file, removals)
     np.random.seed(seed)
     env = OffScreenRenderEnv(
         bddl_file_name=bddl_file,
@@ -1024,7 +1449,7 @@ def build_libero_env(task_id: int, seed: int, resolution: int) -> Any:
         camera_heights=int(resolution),
         camera_widths=int(resolution),
         camera_depths=True,
-        controller="OSC_POSE",
+        controller=variant.controller,
     )
     # Match render_visual_arrow_pair.py's seed/init-state setup while avoiding
     # LeRobot's terminal autoreset.  The direct wrapper owns the same init-state
@@ -1033,6 +1458,17 @@ def build_libero_env(task_id: int, seed: int, resolution: int) -> Any:
     if seed_fn is not None:
         seed_fn(int(seed))
     env.reset()
+    environment_audit: dict[str, Any] = {
+        "suite_mode": suite_mode,
+        "canonical_bddl_file": str(canonical_bddl_file),
+        "applied_bddl_file": str(bddl_file),
+        "requested_removals": removals,
+        "applied_removals": list(removals) if suite_mode == "sealed_randomized" else [],
+        "removal_source": "bddl_filter" if suite_mode == "sealed_randomized" else None,
+        "requested_swaps": [],
+        "applied_swaps": [],
+        "skipped_swaps": [],
+    }
     init_state_diagnostics = {
         "source": "seeded_reset_fallback",
         "available_count": None,
@@ -1050,25 +1486,83 @@ def build_libero_env(task_id: int, seed: int, resolution: int) -> Any:
         })
         if available_count:
             selected_index = int(seed) % int(available_count)
-            env.set_init_state(init_states[selected_index])
+            selected_state = init_states[selected_index]
+            projection = {"required": False, "projected": False, "source": "canonical_task_init_states"}
+            if suite_mode == "sealed_randomized":
+                canonical_env = OffScreenRenderEnv(
+                    bddl_file_name=canonical_bddl_file,
+                    camera_names=[CAMERA_NAME],
+                    camera_heights=int(resolution),
+                    camera_widths=int(resolution),
+                    camera_depths=True,
+                    controller=variant.controller,
+                )
+                try:
+                    canonical_env.reset()
+                    from bddl_utils import extract_joint_schema, project_init_states_by_joint_name
+
+                    source_schema = extract_joint_schema(canonical_env.sim.model)
+                    target_schema = extract_joint_schema(env.sim.model)
+                    projected_states = project_init_states_by_joint_name(
+                        np.asarray(init_states), source_schema, target_schema
+                    )
+                    selected_state = projected_states[selected_index]
+                    projection = {
+                        "required": True,
+                        "projected": True,
+                        "source": "bddl_utils.project_init_states_by_joint_name",
+                        "canonical_nq": source_schema.nq,
+                        "filtered_nq": target_schema.nq,
+                        "canonical_nv": source_schema.nv,
+                        "filtered_nv": target_schema.nv,
+                    }
+                finally:
+                    close_canonical = getattr(canonical_env, "close", None)
+                    if close_canonical is not None:
+                        close_canonical()
+            env.set_init_state(selected_state)
             init_state_diagnostics.update({
                 "selected_index": int(selected_index),
                 "fallback": False,
+                "projection": projection,
             })
-    except (ImportError, FileNotFoundError, AttributeError, TypeError):
+    except (ImportError, FileNotFoundError, AttributeError, TypeError) as exc:
         # Some lightweight LIBERO installs omit LeRobot's torch loader; the
         # seeded reset remains a valid fallback and is recorded by the caller.
+        if suite_mode == "sealed_randomized":
+            raise RuntimeError(
+                "sealed_randomized mode requires canonical init states and "
+                "joint-name projection; refusing seeded fallback"
+            ) from exc
         pass
+    if suite_mode == "sealed_randomized":
+        swaps = _apply_direct_swaps(getattr(env, "env", env), int(task_id))
+        environment_audit.update({
+            "requested_swaps": swaps.get("requested", []),
+            "applied_swaps": swaps.get("applied", []),
+            "skipped_swaps": swaps.get("skipped", []),
+            "swap_source": swaps.get("source"),
+        })
     setattr(env, "_arrow_init_state_diagnostics", init_state_diagnostics)
     try:
-        from preview_visual_arrows import _apply_task_swaps
+        from radomize_scenes import sim_state_sha256
 
-        _apply_task_swaps(env.env, int(task_id))
-    except (ImportError, KeyError):
-        pass
+        environment_audit["state_hash_sha256_pre_settle"] = sim_state_sha256(env.sim)
+    except Exception as exc:
+        environment_audit["state_hash_sha256_pre_settle"] = None
+        environment_audit["state_hash_pre_settle_error"] = str(exc)
     from config import SETTLE_STEPS_INIT
 
     settle_libero_env(env, max_steps=SETTLE_STEPS_INIT)
+    try:
+        from radomize_scenes import sim_state_sha256
+
+        environment_audit["state_hash_sha256"] = sim_state_sha256(env.sim)
+    except Exception as exc:
+        environment_audit["state_hash_sha256"] = None
+        environment_audit["state_hash_error"] = str(exc)
+    environment_audit["settle_diagnostics"] = getattr(env, "_arrow_settle_diagnostics", None)
+    setattr(env, "_arrow_environment_audit", environment_audit)
     return env
 
 
@@ -1080,6 +1574,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("arrow_pick_place_outputs"))
     parser.add_argument("--phase-timeout-steps", type=int, default=80)
     parser.add_argument("--gripper-dwell-steps", type=int, default=DEFAULT_GRIPPER_DWELL_STEPS)
+    parser.add_argument("--stall-window-steps", type=int, default=DEFAULT_STALL_WINDOW_STEPS)
+    parser.add_argument("--stall-delta-m", type=float, default=DEFAULT_STALL_DELTA_M)
+    parser.add_argument("--recovery-attempts", type=int, default=DEFAULT_RECOVERY_ATTEMPTS)
+    parser.add_argument("--recovery-steps", type=int, default=DEFAULT_RECOVERY_STEPS)
+    parser.add_argument("--suite-mode", choices=SUITE_MODES, default=DEFAULT_SUITE_MODE)
     parser.add_argument("--stop-after-phase", choices=PHASES, default="retreat")
     parser.add_argument("--source-grasp-offset", type=float, nargs=3, default=DEFAULT_SOURCE_GRASP_OFFSET_M, metavar=("DX", "DY", "DZ"))
     parser.add_argument("--destination-release-offset", type=float, nargs=3, default=DEFAULT_DESTINATION_RELEASE_OFFSET_M, metavar=("DX", "DY", "DZ"))
@@ -1096,7 +1595,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    env = build_libero_env(args.task, args.seed, args.resolution)
+    env = build_libero_env(
+        args.task, args.seed, args.resolution, suite_mode=args.suite_mode
+    )
     try:
         # Input-generation integration is intentionally explicit: a caller can
         # replace this with a human/annotated arrow PNG while the controller
@@ -1134,6 +1635,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             subject=SCENE_GRAPH_SUBJECT_FILTER,
             phase_timeout_steps=args.phase_timeout_steps,
             gripper_dwell_steps=args.gripper_dwell_steps,
+            recovery_attempts=args.recovery_attempts,
+            recovery_steps=args.recovery_steps,
+            controller_variant=ControllerVariantConfig(
+                suite_mode=args.suite_mode,
+                phase_timeout_steps=args.phase_timeout_steps,
+                gripper_dwell_steps=args.gripper_dwell_steps,
+                stall_window_steps=args.stall_window_steps,
+                stall_delta_m=args.stall_delta_m,
+                recovery_attempts=args.recovery_attempts,
+                recovery_steps=args.recovery_steps,
+            ),
             stop_after_phase=args.stop_after_phase,
             source_grasp_offset=args.source_grasp_offset,
             destination_release_offset=args.destination_release_offset,

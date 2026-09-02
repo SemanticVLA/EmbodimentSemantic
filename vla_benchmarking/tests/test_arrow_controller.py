@@ -11,13 +11,18 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from arrow_controller import (  # noqa: E402
     ArrowCommand2D,
+    ArrowEncoding,
     ArrowObservation,
+    COLOR_ENDPOINT_ARROW_ENCODING,
     BowlWaypointConfig,
     build_bowl_waypoints,
+    compute_endpoint_change_evidence,
     decode_arrow,
+    decode_arrow_diagnostics,
     deproject_endpoint,
     estimate_endpoint_depth,
     normalized_osc_action,
+    refine_rgbd_endpoint,
 )
 
 
@@ -92,6 +97,24 @@ def test_decode_rejects_two_separate_valid_arrow_components():
         decode_arrow(clean, overlay)
 
 
+def test_versioned_color_endpoint_encoding_and_diagnostics():
+    clean, overlay = _synthetic_arrow()
+    marked = overlay.copy()
+    marked[22:29, 97:104] = COLOR_ENDPOINT_ARROW_ENCODING.endpoint_color_rgb
+    command = decode_arrow(clean, marked, encoding="color_endpoint")
+    assert np.allclose(command.target_xy, (100, 25), atol=5)
+    diagnostics = decode_arrow_diagnostics(clean, marked, encoding=COLOR_ENDPOINT_ARROW_ENCODING)
+    assert diagnostics.ok
+    assert diagnostics.command == command
+    assert diagnostics.encoding_version == "color_endpoint"
+    failed = decode_arrow_diagnostics(clean, clean)
+    assert not failed.ok
+    assert failed.command is None
+    assert failed.reason and "no arrow" in failed.reason
+    with pytest.raises(ValueError, match="unsupported"):
+        ArrowEncoding(version="unknown")
+
+
 def test_decode_rejects_unpointed_and_ambiguous_overlay():
     clean = np.zeros((80, 80, 3), dtype=np.uint8)
     overlay = clean.copy()
@@ -128,6 +151,38 @@ def test_deprojection_metric_roundtrip_with_world_transform():
     outside = ArrowCommand2D((10, 10), (200, 50), 0.9, component_area=20, image_shape=(80, 100))
     with pytest.raises(ValueError, match="outside"):
         deproject_endpoint(outside, 2.0, K)
+
+
+def test_rgbd_refinement_keeps_pixel_and_depth_provenance_aligned():
+    clean, overlay = _synthetic_arrow()
+    depth = np.full((128, 128), 2.0, dtype=np.float64)
+    K = np.array([[100.0, 0, 64.0], [0, 100.0, 64.0], [0, 0, 1.0]])
+    command = decode_arrow(clean, overlay)
+    refined = refine_rgbd_endpoint(
+        command, depth, K, depth_method="trimmed_median",
+    )
+    assert refined.depth_m == pytest.approx(2.0)
+    expected_pixel = command.target_xy
+    assert refined.pixel_provenance.endswith(f"pixel_xy=({expected_pixel[0]:.3f},{expected_pixel[1]:.3f})")
+    assert refined.depth_provenance.endswith(f"pixel_xy=({expected_pixel[0]:.3f},{expected_pixel[1]:.3f})")
+    assert refined.method.endswith("trimmed_median")
+    assert refined.command == command
+    with pytest.raises(ValueError, match="resolution mismatch"):
+        refine_rgbd_endpoint(command, np.full((64, 64), 2.0), K)
+
+
+def test_endpoint_change_evidence_is_array_only_and_reports_proprioception():
+    evidence = compute_endpoint_change_evidence(
+        np.array([1.0, 2.0, 3.0]), np.array([1.1, 1.8, 3.0]),
+        before_proprioception=np.array([0.0, 0.2]),
+        after_proprioception=np.array([0.1, 0.4]),
+    )
+    assert np.allclose(evidence.endpoint_delta, (0.1, -0.2, 0.0))
+    assert np.allclose(evidence.delta, evidence.endpoint_delta)
+    assert evidence.endpoint_distance == pytest.approx(np.sqrt(0.05))
+    assert evidence.proprioception_distance == pytest.approx(np.sqrt(0.05))
+    with pytest.raises(ValueError, match="matching shapes"):
+        compute_endpoint_change_evidence(np.zeros(3), np.ones(3), before_proprioception=np.zeros(2), after_proprioception=np.zeros(3))
 
 
 def test_signed_image_aligned_intrinsics_roundtrip_libero_vertical_flip():

@@ -20,13 +20,71 @@ an explicit observation/calibration argument.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 import numpy as np
 
 
 ArrayLike = np.ndarray | Sequence[float]
+
+
+@dataclass(frozen=True)
+class ArrowEncoding:
+    """Versioned visual encoding metadata consumed by the decoder.
+
+    ``legacy`` represents the historical arrow-only overlay.  The
+    ``color_endpoint`` candidate additionally draws a small endpoint marker in
+    ``endpoint_color_rgb``.  The marker is optional at decode time; when it is
+    present it provides an unambiguous target pixel while the shaft still
+    supplies the source direction.
+    """
+
+    version: str = "legacy"
+    arrow_color_rgb: tuple[int, int, int] | None = None
+    endpoint_color_rgb: tuple[int, int, int] | None = None
+    color_tolerance: float = 18.0
+    endpoint_radius_px: int = 4
+
+    def __post_init__(self) -> None:
+        if self.version not in {"legacy", "color_endpoint"}:
+            raise ValueError("unsupported arrow encoding version")
+        for name in ("arrow_color_rgb", "endpoint_color_rgb"):
+            color = getattr(self, name)
+            if color is not None and (len(color) != 3 or any(int(channel) != channel or not 0 <= int(channel) <= 255 for channel in color)):
+                raise ValueError(f"{name} must be an RGB triple in [0, 255]")
+        if self.version == "color_endpoint" and self.endpoint_color_rgb is None:
+            raise ValueError("color_endpoint encoding requires endpoint_color_rgb")
+        if not np.isfinite(self.color_tolerance) or self.color_tolerance < 0:
+            raise ValueError("color_tolerance must be finite and non-negative")
+        if not isinstance(self.endpoint_radius_px, (int, np.integer)) or self.endpoint_radius_px < 1:
+            raise ValueError("endpoint_radius_px must be a positive integer")
+
+    @property
+    def name(self) -> str:
+        """Human-readable stable name used by manifests and diagnostics."""
+        return self.version
+
+    @property
+    def endpoint_rgb(self) -> tuple[int, int, int] | None:
+        return self.endpoint_color_rgb
+
+
+LEGACY_ARROW_ENCODING = ArrowEncoding()
+COLOR_ENDPOINT_ARROW_ENCODING = ArrowEncoding(
+    version="color_endpoint", endpoint_color_rgb=(255, 64, 64)
+)
+
+
+def resolve_arrow_encoding(encoding: str | ArrowEncoding | None) -> ArrowEncoding:
+    """Resolve a stable encoding name without importing renderer code."""
+    if encoding is None or encoding == "legacy":
+        return LEGACY_ARROW_ENCODING
+    if encoding in {"color_endpoint", "color-endpoint", "v2_color_endpoint", "v2-color-endpoint"}:
+        return COLOR_ENDPOINT_ARROW_ENCODING
+    if isinstance(encoding, ArrowEncoding):
+        return encoding
+    raise ValueError("encoding must be 'legacy', 'color_endpoint', or ArrowEncoding")
 
 
 def _as_finite_array(value: ArrayLike, *, name: str, ndim: int | None = None) -> np.ndarray:
@@ -54,6 +112,7 @@ class ArrowObservation:
     depth_m: np.ndarray | float | None = None
     K: np.ndarray | None = None
     T_world_camera: np.ndarray | None = None
+    encoding: ArrowEncoding | str | None = None
 
     def __post_init__(self) -> None:
         _validate_images(self.clean_rgb, self.arrow_rgb)
@@ -65,6 +124,8 @@ class ArrowObservation:
             _validate_intrinsics(self.K)
         if self.T_world_camera is not None:
             _validate_transform(self.T_world_camera)
+        if self.encoding is not None:
+            resolve_arrow_encoding(self.encoding)
 
 
 @dataclass(frozen=True)
@@ -137,6 +198,100 @@ class ArrowCommand2D:
         return np.asarray(self.target_xy, dtype=np.float64) - np.asarray(self.source_xy, dtype=np.float64)
 
 
+@dataclass(frozen=True)
+class ArrowDecodeDiagnostics:
+    """Deterministic decode outcome, including a stable failure reason."""
+
+    ok: bool
+    command: ArrowCommand2D | None
+    reason: str | None
+    encoding_version: str
+    changed_pixel_count: int = 0
+    component_count: int = 0
+
+    def __post_init__(self) -> None:
+        if self.ok != (self.command is not None):
+            raise ValueError("ok must agree with whether command is present")
+        if self.ok and self.reason is not None:
+            raise ValueError("valid diagnostics cannot have a failure reason")
+        if not self.ok and not self.reason:
+            raise ValueError("failed diagnostics require a reason")
+        if self.changed_pixel_count < 0 or self.component_count < 0:
+            raise ValueError("diagnostic counts must be non-negative")
+
+    @property
+    def decoded(self) -> ArrowCommand2D | None:
+        return self.command
+
+    @property
+    def failure_reason(self) -> str | None:
+        return self.reason
+
+
+@dataclass(frozen=True)
+class RGBDEndpoint:
+    """An endpoint refined from one arrow pixel and a matching depth sample."""
+
+    pixel_xy: tuple[float, float]
+    depth_m: float
+    world_xyz: np.ndarray
+    pixel_provenance: str
+    depth_provenance: str
+    method: str
+    command: ArrowCommand2D | None = None
+
+    def __post_init__(self) -> None:
+        _pixel(self.pixel_xy, name="pixel_xy")
+        if not np.isfinite(self.depth_m) or self.depth_m <= 0:
+            raise ValueError("depth_m must be finite and positive")
+        world = _as_finite_array(self.world_xyz, name="world_xyz").reshape(-1)
+        if world.size != 3:
+            raise ValueError("world_xyz must contain exactly three values")
+        if not self.pixel_provenance or not self.depth_provenance or not self.method:
+            raise ValueError("RGB-D provenance and method must be non-empty")
+
+
+@dataclass(frozen=True)
+class EndpointChangeEvidence:
+    """Pure numeric evidence for a before/after endpoint change.
+
+    No environment, simulator, object, pose, or evaluator is accepted here;
+    callers provide only endpoint and optional proprioceptive arrays.
+    """
+
+    before_endpoint: np.ndarray
+    after_endpoint: np.ndarray
+    endpoint_delta: np.ndarray
+    endpoint_distance: float
+    before_proprioception: np.ndarray | None
+    after_proprioception: np.ndarray | None
+    proprioception_delta: np.ndarray | None
+    proprioception_distance: float | None
+
+    def __post_init__(self) -> None:
+        for name in ("before_endpoint", "after_endpoint", "endpoint_delta"):
+            value = _as_finite_array(getattr(self, name), name=name).reshape(-1)
+            if value.size not in (2, 3):
+                raise ValueError(f"{name} must contain two or three values")
+        if not np.isfinite(self.endpoint_distance) or self.endpoint_distance < 0:
+            raise ValueError("endpoint_distance must be finite and non-negative")
+        if (self.before_proprioception is None) != (self.after_proprioception is None):
+            raise ValueError("before and after proprioception must be supplied together")
+        if self.proprioception_delta is None:
+            if self.proprioception_distance is not None:
+                raise ValueError("proprioception distance requires a delta")
+        elif self.proprioception_distance is None or not np.isfinite(self.proprioception_distance) or self.proprioception_distance < 0:
+            raise ValueError("proprioception distance must be finite and non-negative")
+
+    @property
+    def delta(self) -> np.ndarray:
+        return self.endpoint_delta
+
+    @property
+    def distance(self) -> float:
+        return self.endpoint_distance
+
+
 def _validate_images(clean_rgb: np.ndarray, arrow_rgb: np.ndarray) -> None:
     if not isinstance(clean_rgb, np.ndarray) or not isinstance(arrow_rgb, np.ndarray):
         raise TypeError("clean_rgb and arrow_rgb must be NumPy arrays")
@@ -192,9 +347,19 @@ def _erode(mask: np.ndarray) -> np.ndarray:
     return out
 
 
-def _arrow_component(clean_rgb: np.ndarray, arrow_rgb: np.ndarray, threshold: float) -> tuple[np.ndarray, int]:
+def _arrow_component(
+    clean_rgb: np.ndarray,
+    arrow_rgb: np.ndarray,
+    threshold: float,
+    *,
+    exclude_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, int]:
     difference = np.max(np.abs(arrow_rgb.astype(np.int16) - clean_rgb.astype(np.int16)), axis=2)
     mask = difference >= threshold
+    if exclude_mask is not None:
+        if exclude_mask.shape != mask.shape:
+            raise ValueError("exclude_mask must match the image height and width")
+        mask &= ~exclude_mask
     if not mask.any():
         raise ValueError("no arrow pixels detected in clean/overlay difference")
 
@@ -222,7 +387,11 @@ def _arrow_component(clean_rgb: np.ndarray, arrow_rgb: np.ndarray, threshold: fl
     return selected_points.astype(np.float64), int(selected_points.shape[0])
 
 
-def _endpoint_and_score(points_yx: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float]:
+def _endpoint_and_score(
+    points_yx: np.ndarray,
+    *,
+    tip_override_xy: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
     points = points_yx[:, ::-1]  # (u, v)
     center = points.mean(axis=0)
     demeaned = points - center
@@ -271,8 +440,114 @@ def _endpoint_and_score(points_yx: np.ndarray) -> tuple[np.ndarray, np.ndarray, 
     tail_band = np.abs(projection - tail_projection) <= max(1.5, length * 0.025)
     tip = points[tip_band].mean(axis=0)
     tail = points[tail_band].mean(axis=0)
+    if tip_override_xy is not None:
+        tip = _pixel(tip_override_xy, name="tip_override_xy")
     confidence = float(np.clip(0.5 + 0.2 * (best - other) + 0.08 * best, 0.0, 0.99))
     return tail, tip, confidence, length
+
+
+def _endpoint_marker_mask(
+    clean_rgb: np.ndarray,
+    arrow_rgb: np.ndarray,
+    encoding: ArrowEncoding,
+    threshold: float,
+) -> np.ndarray:
+    if encoding.endpoint_color_rgb is None:
+        raise ValueError("color_endpoint encoding has no endpoint color")
+    marker = np.asarray(encoding.endpoint_color_rgb, dtype=np.float64)
+    color_error = np.linalg.norm(arrow_rgb.astype(np.float64) - marker, axis=2)
+    difference = np.max(np.abs(arrow_rgb.astype(np.int16) - clean_rgb.astype(np.int16)), axis=2)
+    return (color_error <= encoding.color_tolerance) & (difference >= threshold)
+
+
+def _endpoint_marker_xy(
+    clean_rgb: np.ndarray,
+    arrow_rgb: np.ndarray,
+    encoding: ArrowEncoding,
+    threshold: float,
+) -> np.ndarray:
+    marker_mask = _endpoint_marker_mask(clean_rgb, arrow_rgb, encoding, threshold)
+    components = _connected_components(marker_mask)
+    if not components:
+        raise ValueError("color_endpoint marker was not detected")
+    component = max(components, key=len)
+    if len(component) < 2:
+        raise ValueError("color_endpoint marker is too small")
+    # A marker is intentionally a local coordinate cue; use its centroid and
+    # leave the shaft/PCA responsible for recovering the source endpoint.
+    return component[:, ::-1].mean(axis=0)
+
+
+def _diagnostic_counts(
+    clean_rgb: np.ndarray,
+    arrow_rgb: np.ndarray,
+    threshold: float,
+    *,
+    exclude_mask: np.ndarray | None = None,
+) -> tuple[int, int]:
+    difference = np.max(np.abs(arrow_rgb.astype(np.int16) - clean_rgb.astype(np.int16)), axis=2)
+    mask = difference >= threshold
+    if exclude_mask is not None:
+        mask &= ~exclude_mask
+    if not mask.any():
+        return 0, 0
+    closed = _erode(_dilate(mask))
+    min_area = max(8, int(mask.size * 2e-6))
+    count = sum(len(component) >= min_area for component in _connected_components(closed))
+    return int(mask.sum()), int(count)
+
+
+def decode_arrow_diagnostics(
+    clean_rgb: np.ndarray,
+    arrow_rgb: np.ndarray,
+    *,
+    difference_threshold: float = 10.0,
+    encoding: str | ArrowEncoding | None = None,
+) -> ArrowDecodeDiagnostics:
+    """Decode an arrow while returning a deterministic valid/invalid record.
+
+    Unlike :func:`decode_arrow`, this diagnostic surface does not raise for
+    malformed or ambiguous inputs.  ``decode_arrow`` remains the compatibility
+    API and raises the recorded ``reason``.
+    """
+    try:
+        resolved = resolve_arrow_encoding(encoding)
+        _validate_images(clean_rgb, arrow_rgb)
+        threshold = float(difference_threshold)
+        if not np.isfinite(threshold) or threshold <= 0:
+            raise ValueError("difference_threshold must be finite and positive")
+        marker = None
+        marker_mask = None
+        if resolved.version == "color_endpoint":
+            marker_mask = _endpoint_marker_mask(clean_rgb, arrow_rgb, resolved, threshold)
+            marker = _endpoint_marker_xy(clean_rgb, arrow_rgb, resolved, threshold)
+        changed_count, component_count = _diagnostic_counts(
+            clean_rgb, arrow_rgb, threshold, exclude_mask=marker_mask
+        )
+        points, area = _arrow_component(
+            clean_rgb, arrow_rgb, threshold, exclude_mask=marker_mask
+        )
+        tail, tip, confidence, _ = _endpoint_and_score(points, tip_override_xy=marker)
+        command = ArrowCommand2D(
+            source_xy=(float(tail[0]), float(tail[1])),
+            target_xy=(float(tip[0]), float(tip[1])),
+            confidence=confidence,
+            component_area=area,
+            image_shape=(clean_rgb.shape[0], clean_rgb.shape[1]),
+        )
+        return ArrowDecodeDiagnostics(True, command, None, resolved.version, changed_count, component_count)
+    except (TypeError, ValueError, OverflowError) as exc:
+        if isinstance(clean_rgb, np.ndarray) and isinstance(arrow_rgb, np.ndarray) and clean_rgb.ndim == 3 and arrow_rgb.ndim == 3 and clean_rgb.shape == arrow_rgb.shape and clean_rgb.shape[2] == 3 and clean_rgb.dtype == np.uint8 and arrow_rgb.dtype == np.uint8:
+            try:
+                changed_count, component_count = _diagnostic_counts(clean_rgb, arrow_rgb, float(difference_threshold))
+            except (TypeError, ValueError, OverflowError):
+                changed_count, component_count = 0, 0
+        else:
+            changed_count, component_count = 0, 0
+        # Resolve invalid encoding names to a stable textual diagnostic without
+        # masking the original reason.
+        version = encoding.version if isinstance(encoding, ArrowEncoding) else str(encoding or "legacy")
+        return ArrowDecodeDiagnostics(False, None, str(exc), version, changed_count, component_count)
 
 
 def decode_arrow(
@@ -280,24 +555,22 @@ def decode_arrow(
     arrow_rgb: np.ndarray,
     *,
     difference_threshold: float = 10.0,
+    encoding: str | ArrowEncoding | None = None,
 ) -> ArrowCommand2D:
     """Decode one clean/overlay pair into source and pointy target pixels.
 
     Multiple disconnected overlays, missing overlays, shape/dtype mismatch and
     a line without a clear arrowhead fail closed with ``ValueError``.
     """
-    _validate_images(clean_rgb, arrow_rgb)
-    if not np.isfinite(difference_threshold) or difference_threshold <= 0:
-        raise ValueError("difference_threshold must be finite and positive")
-    points, area = _arrow_component(clean_rgb, arrow_rgb, float(difference_threshold))
-    tail, tip, confidence, _ = _endpoint_and_score(points)
-    return ArrowCommand2D(
-        source_xy=(float(tail[0]), float(tail[1])),
-        target_xy=(float(tip[0]), float(tip[1])),
-        confidence=confidence,
-        component_area=area,
-        image_shape=(clean_rgb.shape[0], clean_rgb.shape[1]),
+    diagnostics = decode_arrow_diagnostics(
+        clean_rgb,
+        arrow_rgb,
+        difference_threshold=difference_threshold,
+        encoding=encoding,
     )
+    if diagnostics.command is None:
+        raise ValueError(diagnostics.reason or "arrow decode failed")
+    return diagnostics.command
 
 
 def estimate_endpoint_depth(
@@ -308,6 +581,7 @@ def estimate_endpoint_depth(
     min_valid: int = 3,
     min_depth_m: float = 1e-4,
     max_depth_m: float = 100.0,
+    method: str = "mad_median",
 ) -> float:
     """Return a robust local metric depth at ``pixel_xy``.
 
@@ -317,6 +591,9 @@ def estimate_endpoint_depth(
     tests and calibrated depth-image callers should pass an ``HxW`` array.
     """
     point = _pixel(pixel_xy)
+    method = {"mad": "mad_median", "trimmed": "trimmed_median", "nearest": "nearest_valid"}.get(method, method)
+    if method not in {"median", "mad_median", "trimmed_median", "nearest_valid"}:
+        raise ValueError("method must be median, mad_median, trimmed_median, or nearest_valid")
     if not isinstance(radius, (int, np.integer)) or radius < 0:
         raise ValueError("radius must be a non-negative integer")
     if not isinstance(min_valid, (int, np.integer)) or min_valid < 1:
@@ -338,7 +615,32 @@ def estimate_endpoint_depth(
     values = values[np.isfinite(values) & (values >= min_depth_m) & (values <= max_depth_m)]
     if values.size < min_valid:
         raise ValueError(f"insufficient valid local depth samples: {values.size} < {min_valid}")
+    if method == "nearest_valid":
+        # Values are row-major from the local window.  The central sample is
+        # preferred when valid; otherwise choose the nearest valid pixel from
+        # the window using a deterministic distance tie-break.
+        if depth.ndim == 0:
+            return float(values[0])
+        u, v = np.rint(point).astype(int)
+        y0, y1 = max(0, v - radius), min(depth.shape[0], v + radius + 1)
+        x0, x1 = max(0, u - radius), min(depth.shape[1], u + radius + 1)
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        local = depth[y0:y1, x0:x1]
+        valid = np.isfinite(local) & (local >= min_depth_m) & (local <= max_depth_m)
+        distances = np.where(valid, (xx - u) ** 2 + (yy - v) ** 2, np.inf)
+        nearest = np.unravel_index(int(np.argmin(distances)), distances.shape)
+        if not np.isfinite(distances[nearest]):
+            raise ValueError("no valid nearest depth sample")
+        return float(local[nearest])
+
     median = float(np.median(values))
+    if method == "median":
+        return median
+    if method == "trimmed_median" and values.size >= 5:
+        low, high = np.quantile(values, (0.1, 0.9))
+        trimmed = values[(values >= low) & (values <= high)]
+        if trimmed.size >= min_valid:
+            return float(np.median(trimmed))
     deviations = np.abs(values - median)
     mad = float(np.median(deviations))
     if mad > 0:
@@ -375,6 +677,7 @@ def deproject_endpoint(
     *,
     depth_radius: int = 2,
     min_valid_depth: int = 3,
+    depth_method: str = "mad_median",
 ) -> np.ndarray:
     """Deproject an arrow target pixel to a world-space 3-D point."""
     point = point_xy_or_command.target_xy if isinstance(point_xy_or_command, ArrowCommand2D) else point_xy_or_command
@@ -386,9 +689,15 @@ def deproject_endpoint(
     intrinsics = _validate_intrinsics(K)
     transform = np.eye(4, dtype=np.float64) if T_world_camera is None else _validate_transform(T_world_camera)
     if np.asarray(depth_m).ndim == 2:
-        depth = estimate_endpoint_depth(depth_m, pixel, radius=depth_radius, min_valid=min_valid_depth)
+        depth = estimate_endpoint_depth(
+            depth_m,
+            pixel,
+            radius=depth_radius,
+            min_valid=min_valid_depth,
+            method=depth_method,
+        )
     else:
-        depth = estimate_endpoint_depth(depth_m, pixel, radius=0, min_valid=1)
+        depth = estimate_endpoint_depth(depth_m, pixel, radius=0, min_valid=1, method=depth_method)
     fx, fy = intrinsics[0, 0], intrinsics[1, 1]
     cx, cy = intrinsics[0, 2], intrinsics[1, 2]
     camera_point = np.array(((pixel[0] - cx) * depth / fx, (pixel[1] - cy) * depth / fy, depth), dtype=np.float64)
@@ -399,6 +708,90 @@ def deproject_endpoint(
     if not np.all(np.isfinite(world)):
         raise ValueError("deprojected world point is not finite")
     return world
+
+
+def refine_rgbd_endpoint(
+    endpoint_or_command: ArrayLike | ArrowCommand2D,
+    depth_m: np.ndarray | float,
+    K: ArrayLike,
+    T_world_camera: ArrayLike | None = None,
+    *,
+    clean_rgb: np.ndarray | None = None,
+    arrow_rgb: np.ndarray | None = None,
+    encoding: str | ArrowEncoding | None = None,
+    depth_method: str = "mad_median",
+    depth_radius: int = 2,
+    min_valid_depth: int = 3,
+) -> RGBDEndpoint:
+    """Refine one arrow endpoint using RGB provenance and local metric depth.
+
+    Either an existing :class:`ArrowCommand2D`/pixel is supplied, or both
+    ``clean_rgb`` and ``arrow_rgb`` are supplied and decoded in this function.
+    If an image and a depth map are both present, their resolution must match;
+    this prevents silently pairing a pixel from one image frame with depth from
+    another.  The returned provenance strings retain the exact pixel and depth
+    method used for the world point.
+    """
+    if (clean_rgb is None) != (arrow_rgb is None):
+        raise ValueError("clean_rgb and arrow_rgb must be supplied together")
+    resolved = resolve_arrow_encoding(encoding)
+    if clean_rgb is not None and arrow_rgb is not None:
+        command = decode_arrow(clean_rgb, arrow_rgb, encoding=resolved)
+        pixel_source = f"arrow_decode:{resolved.version}"
+    elif isinstance(endpoint_or_command, ArrowCommand2D):
+        command = endpoint_or_command
+        pixel_source = "arrow_command:target_xy"
+    else:
+        pixel = _pixel(endpoint_or_command, name="endpoint_xy")
+        command = None
+        pixel_source = "explicit_endpoint_xy"
+
+    if command is not None:
+        pixel = _pixel(command.target_xy, name="target_xy")
+        if command.image_shape is not None and np.asarray(depth_m).ndim == 2:
+            if tuple(np.asarray(depth_m).shape) != tuple(command.image_shape):
+                raise ValueError(
+                    "pixel/depth resolution mismatch: "
+                    f"pixel frame {command.image_shape} versus depth {np.asarray(depth_m).shape}"
+                )
+    if clean_rgb is not None and np.asarray(depth_m).ndim == 2:
+        if tuple(clean_rgb.shape[:2]) != tuple(np.asarray(depth_m).shape):
+            raise ValueError(
+                "pixel/depth resolution mismatch: "
+                f"RGB {clean_rgb.shape[:2]} versus depth {np.asarray(depth_m).shape}"
+            )
+    depth_value = estimate_endpoint_depth(
+        depth_m,
+        pixel,
+        radius=depth_radius,
+        min_valid=min_valid_depth if np.asarray(depth_m).ndim == 2 else 1,
+        method=depth_method,
+    )
+    world = deproject_endpoint(
+        pixel,
+        depth_value,
+        K,
+        T_world_camera,
+        depth_method=depth_method,
+    )
+    pixel_text = f"pixel_xy=({pixel[0]:.3f},{pixel[1]:.3f})"
+    depth_shape = "scalar" if np.asarray(depth_m).ndim == 0 else str(tuple(np.asarray(depth_m).shape))
+    depth_source = f"depth_m:{depth_method}:shape={depth_shape}:{pixel_text}"
+    return RGBDEndpoint(
+        pixel_xy=(float(pixel[0]), float(pixel[1])),
+        depth_m=depth_value,
+        world_xyz=world,
+        pixel_provenance=f"{pixel_source}:{pixel_text}",
+        depth_provenance=depth_source,
+        method=f"rgbd/{resolved.version}/{depth_method}",
+        command=command,
+    )
+
+
+# Natural spelling retained as a small compatibility alias for runner code.
+refine_endpoint_rgbd = refine_rgbd_endpoint
+refine_endpoint_from_rgbd = refine_rgbd_endpoint
+refine_rgbd = refine_rgbd_endpoint
 
 
 @dataclass(frozen=True)
@@ -563,13 +956,80 @@ def normalized_osc_action(
     return np.r_[action, gripper_value].astype(np.float32)
 
 
+def compute_endpoint_change_evidence(
+    before_endpoint: ArrayLike,
+    after_endpoint: ArrayLike,
+    *,
+    before_proprioception: ArrayLike | None = None,
+    after_proprioception: ArrayLike | None = None,
+) -> EndpointChangeEvidence:
+    """Compute pure numeric before/after endpoint and proprioception evidence.
+
+    The two endpoint arrays must have the same 2-D or 3-D shape.  Optional
+    proprioception arrays must likewise be supplied as a matching pair with
+    identical shape.  This function intentionally accepts no object, pose,
+    simulator, environment, or evaluator handles.
+    """
+    before = _as_finite_array(before_endpoint, name="before_endpoint").reshape(-1)
+    after = _as_finite_array(after_endpoint, name="after_endpoint").reshape(-1)
+    if before.size not in (2, 3) or after.size != before.size:
+        raise ValueError("endpoint arrays must have the same length of two or three")
+    endpoint_delta = after - before
+    proprio_before = None
+    proprio_after = None
+    proprio_delta = None
+    proprio_distance = None
+    if (before_proprioception is None) != (after_proprioception is None):
+        raise ValueError("before and after proprioception must be supplied together")
+    if before_proprioception is not None and after_proprioception is not None:
+        proprio_before = _as_finite_array(before_proprioception, name="before_proprioception")
+        proprio_after = _as_finite_array(after_proprioception, name="after_proprioception")
+        if proprio_before.shape != proprio_after.shape:
+            raise ValueError("before and after proprioception must have matching shapes")
+        proprio_delta = proprio_after - proprio_before
+        proprio_distance = float(np.linalg.norm(proprio_delta.reshape(-1)))
+    return EndpointChangeEvidence(
+        before_endpoint=before,
+        after_endpoint=after,
+        endpoint_delta=endpoint_delta,
+        endpoint_distance=float(np.linalg.norm(endpoint_delta)),
+        before_proprioception=proprio_before,
+        after_proprioception=proprio_after,
+        proprioception_delta=proprio_delta,
+        proprioception_distance=proprio_distance,
+    )
+
+
+# Both names are deliberately explicit; the former reads well in reports and
+# the latter is convenient in a small runner utility.
+endpoint_change_evidence = compute_endpoint_change_evidence
+measure_endpoint_change = compute_endpoint_change_evidence
+compute_endpoint_change = compute_endpoint_change_evidence
+
+
 __all__ = [
     "ArrowObservation",
     "ArrowCommand2D",
+    "ArrowEncoding",
+    "LEGACY_ARROW_ENCODING",
+    "COLOR_ENDPOINT_ARROW_ENCODING",
+    "ArrowDecodeDiagnostics",
+    "RGBDEndpoint",
+    "EndpointChangeEvidence",
     "BowlWaypointConfig",
+    "resolve_arrow_encoding",
     "decode_arrow",
+    "decode_arrow_diagnostics",
     "estimate_endpoint_depth",
     "deproject_endpoint",
+    "refine_rgbd_endpoint",
+    "refine_endpoint_rgbd",
+    "refine_endpoint_from_rgbd",
+    "refine_rgbd",
     "build_bowl_waypoints",
     "normalized_osc_action",
+    "compute_endpoint_change_evidence",
+    "endpoint_change_evidence",
+    "measure_endpoint_change",
+    "compute_endpoint_change",
 ]

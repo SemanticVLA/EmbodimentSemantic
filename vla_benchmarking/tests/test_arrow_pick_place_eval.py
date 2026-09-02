@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -418,6 +420,63 @@ def test_cli_defaults_use_verified_rim_profile(runner):
     assert args.stop_after_phase == "retreat"
     assert args.allow_unvalidated_profile is False
     assert runner.parse_args(["--allow-unvalidated-profile"]).allow_unvalidated_profile is True
+
+
+def test_controller_variant_provenance_is_canonical_and_suite_scoped(runner):
+    vanilla = runner.ControllerVariantConfig(suite_mode="vanilla")
+    sealed = runner.ControllerVariantConfig(suite_mode="sealed_randomized")
+    assert vanilla.canonical_json() == vanilla.canonical_json()
+    assert vanilla.config_hash == vanilla.hash
+    assert vanilla.provenance()["config_hash"] == vanilla.config_hash
+    assert vanilla.config_hash != sealed.config_hash
+    with pytest.raises(ValueError, match="suite_mode"):
+        runner.ControllerVariantConfig(suite_mode="unknown")
+
+
+def test_direct_swap_adapter_reports_requested_and_applied_labels(runner, monkeypatch):
+    calls = []
+    fake_preview = types.ModuleType("preview_visual_arrows")
+
+    def apply_task_swaps(env, task_id):
+        calls.append((env, task_id))
+
+    fake_preview._apply_task_swaps = apply_task_swaps
+    monkeypatch.setitem(sys.modules, "preview_visual_arrows", fake_preview)
+    result = runner._apply_direct_swaps(object(), 2)
+    assert calls and calls[0][1] == 2
+    assert result["requested"] == [["akita_black_bowl_2", "cookies_1"]]
+    assert result["applied"] == ["akita_black_bowl_2", "cookies_1"]
+    assert result["skipped"] == []
+
+
+def test_cli_exposes_explicit_suite_and_stall_recovery_controls(runner):
+    args = runner.parse_args(["--suite-mode", "sealed_randomized", "--stall-window-steps", "4", "--recovery-attempts", "2"])
+    assert args.suite_mode == "sealed_randomized"
+    assert args.stall_window_steps == 4
+    assert args.recovery_attempts == 2
+
+
+def test_stall_detection_is_phase_bounded_and_records_reason(runner, monkeypatch):
+    env = _MotionEnv()
+    monkeypatch.setattr(
+        runner,
+        "normalized_osc_action",
+        lambda **kwargs: np.zeros(7, dtype=np.float32),
+    )
+    with pytest.raises(TimeoutError, match="phase pregrasp stalled"):
+        runner._run_motion(
+            env,
+            np.ones((6, 3), dtype=np.float64),
+            _motion_proprio(),
+            phase_timeout_steps=8,
+            gripper_dwell_steps=2,
+            stop_after_phase="retreat",
+            dry_run=False,
+            stall_window_steps=2,
+            stall_delta_m=1e-9,
+        )
+    assert env._arrow_phase_audit[-1]["status"] == "stall"
+    assert env._arrow_phase_audit[-1]["stall_window_steps"] == 2
 
 
 def test_phase_snapshot_callback_runs_once_per_executed_phase_and_not_dry_run(runner, monkeypatch):

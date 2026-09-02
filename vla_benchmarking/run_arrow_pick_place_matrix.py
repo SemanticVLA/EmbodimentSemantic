@@ -16,6 +16,7 @@ import inspect
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,9 @@ DEFAULT_TASK_IDS = tuple(range(10))
 DEFAULT_EPISODES_PER_TASK = 10
 DEFAULT_SEED_BASE = 1000
 DEFAULT_RESOLUTION = 256
+SUITE_MODES = ("vanilla", "sealed_randomized")
+DEFAULT_SUITE_MODE = "vanilla"
+DEFAULT_CONTROLLER_VARIANT = "rgbd_arrow_v1"
 CAMERA_NAME = "agentview"
 MANIFEST_JSONL_FILENAME = "arrow_pick_place_matrix_manifest.jsonl"
 # Backwards-compatible descriptive alias for callers that used the first draft.
@@ -44,6 +48,33 @@ MATRIX_SCHEMA_VERSION = "arrow_pick_place_matrix.v1"
 VERIFIED_TASK_ID = 0
 VERIFIED_SEED = 1000
 VERIFIED_RESOLUTION = 256
+
+
+def _validated_label(value: str, *, name: str) -> str:
+    """Return a stable path/contract label and reject ambiguous values."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    label = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", label):
+        raise ValueError(
+            f"{name} must contain only letters, numbers, '.', '_' or '-': {value!r}"
+        )
+    return label
+
+
+def parse_suite_mode(value: str) -> str:
+    """Validate the explicit LIBERO scene condition."""
+    mode = _validated_label(value, name="suite_mode")
+    if mode not in SUITE_MODES:
+        raise ValueError(
+            f"suite_mode must be one of {', '.join(SUITE_MODES)}; got {value!r}"
+        )
+    return mode
+
+
+def parse_controller_variant(value: str) -> str:
+    """Validate a controller variant used in provenance and output paths."""
+    return _validated_label(value, name="controller_variant")
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -162,9 +193,13 @@ def plan_cells(
     seed_base: int = DEFAULT_SEED_BASE,
     output_root: str | Path = "arrow_pick_place_matrix_outputs",
     resolution: int = DEFAULT_RESOLUTION,
+    suite_mode: str = DEFAULT_SUITE_MODE,
+    controller_variant: str = DEFAULT_CONTROLLER_VARIANT,
 ) -> list[dict[str, Any]]:
     """Build deterministic task/episode cells without touching LIBERO."""
     tasks = parse_task_ids(task_ids)
+    suite_mode = parse_suite_mode(suite_mode)
+    controller_variant = parse_controller_variant(controller_variant)
     if episodes_per_task <= 0:
         raise ValueError("episodes_per_task must be positive")
     if resolution <= 0:
@@ -175,11 +210,21 @@ def plan_cells(
     for task_id in tasks:
         for episode_index in range(int(episodes_per_task)):
             seed = int(seed_base) + episode_index
-            cell_dir = root / f"task_{int(task_id)}" / f"episode_{episode_index}_seed_{seed}"
+            # Keep condition labels in every episode path.  This prevents a
+            # vanilla and randomized run from being accidentally mixed when a
+            # caller shares a parent output directory.
+            cell_dir = (
+                root
+                / suite_mode
+                / controller_variant
+                / f"task_{int(task_id)}"
+                / f"episode_{episode_index}_seed_{seed}"
+            )
             validated = (
                 int(task_id) == VERIFIED_TASK_ID
                 and seed == VERIFIED_SEED
                 and int(resolution) == VERIFIED_RESOLUTION
+                and suite_mode == DEFAULT_SUITE_MODE
             )
             cells.append(
                 {
@@ -193,6 +238,9 @@ def plan_cells(
                     "init_state_index": int(episode_index),
                     "init_state_index_candidate": int(episode_index),
                     "resolution": int(resolution),
+                    "suite_mode": suite_mode,
+                    "controller_variant": controller_variant,
+                    "condition_label": f"{suite_mode}__{controller_variant}",
                     "output_dir": cell_dir.as_posix(),
                     "profile_label": "validated" if validated else "exploratory_unvalidated",
                     "profile_validated": bool(validated),
@@ -317,12 +365,21 @@ def _protocol(
     resolution: int, dry_run: bool, execute_motion: bool,
     allow_unvalidated_profile: bool,
     continue_on_motion_failure: bool,
+    suite_mode: str,
+    controller_variant: str,
     init_state_preflight: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "name": "libero_arrow_pick_place_matrix",
         "schema_version": MATRIX_SCHEMA_VERSION,
         "camera": CAMERA_NAME,
+        "suite_mode": suite_mode,
+        "controller_variant": controller_variant,
+        "condition_label": f"{suite_mode}__{controller_variant}",
+        "suite_contract": {
+            "vanilla": "canonical_libero_spatial_bddl_without_custom_randomization",
+            "sealed_randomized": "repository_sealed_removals_layout_swaps_and_prompt_variants",
+        },
         "task_ids": [int(task_id) for task_id in task_ids],
         "episodes_per_task": int(episodes_per_task),
         "seed_policy": "seed=seed_base+episode_index",
@@ -630,6 +687,43 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
     return result
 
 
+def _accepted_optional_keywords(function: Callable[..., Any]) -> set[str] | None:
+    """Inspect a seam without requiring legacy injected test fakes to change.
+
+    ``None`` means the callable accepts arbitrary keyword arguments.  A
+    signature can be unavailable for some extension callables; in that case
+    returning an empty set preserves the old positional contract.
+    """
+    try:
+        parameters = inspect.signature(function).parameters.values()
+    except (TypeError, ValueError):
+        return set()
+    accepted = {
+        parameter.name
+        for parameter in parameters
+        if parameter.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    }
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return None
+    return accepted
+
+
+def _call_with_optional_keywords(
+    function: Callable[..., Any],
+    positional: Sequence[Any],
+    optional: Mapping[str, Any],
+) -> Any:
+    """Call an injected seam while passing only supported condition metadata."""
+    accepted = _accepted_optional_keywords(function)
+    kwargs = dict(optional) if accepted is None else {
+        key: value for key, value in optional.items() if key in accepted
+    }
+    return function(*positional, **kwargs)
+
+
 def run_matrix(
     *,
     output_root: str | Path,
@@ -637,6 +731,8 @@ def run_matrix(
     episodes_per_task: int = DEFAULT_EPISODES_PER_TASK,
     seed_base: int = DEFAULT_SEED_BASE,
     resolution: int = DEFAULT_RESOLUTION,
+    suite_mode: str = DEFAULT_SUITE_MODE,
+    controller_variant: str = DEFAULT_CONTROLLER_VARIANT,
     dry_run: bool = False,
     execute_motion: bool = False,
     allow_unvalidated_profile: bool = False,
@@ -649,12 +745,16 @@ def run_matrix(
     continue_on_motion_failure: bool = False,
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
+    suite_mode = parse_suite_mode(suite_mode)
+    controller_variant = parse_controller_variant(controller_variant)
     cells = plan_cells(
         task_ids=task_ids,
         episodes_per_task=episodes_per_task,
         seed_base=seed_base,
         output_root=output_root,
         resolution=resolution,
+        suite_mode=suite_mode,
+        controller_variant=controller_variant,
     )
     validate_motion_authorization(
         cells,
@@ -671,6 +771,16 @@ def run_matrix(
     build_env = env_builder or _episode_module.build_libero_env
     run_episode = episode_runner or _episode_module.run_episode
     build_inputs = arrow_input_builder or _default_arrow_inputs
+    if env_builder is None:
+        accepted_builder_keywords = _accepted_optional_keywords(build_env)
+        if (
+            accepted_builder_keywords is not None
+            and "suite_mode" not in accepted_builder_keywords
+        ):
+            raise RuntimeError(
+                "production LIBERO environment builder must accept suite_mode; "
+                "use a condition-aware build_libero_env or inject a test builder"
+            )
     evaluator_fn = evaluator
     if evaluator_fn is None and not dry_run:
         evaluator_fn = lambda candidate: bool(candidate.check_success())
@@ -704,6 +814,8 @@ def run_matrix(
         execute_motion=execute_motion,
         allow_unvalidated_profile=allow_unvalidated_profile,
         continue_on_motion_failure=continue_on_motion_failure,
+        suite_mode=suite_mode,
+        controller_variant=controller_variant,
         init_state_preflight=init_state_preflight,
     )
     protocol["source_hashes"] = _source_file_hashes()
@@ -712,6 +824,9 @@ def run_matrix(
         "launcher_path": Path(__file__).resolve().as_posix(),
         "repository_root": Path(__file__).resolve().parents[1].as_posix(),
         "episode_runner": "run_arrow_pick_place_eval.run_episode",
+        "suite_mode": suite_mode,
+        "controller_variant": controller_variant,
+        "condition_label": f"{suite_mode}__{controller_variant}",
         "generated_unix": time.time(),
         "git": _git_provenance(),
         "python": sys.version,
@@ -766,6 +881,9 @@ def run_matrix(
             json.dumps(
                 {
                     "schema_version": MATRIX_SCHEMA_VERSION,
+                    "suite_mode": suite_mode,
+                    "controller_variant": controller_variant,
+                    "condition_label": f"{suite_mode}__{controller_variant}",
                     "protocol": protocol,
                     "contract_hash": contract_hash,
                     "provenance": provenance,
@@ -784,6 +902,9 @@ def run_matrix(
             json.dumps(
                 {
                     "schema_version": MATRIX_SCHEMA_VERSION,
+                    "suite_mode": suite_mode,
+                    "controller_variant": controller_variant,
+                    "condition_label": f"{suite_mode}__{controller_variant}",
                     "protocol": protocol,
                     "contract_hash": contract_hash,
                     "provenance": provenance,
@@ -925,7 +1046,11 @@ def run_matrix(
             try:
                 cell_dir = Path(cell["output_dir"])
                 cell_dir.mkdir(parents=True, exist_ok=True)
-                env = build_env(int(cell["task_id"]), int(cell["seed"]), int(resolution))
+                env = _call_with_optional_keywords(
+                    build_env,
+                    (int(cell["task_id"]), int(cell["seed"]), int(resolution)),
+                    {"suite_mode": suite_mode},
+                )
                 candidate_init_diagnostics = getattr(env, "_arrow_init_state_diagnostics", None)
                 if isinstance(candidate_init_diagnostics, Mapping):
                     init_state_diagnostics = dict(candidate_init_diagnostics)
@@ -946,7 +1071,16 @@ def run_matrix(
             else:
                 try:
                     stage = "generate_arrow_inputs"
-                    inputs = dict(build_inputs(env, int(cell["task_id"]), int(resolution)))
+                    inputs = dict(
+                        _call_with_optional_keywords(
+                            build_inputs,
+                            (env, int(cell["task_id"]), int(resolution)),
+                            {
+                                "suite_mode": suite_mode,
+                                "controller_variant": controller_variant,
+                            },
+                        )
+                    )
                     stage = "run_episode"
                     episode_kwargs = {
                         "env": env,
@@ -956,24 +1090,34 @@ def run_matrix(
                         "dry_run": bool(dry_run),
                         "resolution": int(resolution),
                         "allow_unvalidated_profile": bool(allow_unvalidated_profile),
+                        "suite_mode": suite_mode,
+                        "controller_variant": controller_variant,
                         **inputs,
                     }
-                    try:
-                        parameters = inspect.signature(run_episode).parameters.values()
-                        supports_motion_callback = any(
-                            parameter.kind == inspect.Parameter.VAR_KEYWORD
-                            or parameter.name == "motion_started_callback"
-                            for parameter in parameters
-                        )
-                    except (TypeError, ValueError):
-                        supports_motion_callback = False
+                    accepted_runner_keywords = _accepted_optional_keywords(run_episode)
+                    supports_motion_callback = (
+                        accepted_runner_keywords is None
+                        or "motion_started_callback" in accepted_runner_keywords
+                    )
                     if supports_motion_callback:
                         episode_kwargs["motion_started_callback"] = motion_started_callback
                     if evaluator_fn is not None:
                         episode_kwargs["evaluator"] = evaluator_fn
-                    audit = dict(
-                        run_episode(**episode_kwargs)
-                    )
+                    # Keep the established kwargs call for the runner's core
+                    # inputs, but remove newly introduced condition metadata
+                    # when a legacy injected fake does not accept it.
+                    if accepted_runner_keywords is not None:
+                        episode_kwargs = {
+                            key: value
+                            for key, value in episode_kwargs.items()
+                            if key in accepted_runner_keywords
+                            or key in {
+                                "env", "task_id", "seed", "output_dir", "dry_run",
+                                "resolution", "allow_unvalidated_profile", "evaluator",
+                                "motion_started_callback",
+                            }
+                        }
+                    audit = dict(run_episode(**episode_kwargs))
                     if dry_run:
                         # A dry-run must never present an evaluator result as
                         # observed motion evidence, even if an injected fake
@@ -1145,6 +1289,9 @@ def run_matrix(
     }
     summary = {
         "schema_version": MATRIX_SCHEMA_VERSION,
+        "suite_mode": suite_mode,
+        "controller_variant": controller_variant,
+        "condition_label": f"{suite_mode}__{controller_variant}",
         "protocol": protocol,
         "provenance": provenance,
         "manifest_path": manifest_path.as_posix(),
@@ -1215,6 +1362,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--episodes-per-task", type=int, default=DEFAULT_EPISODES_PER_TASK)
     parser.add_argument("--seed-base", type=int, default=DEFAULT_SEED_BASE)
     parser.add_argument("--resolution", type=int, default=DEFAULT_RESOLUTION)
+    parser.add_argument(
+        "--suite-mode",
+        choices=SUITE_MODES,
+        default=DEFAULT_SUITE_MODE,
+        help="LIBERO scene condition: canonical vanilla or sealed randomized",
+    )
+    parser.add_argument(
+        "--controller-variant",
+        default=DEFAULT_CONTROLLER_VARIANT,
+        help="stable controller implementation label recorded in outputs",
+    )
     parser.add_argument("--output-root", type=Path, default=Path("arrow_pick_place_matrix_outputs"))
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="run the pipeline without motion")
@@ -1250,6 +1408,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         episodes_per_task=args.episodes_per_task,
         seed_base=args.seed_base,
         resolution=args.resolution,
+        suite_mode=args.suite_mode,
+        controller_variant=args.controller_variant,
         dry_run=args.dry_run,
         execute_motion=args.execute_motion,
         allow_unvalidated_profile=args.allow_unvalidated_profile,
