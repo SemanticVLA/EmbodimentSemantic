@@ -12,6 +12,8 @@ param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')]
     [string]$Variant,
 
+    [switch]$VideosOnly,
+
     [string]$DesktopRoot = [Environment]::GetFolderPath('Desktop')
 )
 
@@ -59,19 +61,24 @@ function Invoke-ScopedSsh {
     }
 }
 
+$findClause = if ($VideosOnly) {
+    "find . -type f \( -iname '*.mp4' -o -iname '*.avi' -o -iname '*.mov' \)"
+} else {
+    "find . -type f \( -iname '*.mp4' -o -iname '*.avi' -o -iname '*.mov' -o -path '*/phase_frames/*.png' -o -path '*/phase_frames/*.jpg' -o -path '*/frames/*.png' -o -path '*/frames/*.jpg' -o -iname '*.jsonl' -o -iname '*manifest*.json' -o -iname '*summary*.json' -o -name 'job_context.env' -o -name 'archive_status.env' \)"
+}
 $remoteCommand = @'
 set -Eeuo pipefail
 root='__REMOTE_ARCHIVE__'
 test -d "$root"
 cd -- "$root"
-find . -type f \( -iname '*.mp4' -o -iname '*.avi' -o -iname '*.mov' -o -path '*/phase_frames/*.png' -o -path '*/phase_frames/*.jpg' -o -path '*/frames/*.png' -o -path '*/frames/*.jpg' -o -iname '*.jsonl' -o -iname '*manifest*.json' -o -iname '*summary*.json' -o -name 'job_context.env' -o -name 'archive_status.env' \) -print | sort | while IFS= read -r path; do
+__FIND_CLAUSE__ -print | sort | while IFS= read -r path; do
   rel="${path#./}"
   test "$rel" != "$path" || test -n "$rel"
   sha=$(sha256sum -- "$path" | awk '{print $1}')
   bytes=$(stat -c %s -- "$path")
   printf '%s\t%s\t%s\n' "$sha" "$bytes" "$rel"
 done
-'@.Replace('__REMOTE_ARCHIVE__', $RemoteArchive)
+'@.Replace('__REMOTE_ARCHIVE__', $RemoteArchive).Replace('__FIND_CLAUSE__', $findClause)
 
 $queryExit = 1
 $remoteLines = @(& $invokeLegion -RemoteCommand $remoteCommand)
