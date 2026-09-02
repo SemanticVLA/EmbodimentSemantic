@@ -77,6 +77,7 @@ CANDIDATE_V2_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_cand
 CANDIDATE_V3_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3"
 CANDIDATE_V4_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_gain_v4"
 CANDIDATE_V5_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_visible_anchor_v5"
+CANDIDATE_V6_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_directional_approach_v6"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -156,6 +157,7 @@ CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION = 0.40
 CANDIDATE_V3_WAYPOINT_TOLERANCE_M = 0.025
 CANDIDATE_V4_OSC_POSITION_SCALE_M = 0.035
 ARROW_ANCHOR_POLICIES = ("bbox_center", "visible_inset")
+CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M = 0.04
 CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
     "x": WORKSPACE_BOUNDS_M["x"],
     "y": WORKSPACE_BOUNDS_M["y"],
@@ -190,6 +192,7 @@ class ControllerVariantConfig:
     waypoint_tolerance_m: float | None = None
     osc_position_scale_m: float | None = None
     arrow_anchor_policy: str = "bbox_center"
+    approach_lateral_offset_m: float | None = None
     max_mask_fraction_for_motion: float | None = None
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
 
@@ -220,6 +223,7 @@ class ControllerVariantConfig:
                 CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
+                CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
             }:
                 raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
         if self.waypoint_tolerance_m is not None and (
@@ -248,6 +252,14 @@ class ControllerVariantConfig:
             )
         if self.arrow_anchor_policy != "bbox_center" and self.name != CANDIDATE_V5_CONTROLLER_VARIANT_NAME:
             raise ValueError("non-center arrow anchors are reserved for the v5 candidate controller variant")
+        if self.approach_lateral_offset_m is not None and (
+            not np.isfinite(float(self.approach_lateral_offset_m))
+            or float(self.approach_lateral_offset_m) <= 0.0
+            or float(self.approach_lateral_offset_m) > 0.10
+        ):
+            raise ValueError("approach_lateral_offset_m must be in (0, 0.10]")
+        if self.approach_lateral_offset_m is not None and self.name != CANDIDATE_V6_CONTROLLER_VARIANT_NAME:
+            raise ValueError("directional approach offset is reserved for the v6 candidate controller variant")
         if self.max_mask_fraction_for_motion is not None and (
             not np.isfinite(float(self.max_mask_fraction_for_motion))
             or not 0.0 <= float(self.max_mask_fraction_for_motion) <= MAX_MASK_FRACTION_FOR_MOTION
@@ -286,6 +298,11 @@ class ControllerVariantConfig:
                 None if self.osc_position_scale_m is None else float(self.osc_position_scale_m)
             ),
             "arrow_anchor_policy": self.arrow_anchor_policy,
+            "approach_lateral_offset_m": (
+                None
+                if self.approach_lateral_offset_m is None
+                else float(self.approach_lateral_offset_m)
+            ),
             "max_mask_fraction_for_motion": (
                 None if self.max_mask_fraction_for_motion is None
                 else float(self.max_mask_fraction_for_motion)
@@ -338,6 +355,7 @@ def _resolve_controller_variant(
         CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
     }:
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
@@ -366,6 +384,17 @@ def _resolve_controller_variant(
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+    approach_lateral_offset_m = (
+        CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M
+        if name == CANDIDATE_V6_CONTROLLER_VARIANT_NAME
+        else None
+    )
+    if name == CANDIDATE_V6_CONTROLLER_VARIANT_NAME:
+        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
+        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
+        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
+        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
     return ControllerVariantConfig(
         name=name,
         suite_mode=suite_mode,
@@ -379,6 +408,7 @@ def _resolve_controller_variant(
         waypoint_tolerance_m=waypoint_tolerance_m,
         osc_position_scale_m=osc_position_scale_m,
         arrow_anchor_policy=arrow_anchor_policy,
+        approach_lateral_offset_m=approach_lateral_offset_m,
         max_mask_fraction_for_motion=max_mask_fraction_for_motion,
         workspace_bounds_m=workspace_bounds_m,
     )
@@ -825,6 +855,34 @@ def _arrow_anchor_bboxes(
         cy = y2 - 0.25 * (y2 - y1)
     result[subject] = [2.0 * cx - x2, 2.0 * cy - y2, x2, y2]
     return result
+
+
+def _apply_directional_pregrasp_offset(
+    waypoints: Any,
+    source_visual_point: Sequence[float],
+    destination_visual_point: Sequence[float],
+    offset_m: float | None,
+) -> Any:
+    """Move only the pregrasp XY waypoint along the visual arrow direction."""
+    if offset_m is None:
+        return waypoints
+    offset = float(offset_m)
+    if not np.isfinite(offset) or offset <= 0.0 or offset > 0.10:
+        raise ValueError("directional pregrasp offset must be in (0, 0.10]")
+    source = np.asarray(source_visual_point, dtype=np.float64).reshape(-1)
+    destination = np.asarray(destination_visual_point, dtype=np.float64).reshape(-1)
+    if source.shape != (3,) or destination.shape != (3,):
+        raise ValueError("visual endpoints must be finite 3D points")
+    direction = destination[:2] - source[:2]
+    norm = float(np.linalg.norm(direction))
+    if not np.isfinite(norm) or norm <= 1e-9:
+        return waypoints
+    adjusted = np.asarray(waypoints, dtype=np.float64)
+    if adjusted.ndim != 2 or adjusted.shape[1] != 3 or adjusted.shape[0] < 1:
+        raise ValueError("directional pregrasp offset requires an Nx3 waypoint array")
+    adjusted = adjusted.copy()
+    adjusted[0, :2] += (direction / norm) * offset
+    return adjusted
 
 
 def _call_controller(function: Callable[..., Any], **kwargs: Any) -> Any:
@@ -1756,6 +1814,12 @@ def run_episode(
         initial_proprio.get("eef_quat"),
         {"lift_height_m": float(clearance_m)},
     )
+    waypoints = _apply_directional_pregrasp_offset(
+        waypoints,
+        source_visual_point,
+        destination_visual_point,
+        variant.approach_lateral_offset_m,
+    )
     if isinstance(waypoints, Mapping):
         waypoint_points = {
             f"waypoint_{name}": _position(value)[:3] for name, value in waypoints.items()
@@ -2284,6 +2348,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
+            CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
         ),
         default="default",
     )
@@ -2317,11 +2382,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
     }
     candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
     candidate_v3 = args.controller_variant == CANDIDATE_V3_CONTROLLER_VARIANT_NAME
     candidate_v4 = args.controller_variant == CANDIDATE_V4_CONTROLLER_VARIANT_NAME
     candidate_v5 = args.controller_variant == CANDIDATE_V5_CONTROLLER_VARIANT_NAME
+    candidate_v6 = args.controller_variant == CANDIDATE_V6_CONTROLLER_VARIANT_NAME
     variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
     endpoint_depth_statistic = args.endpoint_depth_statistic or (
         CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
@@ -2339,16 +2406,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     max_mask_fraction_for_motion = (
         CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6
         else None
     )
     workspace_bounds_m = (
         CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6
         else None
     )
     osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M if candidate_v4 else None
     arrow_anchor_policy = "visible_inset" if candidate_v5 else "bbox_center"
+    approach_lateral_offset_m = (
+        CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M if candidate_v6 else None
+    )
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode
     )
@@ -2406,6 +2476,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 waypoint_tolerance_m=waypoint_tolerance_m,
                 osc_position_scale_m=osc_position_scale_m,
                 arrow_anchor_policy=arrow_anchor_policy,
+                approach_lateral_offset_m=approach_lateral_offset_m,
                 max_mask_fraction_for_motion=max_mask_fraction_for_motion,
                 workspace_bounds_m=workspace_bounds_m,
             ),

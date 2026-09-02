@@ -783,6 +783,18 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
             arrow_anchor_policy="visible_inset",
         )
 
+    v6 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V6_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert v6.approach_lateral_offset_m == pytest.approx(0.04)
+    assert v6.arrow_anchor_policy == "bbox_center"
+    assert v6.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash, v5.hash}
+    with pytest.raises(ValueError, match="reserved for the v6"):
+        runner.ControllerVariantConfig(
+            name=runner.CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
+            approach_lateral_offset_m=0.04,
+        )
+
 
 def test_osc_position_scale_candidate_changes_only_translational_scales(runner, monkeypatch):
     seen = {}
@@ -814,6 +826,18 @@ def test_visible_inset_arrow_anchor_moves_only_clipped_subject_center(runner):
     assert centered["akita_black_bowl_1"] == [0.0, 107.0, 59.0, 173.0]
     assert inset["akita_black_bowl_1"] == pytest.approx([-29.5, 107.0, 59.0, 173.0])
     assert inset["plate_1"] == pytest.approx(centered["plate_1"])
+
+
+def test_directional_pregrasp_offset_uses_only_horizontal_arrow_direction(runner):
+    waypoints = np.zeros((6, 3), dtype=np.float64)
+    adjusted = runner._apply_directional_pregrasp_offset(
+        waypoints,
+        source_visual_point=(1.0, 2.0, 3.0),
+        destination_visual_point=(1.0, 2.2, 4.0),
+        offset_m=0.04,
+    )
+    assert adjusted[0].tolist() == pytest.approx([0.0, 0.04, 0.0])
+    assert np.all(adjusted[1:] == 0.0)
 
 
 def test_endpoint_depth_statistic_selection_is_deterministic(runner):
