@@ -172,7 +172,9 @@ def test_bundled_v10_configs_parse_flat_policy_and_adapter_factory_receives_it()
             suite_mode="vanilla",
         )
         assert provenance["config_hash"]
-        assert variant.zerograsp["eef_calibration_verified"] is False
+        assert variant.zerograsp["eef_calibration_verified"] is True
+        assert variant.zerograsp["calibration_sha256"] == "f50c2d423cfe5573c02f9d63205fd52cdbef5303a4f3ebd9985eb0c888fb4071"
+        assert variant.zerograsp["probe_sha256"] == "f879a86027d5b9cb67bfbb62cb045bece3f485f977e7c2bf61d3127358026291"
         assert "pose_calibration" not in variant.zerograsp
         seen = []
 

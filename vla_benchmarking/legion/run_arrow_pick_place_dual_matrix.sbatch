@@ -14,6 +14,8 @@
 #   ZERO_GRASP_CHECKPOINT plus ZERO_GRASP_CHECKPOINT_SHA256
 #   ZERO_GRASP_CONFIG plus ZERO_GRASP_CONFIG_SHA256
 #   ZERO_GRASP_ENV_LOCK and ZERO_GRASP_ENV_LOCK_SHA256 (mandatory for V10)
+#   ZERO_GRASP_EEF_PROBE live two-suite frame-probe manifest whose SHA is
+#                        embedded in the controller policy
 
 #SBATCH --job-name=arrow_pick_place_dual_matrix
 #SBATCH --partition=gpu_a40
@@ -74,7 +76,10 @@ ZERO_GRASP_CONFIG_RESOLVED=""
 ZERO_GRASP_CONFIG_SHA256=""
 ZERO_GRASP_ENV_LOCK_RESOLVED=""
 ZERO_GRASP_ENV_LOCK_SHA256=""
+ZERO_GRASP_EEF_PROBE_RESOLVED=""
+ZERO_GRASP_EEF_PROBE_SHA256=""
 MATRIX_CONTINUE_ON_MOTION_FAILURE="${MATRIX_CONTINUE_ON_MOTION_FAILURE:-1}"
+MATRIX_EXECUTION_MODE="${MATRIX_EXECUTION_MODE:-execute_motion}"
 
 if [[ -n "${CONTROLLER_CONFIG:-}" && -n "${ARROW_CONTROLLER_CONFIG:-}" && "$CONTROLLER_CONFIG" != "$ARROW_CONTROLLER_CONFIG" ]]; then
   die 'CONTROLLER_CONFIG and ARROW_CONTROLLER_CONFIG disagree'
@@ -89,6 +94,7 @@ if [[ -n "$CONTROLLER_CONFIG_INPUT" && "$CONTROLLER_VARIANT" != rgbd_arrow_v1 ]]
   die 'CONTROLLER_CONFIG cannot be combined with a non-default ARROW_CONTROLLER_VARIANT'
 fi
 [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" =~ ^[01]$ ]] || die 'MATRIX_CONTINUE_ON_MOTION_FAILURE is invalid'
+[[ "$MATRIX_EXECUTION_MODE" == execute_motion || "$MATRIX_EXECUTION_MODE" == dry_run ]] || die 'MATRIX_EXECUTION_MODE must be execute_motion or dry_run'
 
 [[ "$RUN_ROOT" = /* && "$OUTPUT_ROOT" = /* && "$ARCHIVE_ROOT" = /* ]] || die 'paths must be absolute'
 command -v realpath >/dev/null 2>&1 || die 'realpath is required for safe path validation'
@@ -179,6 +185,8 @@ archive_on_exit() {
       printf 'zero_grasp_config_sha256=%s\n' "$ZERO_GRASP_CONFIG_SHA256"
       printf 'zero_grasp_env_lock=%s\n' "$ZERO_GRASP_ENV_LOCK_RESOLVED"
       printf 'zero_grasp_env_lock_sha256=%s\n' "$ZERO_GRASP_ENV_LOCK_SHA256"
+      printf 'zero_grasp_eef_probe=%s\n' "$ZERO_GRASP_EEF_PROBE_RESOLVED"
+      printf 'zero_grasp_eef_probe_sha256=%s\n' "$ZERO_GRASP_EEF_PROBE_SHA256"
     fi
     printf 'run_root=%s\n' "$RUN_ROOT"
     printf 'output_root=%s\n' "$OUTPUT_ROOT"
@@ -211,7 +219,7 @@ controller_config_path=$CONTROLLER_CONFIG_PATH
 controller_config_file_sha256=$CONTROLLER_CONFIG_FILE_SHA256
 suite_order=vanilla,sealed_randomized
 continue_on_motion_failure=$MATRIX_CONTINUE_ON_MOTION_FAILURE
-motion_mode=execute_motion
+motion_mode=$MATRIX_EXECUTION_MODE
 arrow_input_policy=hardcoded_subject_goal_bbox_renderer
 language_translation=false
 EOF
@@ -300,6 +308,7 @@ if [[ "$ZERO_GRASP_SELECTED" == 1 ]]; then
   ZERO_GRASP_CONFIG_EXPECTED="${ZERO_GRASP_CONFIG_SHA256:-}"
   ZERO_GRASP_ENV_LOCK_INPUT="${ZERO_GRASP_ENV_LOCK:-}"
   ZERO_GRASP_ENV_LOCK_EXPECTED="${ZERO_GRASP_ENV_LOCK_SHA256:-}"
+  ZERO_GRASP_EEF_PROBE_INPUT="${ZERO_GRASP_EEF_PROBE:-}"
 
   [[ -n "$ZERO_GRASP_ROOT_INPUT" && "$ZERO_GRASP_ROOT_INPUT" = /* ]] || die 'ZERO_GRASP_ROOT must be an absolute path'
   [[ "$ZERO_GRASP_ROOT_INPUT" != / && "$ZERO_GRASP_ROOT_INPUT" != "$REPO_ROOT" ]] || die 'ZERO_GRASP_ROOT points at an unsafe/shared checkout'
@@ -342,6 +351,41 @@ if [[ "$ZERO_GRASP_SELECTED" == 1 ]]; then
   [[ -f "$ZERO_GRASP_ENV_LOCK_RESOLVED" && -r "$ZERO_GRASP_ENV_LOCK_RESOLVED" ]] || die 'ZERO_GRASP_ENV_LOCK is not a readable regular file'
   ZERO_GRASP_ENV_LOCK_SHA256="$(sha256sum -- "$ZERO_GRASP_ENV_LOCK_RESOLVED" | awk '{print $1}')" || die 'cannot hash ZERO_GRASP_ENV_LOCK'
   [[ "$ZERO_GRASP_ENV_LOCK_SHA256" == "$ZERO_GRASP_ENV_LOCK_EXPECTED" ]] || die 'ZeroGrasp environment lock SHA-256 mismatch'
+
+  [[ -n "$ZERO_GRASP_EEF_PROBE_INPUT" ]] || die 'ZERO_GRASP_EEF_PROBE is required for a ZeroGrasp matrix'
+  ZERO_GRASP_EEF_PROBE_RESOLVED="$(realpath -e -- "$ZERO_GRASP_EEF_PROBE_INPUT")" || die 'cannot canonicalize ZERO_GRASP_EEF_PROBE'
+  [[ -f "$ZERO_GRASP_EEF_PROBE_RESOLVED" && -r "$ZERO_GRASP_EEF_PROBE_RESOLVED" ]] || die 'ZERO_GRASP_EEF_PROBE is not a readable regular file'
+  ZERO_GRASP_EEF_PROBE_SHA256="$(sha256sum -- "$ZERO_GRASP_EEF_PROBE_RESOLVED" | awk '{print $1}')" || die 'cannot hash ZERO_GRASP_EEF_PROBE'
+  "$PYTHON" - "$CONTROLLER_CONFIG_CANONICAL_PATH" "$ZERO_GRASP_EEF_PROBE_RESOLVED" "$ZERO_GRASP_EEF_PROBE_SHA256" <<'PY'
+import json
+import pathlib
+import sys
+
+import numpy as np
+
+config = json.loads(pathlib.Path(sys.argv[1]).read_text())
+probe = json.loads(pathlib.Path(sys.argv[2]).read_text())
+actual_hash = sys.argv[3]
+policy = config.get("zerograsp", {})
+if policy.get("probe_sha256") != actual_hash:
+    raise SystemExit("ZeroGrasp EEF probe hash differs from controller policy")
+if probe.get("schema_version") != "zerograsp_live_frame_probe_manifest.v1":
+    raise SystemExit("ZeroGrasp EEF probe schema is invalid")
+records = probe.get("records")
+if not isinstance(records, list) or {r.get("execution", {}).get("suite_mode") for r in records} != {"vanilla", "sealed_randomized"}:
+    raise SystemExit("ZeroGrasp EEF probe must cover both suite modes")
+expected = np.asarray(policy.get("R_H_E"), dtype=float)
+if expected.shape != (3, 3):
+    raise SystemExit("ZeroGrasp policy R_H_E is invalid")
+for record in records:
+    execution = record.get("execution", {})
+    observed = np.asarray(record.get("observed_body_to_site_rotation_matrix"), dtype=float)
+    if record.get("passed") is not True or execution.get("commanded_robot_motion") is not False or execution.get("evaluator_queried") is not False:
+        raise SystemExit("ZeroGrasp EEF probe did not satisfy its safety contract")
+    if observed.shape != (3, 3) or not np.allclose(observed, expected, atol=1e-5, rtol=1e-5):
+        raise SystemExit("ZeroGrasp EEF probe rotation differs from controller policy")
+PY
+  cp -- "$ZERO_GRASP_EEF_PROBE_RESOLVED" "$RUN_ROOT/zerograsp_eef_probe.json"
   ZERO_GRASP_PYTHON_VERSION="$($ZERO_GRASP_PYTHON_RESOLVED -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" || die 'cannot query ZeroGrasp Python version'
   "$ZERO_GRASP_PYTHON_RESOLVED" - "$ZERO_GRASP_ENV_LOCK_RESOLVED" "$ZERO_GRASP_ROOT_RESOLVED" "$ZERO_GRASP_REVISION" "$ZERO_GRASP_CHECKPOINT_RESOLVED" "$ZERO_GRASP_CHECKPOINT_SHA256" "$ZERO_GRASP_CONFIG_RESOLVED" "$ZERO_GRASP_CONFIG_SHA256" "$ZERO_GRASP_PYTHON_VERSION" "$ZERO_GRASP_PYTHON_RESOLVED" "$ZERO_GRASP_PYTHON_SHA256" <<'PY'
 import json
@@ -443,6 +487,8 @@ PY
     printf 'zero_grasp_config_sha256=%s\n' "$ZERO_GRASP_CONFIG_SHA256"
     printf 'zero_grasp_env_lock=%s\n' "$ZERO_GRASP_ENV_LOCK_RESOLVED"
     printf 'zero_grasp_env_lock_sha256=%s\n' "$ZERO_GRASP_ENV_LOCK_SHA256"
+    printf 'zero_grasp_eef_probe=%s\n' "$ZERO_GRASP_EEF_PROBE_RESOLVED"
+    printf 'zero_grasp_eef_probe_sha256=%s\n' "$ZERO_GRASP_EEF_PROBE_SHA256"
   } >> "$RUN_ROOT/job_context.env"
 fi
 
@@ -490,9 +536,13 @@ run_suite() {
     --output-root "$suite_root"
     --suite-mode "$suite"
     --controller-variant "$CONTROLLER_VARIANT"
-    --execute-motion
     --allow-unvalidated-profile
   )
+  if [[ "$MATRIX_EXECUTION_MODE" == execute_motion ]]; then
+    matrix_args+=(--execute-motion)
+  else
+    matrix_args+=(--dry-run)
+  fi
   if [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" == 1 ]]; then matrix_args+=(--continue-on-motion-failure); fi
   if [[ -n "$CONTROLLER_CONFIG_PATH" ]]; then matrix_args+=(--controller-config "$CONTROLLER_CONFIG_PATH"); fi
   "$PYTHON" "$MATRIX_LAUNCHER" "${matrix_args[@]}"

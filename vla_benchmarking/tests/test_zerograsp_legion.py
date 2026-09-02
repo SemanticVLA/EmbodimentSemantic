@@ -50,6 +50,7 @@ def test_dual_matrix_zero_grasp_contract_is_opt_in_and_hash_pinned():
         "ZERO_GRASP_CONFIG_SHA256",
         "ZERO_GRASP_ENV_LOCK",
         "ZERO_GRASP_ENV_LOCK_SHA256",
+        "ZERO_GRASP_EEF_PROBE",
     ):
         assert variable in text
     assert "vla_benchmarking/zerograsp_worker.py" in text
@@ -68,6 +69,9 @@ def test_dual_matrix_zero_grasp_contract_is_opt_in_and_hash_pinned():
     assert '"python_executable_sha256"' in text
     assert '"venv"' in text and '"python"' in text
     assert '"$ZERO_GRASP_PYTHON_RESOLVED" - "$ZERO_GRASP_ENV_LOCK_RESOLVED"' in text
+    assert "ZeroGrasp EEF probe hash differs from controller policy" in text
+    assert "ZeroGrasp EEF probe rotation differs from controller policy" in text
+    assert 'cp -- "$ZERO_GRASP_EEF_PROBE_RESOLVED" "$RUN_ROOT/zerograsp_eef_probe.json"' in text
 
     # The worker handshake must precede the first LIBERO/MuJoCo import and the
     # matrix launcher invocation, which is where environments are constructed.
@@ -84,6 +88,16 @@ def test_dual_matrix_does_not_run_worker_for_legacy_path():
     assert 'ZERO_GRASP_SELECTED="$($PYTHON' in text
     assert 'if [[ "$ZERO_GRASP_SELECTED" == 1 ]]; then' in selected_block
     assert selected_block.count('--handshake') == 0
+
+
+def test_dual_matrix_motion_mode_is_explicit_and_defaults_to_execution():
+    text = DUAL_MATRIX.read_text(encoding="utf-8")
+    assert 'MATRIX_EXECUTION_MODE="${MATRIX_EXECUTION_MODE:-execute_motion}"' in text
+    assert "MATRIX_EXECUTION_MODE must be execute_motion or dry_run" in text
+    assert 'if [[ "$MATRIX_EXECUTION_MODE" == execute_motion ]]' in text
+    assert "matrix_args+=(--execute-motion)" in text
+    assert "matrix_args+=(--dry-run)" in text
+    assert "motion_mode=$MATRIX_EXECUTION_MODE" in text
 
 
 def test_runtime_setup_matches_official_pinned_compute_contract():
