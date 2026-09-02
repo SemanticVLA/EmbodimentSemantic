@@ -75,6 +75,7 @@ DEFAULT_PROFILE_NAME = "libero_spatial_akita_bowl_agentview_v1"
 CANDIDATE_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v1"
 CANDIDATE_V2_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2"
 CANDIDATE_V3_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3"
+CANDIDATE_V4_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_gain_v4"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -152,6 +153,7 @@ CANDIDATE_ENDPOINT_DEPTH_QUANTILE = 0.25
 CANDIDATE_APPROACH_TOLERANCE_M = 0.015
 CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION = 0.40
 CANDIDATE_V3_WAYPOINT_TOLERANCE_M = 0.025
+CANDIDATE_V4_OSC_POSITION_SCALE_M = 0.035
 CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
     "x": WORKSPACE_BOUNDS_M["x"],
     "y": WORKSPACE_BOUNDS_M["y"],
@@ -159,6 +161,7 @@ CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
 })
 MAX_APPROACH_TOLERANCE_M = 0.025
 MAX_MASK_FRACTION_FOR_MOTION = 0.50
+MAX_OSC_POSITION_SCALE_M = 0.10
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,7 @@ class ControllerVariantConfig:
     endpoint_depth_quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE
     approach_tolerance_m: float | None = None
     waypoint_tolerance_m: float | None = None
+    osc_position_scale_m: float | None = None
     max_mask_fraction_for_motion: float | None = None
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
 
@@ -211,6 +215,7 @@ class ControllerVariantConfig:
             if self.name not in {
                 CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+                CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
             }:
                 raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
         if self.waypoint_tolerance_m is not None and (
@@ -223,6 +228,16 @@ class ControllerVariantConfig:
             )
         if self.waypoint_tolerance_m is not None and self.name != CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
             raise ValueError("waypoint tolerance is reserved for the v3 candidate controller variant")
+        if self.osc_position_scale_m is not None and (
+            not np.isfinite(float(self.osc_position_scale_m))
+            or float(self.osc_position_scale_m) <= 0.0
+            or float(self.osc_position_scale_m) > MAX_OSC_POSITION_SCALE_M
+        ):
+            raise ValueError(
+                f"osc_position_scale_m must be in (0, {MAX_OSC_POSITION_SCALE_M}]"
+            )
+        if self.osc_position_scale_m is not None and self.name != CANDIDATE_V4_CONTROLLER_VARIANT_NAME:
+            raise ValueError("OSC position scale is reserved for the v4 candidate controller variant")
         if self.max_mask_fraction_for_motion is not None and (
             not np.isfinite(float(self.max_mask_fraction_for_motion))
             or not 0.0 <= float(self.max_mask_fraction_for_motion) <= MAX_MASK_FRACTION_FOR_MOTION
@@ -256,6 +271,9 @@ class ControllerVariantConfig:
             ),
             "waypoint_tolerance_m": (
                 None if self.waypoint_tolerance_m is None else float(self.waypoint_tolerance_m)
+            ),
+            "osc_position_scale_m": (
+                None if self.osc_position_scale_m is None else float(self.osc_position_scale_m)
             ),
             "max_mask_fraction_for_motion": (
                 None if self.max_mask_fraction_for_motion is None
@@ -307,6 +325,7 @@ def _resolve_controller_variant(
         CANDIDATE_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
     }:
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
@@ -320,6 +339,14 @@ def _resolve_controller_variant(
     if name == CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
         max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
         workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
+    osc_position_scale_m = None
+    if name == CANDIDATE_V4_CONTROLLER_VARIANT_NAME:
+        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
+        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
+        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
+        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+        osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M
     return ControllerVariantConfig(
         name=name,
         suite_mode=suite_mode,
@@ -331,6 +358,7 @@ def _resolve_controller_variant(
         endpoint_depth_quantile=endpoint_depth_quantile,
         approach_tolerance_m=approach_tolerance_m,
         waypoint_tolerance_m=waypoint_tolerance_m,
+        osc_position_scale_m=osc_position_scale_m,
         max_mask_fraction_for_motion=max_mask_fraction_for_motion,
         workspace_bounds_m=workspace_bounds_m,
     )
@@ -1045,6 +1073,7 @@ def _phase_waypoint(waypoints: Any, phase: str) -> Any:
 def normalized_action_for_waypoint(
     current_proprio: Mapping[str, np.ndarray], waypoint: Any, *, gripper: float,
     held_rotation: np.ndarray | None = None,
+    osc_position_scale_m: float | None = None,
 ) -> np.ndarray:
     """Produce one finite, seven-dimensional normalized OSC_POSE action."""
     current = current_proprio.get("eef_pos")
@@ -1056,6 +1085,12 @@ def normalized_action_for_waypoint(
         raise ValueError("EEF orientation proprioception is required for OSC action generation")
     if held_rotation is None:
         held_rotation = current_rot
+    scales = DEFAULT_OSC_SCALES
+    if osc_position_scale_m is not None:
+        position_scale = float(osc_position_scale_m)
+        if not np.isfinite(position_scale) or position_scale <= 0.0:
+            raise ValueError("osc_position_scale_m must be finite and positive")
+        scales = (position_scale, position_scale, position_scale, *DEFAULT_OSC_SCALES[3:])
     # Waypoints are positions only by design.  Holding the initial EEF
     # orientation makes the bowl transfer a top-down, deterministic primitive.
     action = _require(normalized_osc_action, "normalized_osc_action")(
@@ -1064,7 +1099,7 @@ def normalized_action_for_waypoint(
         target_pos=target[:3],
         target_rot=held_rotation,
         gripper=float(gripper),
-        scales=DEFAULT_OSC_SCALES,
+        scales=scales,
     )
     action = np.asarray(action, dtype=np.float64).reshape(-1)
     if action.shape != (OSC_ACTION_DIM,):
@@ -1104,6 +1139,7 @@ def _run_motion(
     stall_window_steps: int = DEFAULT_STALL_WINDOW_STEPS,
     stall_delta_m: float = DEFAULT_STALL_DELTA_M,
     phase_policies: Mapping[str, Mapping[str, Any]] | None = None,
+    osc_position_scale_m: float | None = None,
 ) -> list[dict[str, Any]]:
     if phase_timeout_steps <= 0:
         raise ValueError("phase_timeout_steps must be positive")
@@ -1148,7 +1184,11 @@ def _run_motion(
         error_history: list[float] = []
         for step in range(required_steps):
             action = normalized_action_for_waypoint(
-                proprio, waypoint, gripper=gripper, held_rotation=held_rotation
+                proprio,
+                waypoint,
+                gripper=gripper,
+                held_rotation=held_rotation,
+                osc_position_scale_m=osc_position_scale_m,
             )
             record["last_action"] = action.tolist()
             record["steps"] = step + 1
@@ -1725,6 +1765,7 @@ def run_episode(
             stall_window_steps=variant.stall_window_steps,
             stall_delta_m=variant.stall_delta_m,
             phase_policies=phase_policies,
+            osc_position_scale_m=variant.osc_position_scale_m,
         )
     except TimeoutError as exc:
         if (
@@ -2172,6 +2213,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             CANDIDATE_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+            CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
         ),
         default="default",
     )
@@ -2203,9 +2245,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         CANDIDATE_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
     }
     candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
     candidate_v3 = args.controller_variant == CANDIDATE_V3_CONTROLLER_VARIANT_NAME
+    candidate_v4 = args.controller_variant == CANDIDATE_V4_CONTROLLER_VARIANT_NAME
     variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
     endpoint_depth_statistic = args.endpoint_depth_statistic or (
         CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
@@ -2227,6 +2271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     workspace_bounds_m = (
         CANDIDATE_V2_WORKSPACE_BOUNDS_M if candidate_v2 or candidate_v3 else None
     )
+    osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M if candidate_v4 else None
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode
     )
@@ -2282,6 +2327,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 endpoint_depth_quantile=endpoint_depth_quantile,
                 approach_tolerance_m=approach_tolerance_m,
                 waypoint_tolerance_m=waypoint_tolerance_m,
+                osc_position_scale_m=osc_position_scale_m,
                 max_mask_fraction_for_motion=max_mask_fraction_for_motion,
                 workspace_bounds_m=workspace_bounds_m,
             ),

@@ -758,6 +758,35 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
             waypoint_tolerance_m=0.02,
         )
 
+    v4 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V4_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert v4.osc_position_scale_m == pytest.approx(0.035)
+    assert v4.waypoint_tolerance_m is None
+    assert v4.max_mask_fraction_for_motion == pytest.approx(0.40)
+    assert v4.hash not in {candidate.hash, v2.hash, v3.hash}
+    with pytest.raises(ValueError, match="reserved for the v4"):
+        runner.ControllerVariantConfig(
+            name=runner.CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
+            osc_position_scale_m=0.035,
+        )
+
+
+def test_osc_position_scale_candidate_changes_only_translational_scales(runner, monkeypatch):
+    seen = {}
+
+    def fake_osc(**kwargs):
+        seen["scales"] = tuple(kwargs["scales"])
+        return np.zeros(7, dtype=np.float32)
+
+    monkeypatch.setattr(runner, "normalized_osc_action", fake_osc)
+    action = runner.normalized_action_for_waypoint(
+        runner._proprioception(_motion_proprio()), np.zeros(3), gripper=0.0,
+        osc_position_scale_m=runner.CANDIDATE_V4_OSC_POSITION_SCALE_M,
+    )
+    assert action.shape == (7,)
+    assert seen["scales"] == pytest.approx((0.035, 0.035, 0.035, 0.5, 0.5, 0.5))
+
 
 def test_endpoint_depth_statistic_selection_is_deterministic(runner):
     depth = np.ones((5, 5), dtype=np.float32)
