@@ -691,6 +691,17 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
         runner.ControllerVariantConfig(name=runner.DEFAULT_PROFILE_NAME, approach_tolerance_m=0.02)
 
 
+def test_endpoint_depth_statistic_selection_is_deterministic(runner):
+    depth = np.ones((5, 5), dtype=np.float32)
+    depth[0:3, 0:3] = np.linspace(0.2, 0.8, 9, dtype=np.float32).reshape(3, 3)
+    median = runner._depth_at(depth, (2, 2), statistic="median")
+    lower = runner._depth_at(depth, (2, 2), statistic="lower_quantile", quantile=0.25)
+    nearest = runner._depth_at(depth, (2, 2), statistic="nearest_valid")
+    assert median == pytest.approx(1.0)
+    assert lower < median
+    assert nearest == pytest.approx(0.8)
+
+
 def test_endpoint_depth_statistics_and_candidate_tolerance_are_audited(
     runner, monkeypatch, tmp_path: Path
 ):

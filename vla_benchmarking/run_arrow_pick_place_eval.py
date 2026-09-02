@@ -736,9 +736,18 @@ def _depth_at_with_audit(
     }
 
 
-def _depth_at(depth: np.ndarray, uv: np.ndarray, radius: int = 2) -> float:
-    """Backward-compatible median robust depth estimator."""
-    selected, _audit = _depth_at_with_audit(depth, uv, radius)
+def _depth_at(
+    depth: np.ndarray,
+    uv: np.ndarray,
+    radius: int = 2,
+    *,
+    statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC,
+    quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE,
+) -> float:
+    """Robust endpoint depth estimator with median-compatible defaults."""
+    selected, _audit = _depth_at_with_audit(
+        depth, uv, radius, statistic=statistic, quantile=quantile
+    )
     return selected
 
 
