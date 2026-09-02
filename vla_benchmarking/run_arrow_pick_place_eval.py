@@ -76,6 +76,7 @@ CANDIDATE_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candida
 CANDIDATE_V2_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2"
 CANDIDATE_V3_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3"
 CANDIDATE_V4_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_gain_v4"
+CANDIDATE_V5_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_visible_anchor_v5"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -154,6 +155,7 @@ CANDIDATE_APPROACH_TOLERANCE_M = 0.015
 CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION = 0.40
 CANDIDATE_V3_WAYPOINT_TOLERANCE_M = 0.025
 CANDIDATE_V4_OSC_POSITION_SCALE_M = 0.035
+ARROW_ANCHOR_POLICIES = ("bbox_center", "visible_inset")
 CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
     "x": WORKSPACE_BOUNDS_M["x"],
     "y": WORKSPACE_BOUNDS_M["y"],
@@ -187,6 +189,7 @@ class ControllerVariantConfig:
     approach_tolerance_m: float | None = None
     waypoint_tolerance_m: float | None = None
     osc_position_scale_m: float | None = None
+    arrow_anchor_policy: str = "bbox_center"
     max_mask_fraction_for_motion: float | None = None
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
 
@@ -216,6 +219,7 @@ class ControllerVariantConfig:
                 CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
+                CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
             }:
                 raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
         if self.waypoint_tolerance_m is not None and (
@@ -238,6 +242,12 @@ class ControllerVariantConfig:
             )
         if self.osc_position_scale_m is not None and self.name != CANDIDATE_V4_CONTROLLER_VARIANT_NAME:
             raise ValueError("OSC position scale is reserved for the v4 candidate controller variant")
+        if self.arrow_anchor_policy not in ARROW_ANCHOR_POLICIES:
+            raise ValueError(
+                f"arrow_anchor_policy must be one of {ARROW_ANCHOR_POLICIES}"
+            )
+        if self.arrow_anchor_policy != "bbox_center" and self.name != CANDIDATE_V5_CONTROLLER_VARIANT_NAME:
+            raise ValueError("non-center arrow anchors are reserved for the v5 candidate controller variant")
         if self.max_mask_fraction_for_motion is not None and (
             not np.isfinite(float(self.max_mask_fraction_for_motion))
             or not 0.0 <= float(self.max_mask_fraction_for_motion) <= MAX_MASK_FRACTION_FOR_MOTION
@@ -275,6 +285,7 @@ class ControllerVariantConfig:
             "osc_position_scale_m": (
                 None if self.osc_position_scale_m is None else float(self.osc_position_scale_m)
             ),
+            "arrow_anchor_policy": self.arrow_anchor_policy,
             "max_mask_fraction_for_motion": (
                 None if self.max_mask_fraction_for_motion is None
                 else float(self.max_mask_fraction_for_motion)
@@ -326,6 +337,7 @@ def _resolve_controller_variant(
         CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
     }:
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
@@ -347,6 +359,13 @@ def _resolve_controller_variant(
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
         osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M
+    arrow_anchor_policy = "visible_inset" if name == CANDIDATE_V5_CONTROLLER_VARIANT_NAME else "bbox_center"
+    if name == CANDIDATE_V5_CONTROLLER_VARIANT_NAME:
+        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
+        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
+        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
+        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
     return ControllerVariantConfig(
         name=name,
         suite_mode=suite_mode,
@@ -359,6 +378,7 @@ def _resolve_controller_variant(
         approach_tolerance_m=approach_tolerance_m,
         waypoint_tolerance_m=waypoint_tolerance_m,
         osc_position_scale_m=osc_position_scale_m,
+        arrow_anchor_policy=arrow_anchor_policy,
         max_mask_fraction_for_motion=max_mask_fraction_for_motion,
         workspace_bounds_m=workspace_bounds_m,
     )
@@ -734,6 +754,7 @@ def render_exactly_one_arrow(
     goal_object: str = DEFAULT_GOAL_OBJECT,
     line_width: int = 2,
     head_length: int = 16,
+    anchor_policy: str = "bbox_center",
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Render only the subject→goal arrow on a copy of the clean frame.
 
@@ -746,9 +767,14 @@ def render_exactly_one_arrow(
         from visual_scene_graph import draw_scene_graph_arrows
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("visual_scene_graph is required to render the input arrow") from exc
+    if anchor_policy not in ARROW_ANCHOR_POLICIES:
+        raise ValueError(f"anchor_policy must be one of {ARROW_ANCHOR_POLICIES}")
     relation = (subject, "goal", goal_object)
+    arrow_bboxes = _arrow_anchor_bboxes(
+        bboxes, subject=subject, image_shape=_as_rgb(clean_rgb).shape[:2], policy=anchor_policy
+    )
     arrow = draw_scene_graph_arrows(
-        _as_rgb(clean_rgb), bboxes, [relation], line_width=line_width,
+        _as_rgb(clean_rgb), arrow_bboxes, [relation], line_width=line_width,
         head_length=head_length, copy_image=True,
     )
     if np.array_equal(arrow, clean_rgb):
@@ -758,8 +784,47 @@ def render_exactly_one_arrow(
         "relation": list(relation),
         "line_width": int(line_width),
         "head_length": int(head_length),
+        "anchor_policy": anchor_policy,
         "input_generation_only": True,
     }
+
+
+def _arrow_anchor_bboxes(
+    bboxes: Mapping[str, Sequence[float]],
+    *,
+    subject: str,
+    image_shape: Sequence[int],
+    policy: str,
+) -> dict[str, list[float]]:
+    """Return input-only bbox anchors, nudging clipped subjects inward.
+
+    The controller still receives only rendered pixels.  This policy addresses
+    a clipped source bbox whose mathematical center can lie on an occluded or
+    off-frame portion of an object; it never reads simulator state.
+    """
+    if policy not in ARROW_ANCHOR_POLICIES:
+        raise ValueError(f"anchor policy must be one of {ARROW_ANCHOR_POLICIES}")
+    result = {str(name): [float(value) for value in bbox] for name, bbox in bboxes.items()}
+    if policy == "bbox_center" or subject not in result:
+        return result
+    height, width = (int(image_shape[0]), int(image_shape[1]))
+    x1, y1, x2, y2 = result[subject]
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError(f"invalid subject bbox for arrow anchor: {result[subject]}")
+    # Preserve the visible bbox extent while moving only the synthetic center
+    # toward the in-frame side when the bbox touches an image boundary.
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    if x1 <= 0.0:
+        cx = x1 + 0.25 * (x2 - x1)
+    elif x2 >= float(width):
+        cx = x2 - 0.25 * (x2 - x1)
+    if y1 <= 0.0:
+        cy = y1 + 0.25 * (y2 - y1)
+    elif y2 >= float(height):
+        cy = y2 - 0.25 * (y2 - y1)
+    result[subject] = [2.0 * cx - x2, 2.0 * cy - y2, x2, y2]
+    return result
 
 
 def _call_controller(function: Callable[..., Any], **kwargs: Any) -> Any:
@@ -1562,7 +1627,11 @@ def run_episode(
         if bboxes is None:
             raise ValueError("provide arrow_rgb or input-generation bboxes")
         arrow_rgb, arrow_audit = render_exactly_one_arrow(
-            capture.rgb, bboxes, subject=subject, goal_object=goal_object,
+            capture.rgb,
+            bboxes,
+            subject=subject,
+            goal_object=goal_object,
+            anchor_policy=variant.arrow_anchor_policy,
         )
     else:
         arrow_rgb = _as_rgb(arrow_rgb)
@@ -2214,6 +2283,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
+            CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
         ),
         default="default",
     )
@@ -2246,10 +2316,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
     }
     candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
     candidate_v3 = args.controller_variant == CANDIDATE_V3_CONTROLLER_VARIANT_NAME
     candidate_v4 = args.controller_variant == CANDIDATE_V4_CONTROLLER_VARIANT_NAME
+    candidate_v5 = args.controller_variant == CANDIDATE_V5_CONTROLLER_VARIANT_NAME
     variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
     endpoint_depth_statistic = args.endpoint_depth_statistic or (
         CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
@@ -2266,12 +2338,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         CANDIDATE_V3_WAYPOINT_TOLERANCE_M if candidate_v3 else None
     )
     max_mask_fraction_for_motion = (
-        CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION if candidate_v2 or candidate_v3 else None
+        CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5
+        else None
     )
     workspace_bounds_m = (
-        CANDIDATE_V2_WORKSPACE_BOUNDS_M if candidate_v2 or candidate_v3 else None
+        CANDIDATE_V2_WORKSPACE_BOUNDS_M
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5
+        else None
     )
     osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M if candidate_v4 else None
+    arrow_anchor_policy = "visible_inset" if candidate_v5 else "bbox_center"
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode
     )
@@ -2328,6 +2405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 approach_tolerance_m=approach_tolerance_m,
                 waypoint_tolerance_m=waypoint_tolerance_m,
                 osc_position_scale_m=osc_position_scale_m,
+                arrow_anchor_policy=arrow_anchor_policy,
                 max_mask_fraction_for_motion=max_mask_fraction_for_motion,
                 workspace_bounds_m=workspace_bounds_m,
             ),

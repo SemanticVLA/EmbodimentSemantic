@@ -771,6 +771,18 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
             osc_position_scale_m=0.035,
         )
 
+    v5 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V5_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert v5.arrow_anchor_policy == "visible_inset"
+    assert v5.max_mask_fraction_for_motion == pytest.approx(0.40)
+    assert v5.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash}
+    with pytest.raises(ValueError, match="reserved for the v5"):
+        runner.ControllerVariantConfig(
+            name=runner.CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
+            arrow_anchor_policy="visible_inset",
+        )
+
 
 def test_osc_position_scale_candidate_changes_only_translational_scales(runner, monkeypatch):
     seen = {}
@@ -786,6 +798,22 @@ def test_osc_position_scale_candidate_changes_only_translational_scales(runner, 
     )
     assert action.shape == (7,)
     assert seen["scales"] == pytest.approx((0.035, 0.035, 0.035, 0.5, 0.5, 0.5))
+
+
+def test_visible_inset_arrow_anchor_moves_only_clipped_subject_center(runner):
+    bboxes = {
+        "akita_black_bowl_1": [0.0, 107.0, 59.0, 173.0],
+        "plate_1": [161.0, 37.0, 223.0, 94.0],
+    }
+    centered = runner._arrow_anchor_bboxes(
+        bboxes, subject="akita_black_bowl_1", image_shape=(256, 256), policy="bbox_center"
+    )
+    inset = runner._arrow_anchor_bboxes(
+        bboxes, subject="akita_black_bowl_1", image_shape=(256, 256), policy="visible_inset"
+    )
+    assert centered["akita_black_bowl_1"] == [0.0, 107.0, 59.0, 173.0]
+    assert inset["akita_black_bowl_1"] == pytest.approx([-29.5, 107.0, 59.0, 173.0])
+    assert inset["plate_1"] == pytest.approx(centered["plate_1"])
 
 
 def test_endpoint_depth_statistic_selection_is_deterministic(runner):
