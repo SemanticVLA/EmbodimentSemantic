@@ -125,6 +125,18 @@ fi
 # repository-local submodule URL to the equivalent public HTTPS endpoint.
 if ((VERIFY_ONLY == 0)); then
   git -C "$ROOT" config "submodule.${OCTREE_SUBMODULE_PATH}.url" "$OCTREE_SUBMODULE_URL" || die 'could not configure HTTPS submodule URL'
+  EXPECTED_SUBMODULE_REVISION="$(git -C "$ROOT" ls-tree HEAD "$OCTREE_SUBMODULE_PATH" | awk '{print $3}')"
+  [[ "$EXPECTED_SUBMODULE_REVISION" =~ ^[0-9a-f]{40}$ ]] || die 'cannot resolve pinned octree submodule revision'
+  # A canceled SSH-based clone can leave a valid submodule gitdir with no
+  # checked-out HEAD. Repair that generated checkout without deleting or
+  # resetting it: fetch and detach only the superproject-pinned revision.
+  if [[ -e "$ROOT/$OCTREE_SUBMODULE_PATH/.git" ]] && ! git -C "$ROOT/$OCTREE_SUBMODULE_PATH" rev-parse --verify HEAD >/dev/null 2>&1; then
+    git -C "$ROOT/$OCTREE_SUBMODULE_PATH" remote set-url origin "$OCTREE_SUBMODULE_URL" || die 'could not repair octree submodule remote URL'
+    if ! git -C "$ROOT/$OCTREE_SUBMODULE_PATH" cat-file -e "$EXPECTED_SUBMODULE_REVISION^{commit}" 2>/dev/null; then
+      git -C "$ROOT/$OCTREE_SUBMODULE_PATH" fetch --no-tags origin "$EXPECTED_SUBMODULE_REVISION" || die 'could not fetch pinned octree submodule revision'
+    fi
+    git -C "$ROOT/$OCTREE_SUBMODULE_PATH" checkout --detach "$EXPECTED_SUBMODULE_REVISION" || die 'could not recover pinned octree submodule revision'
+  fi
   git -C "$ROOT" submodule update --init --recursive || die 'could not initialize pinned octree submodule over HTTPS'
 fi
 SUBMODULE_STATUS="$(git -C "$ROOT" submodule status --recursive)" || die 'cannot inspect submodule status'
