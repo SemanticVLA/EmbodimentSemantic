@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -226,6 +227,214 @@ def _diagnostics_complete(record: Mapping[str, Any]) -> bool:
         return False
     partial = record.get("partial_audit")
     return isinstance(partial, Mapping) and _substantive(partial)
+
+
+_P4_EVIDENCE_FIELDS = (
+    "motion_trace", "motion_trace_path", "motion_trace_sha256",
+    "motion_trace_max_steps", "motion_trace_truncated", "failure_snapshots",
+    "failure_bundle", "post_lift_retention_gate", "retention_gate",
+    "source_approach", "support_plane", "placement_observable",
+    "placement_after_retention", "canary_video", "input_budget", "forbidden_input_audit",
+)
+_P4_FORBIDDEN_KEYS = {
+    "object_pose", "object_poses", "sim_state", "simulator_state",
+    "scene_graph", "evaluator", "evaluator_result", "bbox", "bboxes",
+}
+_P4_PLACEMENT_PHASES = {"preplace", "pre_place", "descend_place", "place", "open", "retreat"}
+
+
+def _evidence_value(record: Mapping[str, Any], field: str) -> Any:
+    """Read additive evidence from final, partial, diagnostic, or flat records."""
+    found: Any = None
+    for container in (
+        record.get("audit"), record.get("partial_audit"),
+        record.get("diagnostics"), record,
+    ):
+        if isinstance(container, Mapping) and field in container:
+            value = container[field]
+            if found is None:
+                found = value
+            if _substantive(value):
+                return value
+    return found
+
+
+def _p4_active(metadata: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> bool:
+    for key in ("evidence_contract", "p4_evidence", "persistence_contract"):
+        if _substantive(metadata.get(key)):
+            return True
+    return any(
+        _substantive(_evidence_value(record, field))
+        for record in records for field in _P4_EVIDENCE_FIELDS
+    )
+
+
+def _trace_from_record(record: Mapping[str, Any], artifact: Path) -> tuple[list[Any] | None, Path | None]:
+    value = _evidence_value(record, "motion_trace")
+    if isinstance(value, list):
+        return value, None
+    raw_path = _evidence_value(record, "motion_trace_path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None, None
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = artifact.parent / path
+    path = path.resolve()
+    if not path.is_file():
+        return None, path
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, path
+    steps = payload.get("steps") if isinstance(payload, Mapping) else None
+    return steps if isinstance(steps, list) else None, path
+
+
+def _p4_trace_errors(record: Mapping[str, Any], artifact: Path) -> list[str]:
+    trace, trace_path = _trace_from_record(record, artifact)
+    cell = record.get("cell_index")
+    if trace is None:
+        return [f"motion trace missing or unreadable for cell {cell}"]
+    if not trace:
+        return [f"motion trace empty for cell {cell}"]
+    by_phase: dict[str, list[int]] = defaultdict(list)
+    for item in trace:
+        if not isinstance(item, Mapping):
+            return [f"motion trace contains invalid entry for cell {cell}"]
+        phase = str(item.get("phase", ""))
+        try:
+            step = int(item["step"])
+        except (KeyError, TypeError, ValueError):
+            return [f"motion trace step missing for cell {cell}"]
+        if step < 1:
+            return [f"motion trace step invalid for cell {cell}"]
+        by_phase[phase].append(step)
+    errors: list[str] = []
+    for phase, steps in by_phase.items():
+        ordered = sorted(set(steps))
+        if len(ordered) != len(steps) or ordered != list(range(1, ordered[-1] + 1)):
+            errors.append(f"motion trace has missing or gapped steps for cell {cell} phase {phase}")
+    if _evidence_value(record, "motion_trace_truncated") is True:
+        errors.append(f"motion trace truncated for cell {cell}")
+    maximum = _evidence_value(record, "motion_trace_max_steps")
+    if maximum is not None:
+        try:
+            if int(maximum) <= 0 or len(trace) > int(maximum):
+                errors.append(f"motion trace exceeds declared budget for cell {cell}")
+        except (TypeError, ValueError):
+            errors.append(f"motion trace max_steps invalid for cell {cell}")
+    expected_hash = _evidence_value(record, "motion_trace_sha256")
+    if expected_hash is not None:
+        if not _is_sha256_hex(expected_hash):
+            errors.append(f"motion trace hash invalid for cell {cell}")
+        elif trace_path is not None:
+            actual = hashlib.sha256(trace_path.read_bytes()).hexdigest()
+            if actual != expected_hash:
+                errors.append(f"motion trace hash mismatch for cell {cell}")
+    return errors
+
+
+def _walk_forbidden(value: Any, prefix: str = "") -> list[str]:
+    found: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            name = str(key).lower()
+            if name in _P4_FORBIDDEN_KEYS:
+                found.append(prefix + str(key))
+            found.extend(_walk_forbidden(item, prefix + str(key) + "."))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(_walk_forbidden(item, prefix + f"[{index}]."))
+    return found
+
+
+def _p4_evidence_errors(metadata: Mapping[str, Any], records: Sequence[Mapping[str, Any]], artifact: Path) -> list[str]:
+    if not _p4_active(metadata, records):
+        return []
+    errors: list[str] = []
+    trace_active = any(
+        _substantive(_evidence_value(record, field))
+        for record in records for field in ("motion_trace", "motion_trace_path", "motion_trace_sha256")
+    )
+    for record in records:
+        cell = record.get("cell_index")
+        if trace_active:
+            errors.extend(_p4_trace_errors(record, artifact))
+            video = _evidence_value(record, "canary_video")
+            if not isinstance(video, Mapping) or video.get("status") != "complete" or not isinstance(video.get("video_path"), str):
+                errors.append(f"canary video missing or incomplete for cell {cell}")
+            else:
+                video_path = Path(video["video_path"]).expanduser()
+                if not video_path.is_absolute():
+                    video_path = artifact.parent / video_path
+                if not video_path.resolve().is_file():
+                    errors.append(f"canary video unreadable for cell {cell}")
+        status = str(record.get("status", ""))
+        failure_class = str(record.get("failure_class") or "")
+        needs_failure_bundle = (
+            status != "completed"
+            or failure_class in {"controller_failure", "runtime_failure", "evidence_unavailable"}
+            or failure_class.startswith("controller_")
+            or failure_class.startswith("runtime_")
+        )
+        if needs_failure_bundle:
+            bundle = _evidence_value(record, "failure_bundle")
+            if bundle is None:
+                bundle = _evidence_value(record, "failure_snapshots")
+            if not _substantive(bundle):
+                errors.append(f"failure bundle missing for cell {cell}")
+            elif isinstance(bundle, str):
+                path = Path(bundle).expanduser()
+                if not path.is_absolute():
+                    path = artifact.parent / path
+                if not path.resolve().is_file():
+                    errors.append(f"failure bundle unreadable for cell {cell}")
+        support = _evidence_value(record, "support_plane")
+        if support is not None:
+            if not isinstance(support, Mapping) or support.get("valid") is not True:
+                errors.append(f"invalid support plane for cell {cell}")
+            elif "normal" in support or "plane_normal" in support:
+                normal = support.get("normal", support.get("plane_normal"))
+                try:
+                    values = [float(item) for item in normal]
+                    if len(values) != 3 or not all(math.isfinite(item) for item in values) or math.sqrt(sum(item * item for item in values)) <= 1e-9:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    errors.append(f"invalid support plane normal for cell {cell}")
+        source_approach = _evidence_value(record, "source_approach")
+        if source_approach is not None:
+            if not isinstance(source_approach, Mapping) or not _substantive(source_approach):
+                errors.append(f"source approach evidence missing for cell {cell}")
+            forbidden = _walk_forbidden(source_approach)
+            if forbidden:
+                errors.append(f"forbidden controller input in source approach for cell {cell}: {forbidden[0]}")
+        forbidden_audit = _evidence_value(record, "forbidden_input_audit")
+        if _substantive(forbidden_audit):
+            errors.append(f"forbidden controller input audit is non-empty for cell {cell}")
+        budget = _evidence_value(record, "input_budget")
+        if isinstance(budget, Mapping):
+            try:
+                used = float(budget.get("used", budget.get("actions_used", 0)))
+                limit = float(budget.get("limit", budget.get("max_actions")))
+                if not math.isfinite(used) or not math.isfinite(limit) or used < 0 or limit < 0 or used > limit:
+                    errors.append(f"input budget exceeded or invalid for cell {cell}")
+            except (TypeError, ValueError):
+                errors.append(f"input budget incomplete for cell {cell}")
+        retention = _evidence_value(record, "post_lift_retention_gate")
+        if retention is None:
+            retention = _evidence_value(record, "retention_gate")
+        if retention is not None:
+            values = retention.get("records", []) if isinstance(retention, Mapping) else retention
+            values = values if isinstance(values, list) else [values]
+            decision = values[-1] if values and isinstance(values[-1], Mapping) else None
+            retained = decision.get("retained") if decision else None
+            if retained is not True:
+                phases = record.get("audit", {}).get("phases", []) if isinstance(record.get("audit"), Mapping) else record.get("phases", [])
+                if any(isinstance(item, Mapping) and str(item.get("phase")) in _P4_PLACEMENT_PHASES and int(item.get("steps", 0) or 0) > 0 for item in phases):
+                    errors.append(f"placement after retention failure or unobservable for cell {cell}")
+                if record.get("evaluator_result") is True or (isinstance(record.get("audit"), Mapping) and record["audit"].get("evaluator_success") is True):
+                    errors.append(f"placement/evaluator success after retention failure for cell {cell}")
+    return errors
 
 
 def _config_declaration(metadata: Mapping[str, Any], suite_mode: str) -> Mapping[str, Any] | None:
@@ -566,6 +775,8 @@ def evaluate_gate(
     """Validate a matrix artifact and return a machine-readable gate report."""
     metadata, records = _read_records(artifact)
     errors: list[str] = []
+    artifact_path = Path(artifact).expanduser().resolve()
+    errors.extend(_p4_evidence_errors(metadata, records, artifact_path))
     expected_tasks = {int(value) for value in (DEFAULT_CANARY_TASK_IDS if expected_task_ids is None else expected_task_ids)}
     expected_seed_set = {int(value) for value in (DEFAULT_CANARY_SEEDS if expected_seeds is None else expected_seeds)}
     expected_suite_set = {str(value) for value in expected_suites}

@@ -35,7 +35,9 @@ def test_arrow_controller_has_no_simulator_or_scene_graph_dependency():
 
     forbidden_imports = {"libero", "mujoco", "robosuite", "scene_graph"}
     assert not imported_roots.intersection(forbidden_imports)
-    assert imported_roots <= {"__future__", "dataclasses", "typing", "numpy"}
+    # hashlib is used only for durable RGB-D provenance digests; it does not
+    # create a runtime/simulator dependency.
+    assert imported_roots <= {"__future__", "dataclasses", "typing", "numpy", "hashlib"}
 
     # Check executable identifiers and attribute names, not prose in the
     # module docstring.  ``world`` and ``camera`` are valid geometry terms;

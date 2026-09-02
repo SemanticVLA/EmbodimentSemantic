@@ -47,6 +47,10 @@ try:
         normalized_osc_action,
         arrow_world_xy_basis,
         derive_rgbd_region_grasp_candidates,
+        assess_grasp_retention,
+        derive_rgbd_source_approach_candidates,
+        estimate_destination_support_plane,
+        release_point_on_support_plane,
     )
 except (ImportError, ValueError):  # pragma: no cover - direct script fallback
     try:
@@ -59,12 +63,20 @@ except (ImportError, ValueError):  # pragma: no cover - direct script fallback
             normalized_osc_action,
             arrow_world_xy_basis,
             derive_rgbd_region_grasp_candidates,
+            assess_grasp_retention,
+            derive_rgbd_source_approach_candidates,
+            estimate_destination_support_plane,
+            release_point_on_support_plane,
         )
     except ImportError:  # pragma: no cover - a clear error is raised on use
         build_bowl_waypoints = decode_arrow = decode_arrow_diagnostics = None
         deproject_endpoint = refine_rgbd_endpoint = normalized_osc_action = None
         arrow_world_xy_basis = None
         derive_rgbd_region_grasp_candidates = None
+        assess_grasp_retention = None
+        derive_rgbd_source_approach_candidates = None
+        estimate_destination_support_plane = None
+        release_point_on_support_plane = None
 
 try:
     from .controller_configs import (
@@ -174,6 +186,8 @@ DEFAULT_STALL_WINDOW_STEPS = 10
 DEFAULT_STALL_DELTA_M = 1e-4
 DEFAULT_RECOVERY_ATTEMPTS = 1
 DEFAULT_RECOVERY_STEPS = 3
+DEFAULT_MOTION_TRACE_MAX_STEPS = 512
+DEFAULT_CANARY_VIDEO_MAX_FRAMES = 512
 MAX_NORMALIZED_MASK_FRACTION = 0.25
 ENDPOINT_DEPTH_STATISTICS = ("median", "lower_quantile", "nearest_valid")
 DEFAULT_ENDPOINT_DEPTH_STATISTIC = "median"
@@ -268,7 +282,10 @@ class GraspSearchPolicy:
         if any(len(row) != 3 or any(abs(v) > 0.05 for v in row) for row in offsets):
             raise ValueError("grasp_search.offsets_m must contain 3-vectors within +/-0.05 m")
         triggers = tuple(str(item) for item in self.trigger_on)
-        allowed = {"empty_gripper_likely", "close_stall", "close_timeout", "lift_stall", "lift_timeout"}
+        allowed = {
+            "empty_gripper_likely", "close_stall", "close_timeout", "lift_stall",
+            "lift_timeout", "post_lift_retention",
+        }
         if not set(triggers) <= allowed:
             raise ValueError(f"grasp_search.trigger_on must contain only {sorted(allowed)}")
         region_radius = _finite_number(self.region_radius_m, "grasp_search.region_radius_m")
@@ -449,6 +466,47 @@ def dataclass_fields(cls: type[Any]) -> tuple[Any, ...]:
     return fields(cls)
 
 
+def _optional_rgbd_policy(value: Mapping[str, Any] | None, name: str, allowed: set[str]) -> dict[str, Any] | None:
+    """Validate an additive RGB-D policy without changing legacy defaults."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be an object")
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"unknown {name} keys: {sorted(unknown)}")
+    result = dict(value)
+    if type(result.get("enabled")) is not bool:
+        raise ValueError(f"{name}.enabled must be a boolean")
+    if name == "source_approach":
+        offsets = result.get("offsets_arrow_frame_m")
+        if not isinstance(offsets, list) or not offsets or len(offsets) > 8:
+            raise ValueError(f"{name}.offsets_arrow_frame_m must contain 1-8 offsets")
+        normalized: list[list[float]] = []
+        for row in offsets:
+            if not isinstance(row, list) or len(row) != 3:
+                raise ValueError(f"{name}.offsets_arrow_frame_m entries must be 3-vectors")
+            values = [float(item) for item in row]
+            if not np.isfinite(values).all() or any(abs(item) > 0.04 for item in values):
+                raise ValueError(f"{name}.offsets_arrow_frame_m entries exceed +/-0.04 m")
+            normalized.append(values)
+        result["offsets_arrow_frame_m"] = normalized
+        radius = int(result.get("patch_radius_px", 2))
+        fraction = float(result.get("min_valid_fraction", 0.5))
+        if radius < 1 or radius > 8 or not 0.0 < fraction <= 1.0:
+            raise ValueError(f"{name} depth support settings are invalid")
+        result["patch_radius_px"] = radius
+        result["min_valid_fraction"] = fraction
+    else:
+        radius = int(result.get("patch_radius_px", 3))
+        fraction = float(result.get("min_valid_fraction", 0.5))
+        residual = float(result.get("max_residual_m", 0.01))
+        if radius < 1 or radius > 8 or not 0.0 < fraction <= 1.0 or not np.isfinite(residual) or residual <= 0.0 or residual > 0.05:
+            raise ValueError(f"{name} depth support settings are invalid")
+        result.update({"patch_radius_px": radius, "min_valid_fraction": fraction, "max_residual_m": residual})
+    return result
+
+
 @dataclass(frozen=True)
 class ControllerVariantConfig:
     """Canonical, hashable controller/runtime configuration provenance.
@@ -480,6 +538,8 @@ class ControllerVariantConfig:
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
     grasp_search: GraspSearchPolicy | Mapping[str, Any] | None = None
     micro_correction: MicroCorrectionPolicy | Mapping[str, Any] | None = None
+    source_approach: Mapping[str, Any] | None = None
+    destination_placement: Mapping[str, Any] | None = None
     grasp_provider: str | None = None
     placement_provider: str | None = None
     zerograsp: Mapping[str, Any] | ZeroGraspConfig | None = None
@@ -490,6 +550,12 @@ class ControllerVariantConfig:
     def __post_init__(self) -> None:
         object.__setattr__(self, "grasp_search", GraspSearchPolicy.from_value(self.grasp_search))
         object.__setattr__(self, "micro_correction", MicroCorrectionPolicy.from_value(self.micro_correction))
+        object.__setattr__(self, "source_approach", _optional_rgbd_policy(
+            self.source_approach, "source_approach", {"enabled", "offsets_arrow_frame_m", "patch_radius_px", "min_valid_fraction"}
+        ))
+        object.__setattr__(self, "destination_placement", _optional_rgbd_policy(
+            self.destination_placement, "destination_placement", {"enabled", "patch_radius_px", "min_valid_fraction", "max_residual_m"}
+        ))
         if self.grasp_provider not in (None, "classical", "zerograsp"):
             raise ValueError("grasp_provider must be classical or zerograsp")
         if self.placement_provider not in (None, "classical", "zerograsp_reconstruction"):
@@ -524,7 +590,7 @@ class ControllerVariantConfig:
         object.__setattr__(self, "zerograsp_policy", policy)
         if (self.grasp_provider == "zerograsp" or self.placement_provider == "zerograsp_reconstruction") and policy is None:
             raise ValueError("ZeroGrasp providers require an explicit zerograsp policy")
-        external = self.config_source is not None or self.grasp_search is not None or self.micro_correction is not None or self.grasp_provider is not None or self.placement_provider is not None
+        external = self.config_source is not None or self.grasp_search is not None or self.micro_correction is not None or self.source_approach is not None or self.destination_placement is not None or self.grasp_provider is not None or self.placement_provider is not None
         if self.suite_mode not in SUITE_MODES:
             raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {self.suite_mode!r}")
         if self.phase_timeout_steps <= 0 or self.gripper_dwell_steps <= 0:
@@ -676,6 +742,10 @@ class ControllerVariantConfig:
             result["grasp_search"] = self.grasp_search.canonical()
         if self.micro_correction is not None:
             result["micro_correction"] = self.micro_correction.canonical()
+        if self.source_approach is not None:
+            result["source_approach"] = json.loads(json.dumps(self.source_approach, sort_keys=True))
+        if self.destination_placement is not None:
+            result["destination_placement"] = json.loads(json.dumps(self.destination_placement, sort_keys=True))
         if self.grasp_provider is not None:
             result["grasp_provider"] = self.grasp_provider
         if self.placement_provider is not None:
@@ -732,6 +802,7 @@ def controller_variant_from_config(
         "approach_lateral_offset_m", "grasp_contact_threshold", "grasp_retry_offsets_m",
         "max_mask_fraction_for_motion", "workspace_bounds_m", "grasp_search",
         "micro_correction",
+        "source_approach", "destination_placement",
         "grasp_provider", "placement_provider", "zerograsp", "zerograsp_policy",
     }
     unknown = set(data) - allowed
@@ -1739,6 +1810,70 @@ def _empty_gripper_likely(
     return _gripper_contact_likely(phase_audit, threshold)
 
 
+def _post_lift_retention_decision(
+    trace: Sequence[Mapping[str, Any]],
+    current_proprio: Mapping[str, Any],
+    threshold: float,
+) -> dict[str, Any]:
+    """Classify lift retention from bounded gripper proprioception only.
+
+    The trace is populated by the motion loop and contains no object/contact
+    or evaluator state.  Missing or malformed qpos is explicitly
+    ``unobservable`` so callers cannot silently turn absent evidence into a
+    retry or a success.
+    """
+    samples: list[np.ndarray] = []
+    for item in trace:
+        if not isinstance(item, Mapping) or item.get("phase") != "lift":
+            continue
+        values = item.get("gripper_qpos")
+        try:
+            array = np.asarray(values, dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError):
+            continue
+        if array.size and np.isfinite(array).all():
+            samples.append(array)
+    try:
+        current = np.asarray(current_proprio.get("gripper_qpos"), dtype=np.float64).reshape(-1)
+    except (AttributeError, TypeError, ValueError):
+        current = np.asarray([], dtype=np.float64)
+    if current.size and np.isfinite(current).all():
+        if not samples or samples[-1].shape == current.shape:
+            samples.append(current)
+    if not samples or assess_grasp_retention is None:
+        return {
+            "decision": "unobservable",
+            "retained": False,
+            "sample_count": len(samples),
+            "threshold": float(threshold),
+        }
+    try:
+        evidence = assess_grasp_retention(
+            np.vstack(samples),
+            closed_threshold=float(threshold),
+            min_samples=1,
+            min_closed_fraction=0.80,
+        )
+    except (TypeError, ValueError):
+        return {
+            "decision": "unobservable",
+            "retained": False,
+            "sample_count": len(samples),
+            "threshold": float(threshold),
+        }
+    final_closed = bool(evidence.final_abs_qpos.size and np.max(evidence.final_abs_qpos) >= float(threshold))
+    retained = bool(evidence.retained and final_closed)
+    return {
+        "decision": "retained" if retained else "not_retained",
+        "retained": retained,
+        "sample_count": int(len(samples)),
+        "closed_fraction": float(evidence.closed_fraction),
+        "final_abs_qpos": evidence.final_abs_qpos.tolist(),
+        "threshold": float(threshold),
+        "source": "lift_proprioception_trace",
+    }
+
+
 def _observed_gripper_qpos(
     phase_audit: Sequence[Mapping[str, Any]],
 ) -> list[float] | None:
@@ -1776,6 +1911,54 @@ class _ActionBudget:
             return False
         self.used += 1
         return True
+
+
+def _diagnostic_array(value: Any, *, limit: int | None = None) -> list[float] | None:
+    """Serialize a small numeric diagnostic without exposing simulator state."""
+    if value is None:
+        return None
+    try:
+        array = np.asarray(value, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    if limit is not None:
+        array = array[:limit]
+    if not array.size or not np.isfinite(array).all():
+        return None
+    return array.tolist()
+
+
+def _motion_trace_entry(
+    phase: str,
+    step: int,
+    proprio: Mapping[str, Any] | None,
+    target: Any,
+    *,
+    action_sent: bool,
+    correction_active: bool,
+) -> dict[str, Any]:
+    """Build one bounded, proprioception-only motion trace record."""
+    observed = _proprioception(proprio)
+    eef_pos = _diagnostic_array(observed.get("eef_pos"), limit=3)
+    target_pos = _diagnostic_array(_position(target), limit=3)
+    residual = None
+    residual_norm = None
+    if eef_pos is not None and target_pos is not None and len(eef_pos) == 3:
+        residual_array = np.asarray(target_pos, dtype=np.float64) - np.asarray(eef_pos, dtype=np.float64)
+        residual = residual_array.tolist()
+        residual_norm = float(np.linalg.norm(residual_array))
+    return {
+        "phase": str(phase),
+        "step": int(step),
+        "action_sent": bool(action_sent),
+        "eef_pos_m": eef_pos,
+        "eef_quat_xyzw": _diagnostic_array(observed.get("eef_quat"), limit=4),
+        "gripper_qpos": _diagnostic_array(observed.get("gripper_qpos")),
+        "target_position_m": target_pos,
+        "residual_vector_m": residual,
+        "residual_norm_m": residual_norm,
+        "correction_active": bool(correction_active),
+    }
 
 
 def _position(waypoint: Any) -> np.ndarray:
@@ -1934,6 +2117,11 @@ def _run_motion(
     micro_action_budget: _ActionBudget | None = None,
     orientation_tolerance_rad: float = DEFAULT_ORIENTATION_TOLERANCE_RAD,
     eef_orientation_transform: np.ndarray | None = None,
+    motion_trace_max_steps: int = DEFAULT_MOTION_TRACE_MAX_STEPS,
+    motion_trace_path: str | Path | None = None,
+    failure_snapshot_callback: Callable[[str, int, Mapping[str, Any]], str | Path | None] | None = None,
+    motion_frame_callback: Callable[[str, int], str | Path | None] | None = None,
+    post_lift_retention_gate: Callable[[Mapping[str, Any], Mapping[str, np.ndarray]], Any] | None = None,
 ) -> list[dict[str, Any]]:
     if phase_timeout_steps <= 0:
         raise ValueError("phase_timeout_steps must be positive")
@@ -1949,6 +2137,8 @@ def _run_motion(
         raise ValueError("action_budget must be positive when supplied")
     if not np.isfinite(orientation_tolerance_rad) or orientation_tolerance_rad <= 0:
         raise ValueError("orientation_tolerance_rad must be finite and positive")
+    if type(motion_trace_max_steps) is not int or motion_trace_max_steps <= 0:
+        raise ValueError("motion_trace_max_steps must be a positive integer")
     policies = phase_policies or PHASE_POLICIES
     # Preserve a failure-safe motion marker for batch diagnostics.  A phase can
     # fail during its first simulator step, before an episode audit is written;
@@ -1961,6 +2151,63 @@ def _run_motion(
     if held_rotation is None:
         raise ValueError("initial observation lacks EEF orientation proprioception")
     phase_audit: list[dict[str, Any]] = []
+    motion_trace: list[dict[str, Any]] = []
+    trace_path = Path(motion_trace_path).expanduser().resolve() if motion_trace_path is not None else None
+    trace_truncated = False
+
+    def persist_motion_trace() -> None:
+        if trace_path is None:
+            return
+        try:
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            trace_path.write_text(
+                json.dumps({
+                    "schema_version": "arrow_motion_trace.v1",
+                    "max_steps": int(motion_trace_max_steps),
+                    "truncated": bool(trace_truncated),
+                    "steps": motion_trace,
+                }, indent=2),
+                encoding="utf-8",
+            )
+            setattr(env, "_arrow_motion_trace_persist_error", None)
+        except Exception as exc:  # diagnostic persistence cannot alter control
+            setattr(env, "_arrow_motion_trace_persist_error", str(exc))
+
+    def append_motion_trace(entry: Mapping[str, Any]) -> None:
+        nonlocal trace_truncated
+        if len(motion_trace) < motion_trace_max_steps:
+            motion_trace.append(dict(entry))
+        else:
+            trace_truncated = True
+        setattr(env, "_arrow_motion_trace", motion_trace)
+        setattr(env, "_arrow_motion_trace_truncated", trace_truncated)
+        persist_motion_trace()
+
+    def append_failure_record(record: dict[str, Any], phase: str) -> None:
+        """Publish a phase failure and best-effort durable visual snapshot."""
+        if not phase_audit or phase_audit[-1] is not record:
+            phase_audit.append(record)
+        setattr(env, "_arrow_phase_audit", phase_audit)
+        if failure_snapshot_callback is not None and "failure_snapshot" not in record:
+            try:
+                path = failure_snapshot_callback(phase, len(phase_audit) - 1, record)
+            except Exception as exc:  # snapshots are diagnostics, never recovery
+                record["failure_snapshot"] = None
+                record["failure_snapshot_error"] = str(exc)
+            else:
+                record["failure_snapshot"] = (
+                    Path(path).expanduser().resolve().as_posix() if path is not None else None
+                )
+                if path is not None:
+                    snapshots = list(getattr(env, "_arrow_failure_snapshots", []) or [])
+                    snapshots.append(record["failure_snapshot"])
+                    setattr(env, "_arrow_failure_snapshots", snapshots)
+        persist_motion_trace()
+
+    setattr(env, "_arrow_motion_trace", motion_trace)
+    setattr(env, "_arrow_motion_trace_truncated", False)
+    setattr(env, "_arrow_motion_trace_path", trace_path.as_posix() if trace_path is not None else None)
+    setattr(env, "_arrow_failure_snapshots", [])
     sent_actions = 0
     # Keep a live reference so a timeout or other controller exception can be
     # serialized by the matrix runner even though no final audit is produced.
@@ -2018,14 +2265,25 @@ def _run_motion(
                 frame = _orientation_frame(waypoint)
                 if frame is not None:
                     action_waypoint["orientation_frame"] = frame
-            action = normalized_action_for_waypoint(
-                proprio,
-                action_waypoint,
-                gripper=gripper,
-                held_rotation=held_rotation,
-                osc_position_scale_m=osc_position_scale_m,
-                eef_orientation_transform=eef_orientation_transform,
-            )
+            try:
+                action = normalized_action_for_waypoint(
+                    proprio,
+                    action_waypoint,
+                    gripper=gripper,
+                    held_rotation=held_rotation,
+                    osc_position_scale_m=osc_position_scale_m,
+                    eef_orientation_transform=eef_orientation_transform,
+                )
+            except BaseException as exc:
+                record["status"] = "exception"
+                record["error_type"] = type(exc).__name__
+                record["error"] = str(exc)
+                append_motion_trace(_motion_trace_entry(
+                    phase, step + 1, proprio, action_waypoint,
+                    action_sent=False, correction_active=correction_was_active,
+                ))
+                append_failure_record(record, phase)
+                raise
             record["last_action"] = action.tolist()
             record["steps"] = step + 1
             if dry_run:
@@ -2033,8 +2291,11 @@ def _run_motion(
             if action_budget is not None and sent_actions >= int(action_budget):
                 record["status"] = "timeout"
                 record["action_budget"] = int(action_budget)
-                phase_audit.append(record)
-                setattr(env, "_arrow_phase_audit", phase_audit)
+                append_motion_trace(_motion_trace_entry(
+                    phase, step + 1, proprio, action_waypoint,
+                    action_sent=False, correction_active=correction_was_active,
+                ))
+                append_failure_record(record, phase)
                 raise ControllerMotionTimeout(f"phase {phase} exhausted action budget {action_budget}")
             if not motion_notified:
                 # Let a batch coordinator durably record the transition to
@@ -2046,21 +2307,36 @@ def _run_motion(
             try:
                 observation, done, _info = _step_once(env, action)
                 sent_actions += 1
-            except TimeoutError as exc:
+            except BaseException as exc:
+                append_motion_trace(_motion_trace_entry(
+                    phase, step + 1, proprio, action_waypoint,
+                    action_sent=False, correction_active=correction_was_active,
+                ))
                 # Preserve a partial gripper record so run_episode can offer a
                 # bounded, explicitly-approved RGB-D recovery.  This is the
                 # real reachability seam for recovery: a transport/controller
                 # timeout during close/open, never an inferred object state.
-                if is_gripper_phase:
-                    record["status"] = "timeout"
-                    record["error_type"] = type(exc).__name__
-                    record["error"] = str(exc)
-                    phase_audit.append(record)
-                    setattr(env, "_arrow_phase_audit", phase_audit)
+                record["status"] = "timeout" if isinstance(exc, TimeoutError) else "exception"
+                record["error_type"] = type(exc).__name__
+                record["error"] = str(exc)
+                append_failure_record(record, phase)
                 raise
+            append_motion_trace(_motion_trace_entry(
+                phase, step + 1, observation, action_waypoint,
+                action_sent=True, correction_active=correction_was_active,
+            ))
+            if motion_frame_callback is not None:
+                try:
+                    motion_frame_callback(phase, len(motion_trace) - 1)
+                except Exception as exc:  # frame capture is optional diagnostics
+                    record.setdefault("motion_frame_errors", []).append(str(exc))
             proprio = _proprioception(observation)
             if observation is None or "eef_pos" not in proprio:
-                raise RuntimeError(f"phase {phase} lost EEF proprioception; failing closed")
+                record["status"] = "exception"
+                record["error_type"] = "RuntimeError"
+                record["error"] = f"phase {phase} lost EEF proprioception; failing closed"
+                append_failure_record(record, phase)
+                raise RuntimeError(record["error"])
             # Charge a correction action as soon as its simulator step
             # succeeds.  This must happen before the nominal tolerance check:
             # the final correction step may itself reach the waypoint.
@@ -2176,8 +2452,7 @@ def _run_motion(
                     record["stall_window_steps"] = int(stall_window_steps)
                     record["stall_delta_m"] = float(stall_delta_m)
                     record["position_error_norm_m"] = error
-                    phase_audit.append(record)
-                    setattr(env, "_arrow_phase_audit", phase_audit)
+                    append_failure_record(record, phase)
                     raise ControllerMotionTimeout(f"phase {phase} stalled for {stall_window_steps} steps")
         else:
             record["status"] = "timeout"
@@ -2191,9 +2466,14 @@ def _run_motion(
                     timeout_orientation = proprio["eef_quat"]
                     if _orientation_frame(waypoint) == "grip_site":
                         if eef_orientation_transform is None:
-                            raise ValueError(
-                                "grip_site timeout audit requires explicit right_hand-to-grip_site calibration"
+                            record["status"] = "exception"
+                            record["error_type"] = "ValueError"
+                            record["error"] = (
+                                "grip_site timeout audit requires explicit "
+                                "right_hand-to-grip_site calibration"
                             )
+                            append_failure_record(record, phase)
+                            raise ValueError(record["error"])
                         timeout_orientation = (
                             _as_waypoint_rotation(proprio["eef_quat"])
                             @ _as_waypoint_rotation(eef_orientation_transform)
@@ -2201,7 +2481,7 @@ def _run_motion(
                     record["orientation_error_rad"] = _rotation_error_rad(
                         timeout_orientation, waypoint_orientation
                     )
-            phase_audit.append(record)
+            append_failure_record(record, phase)
             if is_gripper_phase:
                 raise ControllerMotionTimeout(f"phase {phase} failed to complete {gripper_dwell_steps}-step dwell")
             raise ControllerMotionTimeout(f"phase {phase} exceeded {phase_timeout_steps} steps")
@@ -2241,7 +2521,44 @@ def _run_motion(
                         Path(frame_path).expanduser().resolve().as_posix()
                     )
         if post_phase_callback is not None:
-            post_phase_callback(phase, record, proprio)
+            try:
+                post_phase_callback(phase, record, proprio)
+            except BaseException as exc:
+                record.setdefault("post_phase_error_type", type(exc).__name__)
+                record.setdefault("post_phase_error", str(exc))
+                append_failure_record(record, phase)
+                raise
+        if phase == "lift" and post_lift_retention_gate is not None and not dry_run:
+            try:
+                decision = post_lift_retention_gate(record, proprio)
+                retained = bool(
+                    decision.get("retained") if isinstance(decision, Mapping) else decision
+                )
+            except BaseException as exc:
+                record["retention_gate"] = {
+                    "enabled": True,
+                    "retained": False,
+                    "status": "exception",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+                append_failure_record(record, phase)
+                raise
+            record["retention_gate"] = {
+                "enabled": True,
+                "retained": retained,
+                "status": "passed" if retained else "rejected",
+            }
+            if isinstance(decision, Mapping):
+                record["retention_gate"].update({
+                    str(key): value for key, value in decision.items()
+                    if key not in {"retained", "enabled", "status"}
+                })
+            if not retained:
+                append_failure_record(record, phase)
+                if isinstance(decision, Mapping) and decision.get("decision") == "unobservable":
+                    raise RuntimeError("post_lift_retention_unobservable")
+                raise _GraspSearchRequested("post_lift_retention")
         if phase == stop_after_phase:
             break
     return phase_audit
@@ -2443,6 +2760,10 @@ def run_episode(
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
     recovery_steps: int = DEFAULT_RECOVERY_STEPS,
     recovery_callback: Callable[[str, Mapping[str, Any]], bool] | None = None,
+    post_lift_retention_gate: Callable[[Mapping[str, Any], Mapping[str, np.ndarray]], Any] | None = None,
+    motion_trace_max_steps: int = DEFAULT_MOTION_TRACE_MAX_STEPS,
+    canary_video_dir: str | Path | None = None,
+    canary_video_max_frames: int = DEFAULT_CANARY_VIDEO_MAX_FRAMES,
 ) -> dict[str, Any]:
     """Capture, decode, and optionally execute one bounded arrow episode."""
     variant_suite_mode = (
@@ -2706,6 +3027,80 @@ def run_episode(
     destination_point = destination_visual_point + destination_offset
     classical_destination_point = np.asarray(destination_point, dtype=np.float64).copy()
     classical_source_point = np.asarray(bowl_point, dtype=np.float64).copy()
+    source_approach_audit: dict[str, Any] | None = None
+    support_plane_audit: dict[str, Any] | None = None
+    source_policy = variant.source_approach
+    if source_policy is not None and bool(source_policy.get("enabled")):
+        if derive_rgbd_source_approach_candidates is None:
+            raise RuntimeError("RGB-D source approach policy is unavailable")
+        try:
+            candidates = derive_rgbd_source_approach_candidates(
+                source_uv,
+                target_uv,
+                np.asarray(capture.metric_depth, dtype=np.float64),
+                K,
+                T_world_camera,
+                source_policy["offsets_arrow_frame_m"],
+                workspace_bounds,
+                patch_radius_px=int(source_policy["patch_radius_px"]),
+                min_valid_fraction=float(source_policy["min_valid_fraction"]),
+            )
+            selected = candidates[0]
+            bowl_point = np.asarray(selected.approach_world_m, dtype=np.float64).copy()
+            source_approach_audit = {
+                "enabled": True,
+                "candidate_count": len(candidates),
+                "selected_index": 0,
+                "selected_point_world_m": bowl_point.tolist(),
+                "offset_arrow_frame_m": selected.offset_arrow_frame_m.tolist(),
+                "source_world_m": selected.source_world_m.tolist(),
+                "forward_world_unit": selected.forward_world_unit.tolist(),
+                "lateral_world_unit": selected.lateral_world_unit.tolist(),
+                "source": "metric_rgbd_arrow_basis",
+            }
+        except (TypeError, ValueError, RuntimeError) as exc:
+            source_approach_audit = {"enabled": True, "status": "rejected", "error_type": type(exc).__name__, "error": str(exc)}
+            setattr(env, "_arrow_source_approach", dict(source_approach_audit))
+            raise RuntimeError(f"RGB-D source approach rejected: {exc}") from exc
+        setattr(env, "_arrow_source_approach", dict(source_approach_audit))
+    destination_policy = variant.destination_placement
+    if destination_policy is not None and bool(destination_policy.get("enabled")):
+        if estimate_destination_support_plane is None or release_point_on_support_plane is None:
+            raise RuntimeError("RGB-D destination support-plane policy is unavailable")
+        try:
+            support_plane = estimate_destination_support_plane(
+                np.asarray(capture.metric_depth, dtype=np.float64),
+                target_uv,
+                K,
+                T_world_camera,
+                patch_radius_px=int(destination_policy["patch_radius_px"]),
+                min_valid_fraction=float(destination_policy["min_valid_fraction"]),
+                max_residual_m=float(destination_policy["max_residual_m"]),
+            )
+            destination_point = release_point_on_support_plane(
+                support_plane,
+                np.asarray(destination_visual_point[:2], dtype=np.float64),
+                workspace_bounds_m=workspace_bounds,
+            )
+            support_plane_audit = {
+                "enabled": True,
+                "valid": True,
+                "status": "accepted",
+                "origin_world_m": support_plane.origin_world_m.tolist(),
+                "normal_world_unit": support_plane.normal_world_unit.tolist(),
+                "residual_rms_m": float(support_plane.residual_rms_m),
+                "residual_max_m": float(support_plane.residual_max_m),
+                "valid_point_count": int(support_plane.valid_point_count),
+                "release_point_world_m": destination_point.tolist(),
+                "source": "metric_rgbd_destination_neighborhood",
+            }
+        except (TypeError, ValueError, RuntimeError) as exc:
+            support_plane_audit = {"enabled": True, "valid": False, "status": "rejected", "error_type": type(exc).__name__, "error": str(exc)}
+            setattr(env, "_arrow_support_plane", dict(support_plane_audit))
+            setattr(env, "_arrow_placement_observable", {"enabled": True, "status": "rejected"})
+            raise RuntimeError(f"RGB-D destination support plane rejected: {exc}") from exc
+        setattr(env, "_arrow_support_plane", dict(support_plane_audit))
+        setattr(env, "_arrow_placement_observable", {"enabled": True, "status": "accepted"})
     zg_source_pose = None
     zg_pregrasp_pose = None
     zg_placement_pose = None
@@ -2767,6 +3162,18 @@ def run_episode(
     if zg_source_pose is not None:
         waypoint_values = list(waypoints)
         source_rotation = zg_source_pose[:3, :3]
+        # The pure waypoint helper may be mocked or may use a historical
+        # source-independent lift height.  Enforce a calibrated clearance
+        # above every actually executed source/destination EEF position so a
+        # high learned grasp cannot turn lift into a downward motion.
+        selected_clearance_z = max(
+            float(transfer_source_point[2]),
+            float(np.asarray(destination_point, dtype=np.float64)[2]),
+        ) + float(clearance_m)
+        for index in (2, 3):
+            point = _position(waypoint_values[index]).astype(np.float64, copy=True)
+            point[2] = max(float(point[2]), selected_clearance_z)
+            waypoint_values[index] = point
         waypoint_values[0] = _pose_waypoint(zg_pregrasp_pose[:3, 3], source_rotation, "grip_site")
         waypoint_values[1] = _pose_waypoint(zg_source_pose[:3, 3], source_rotation, "grip_site")
         waypoint_values[2] = _pose_waypoint(
@@ -2844,6 +3251,92 @@ def run_episode(
     output_root = Path(output_dir).expanduser().resolve()
     frame_paths = _save_capture(capture, arrow_rgb, output_root)
     phase_frame_paths: list[str] = []
+    if type(motion_trace_max_steps) is not int or motion_trace_max_steps <= 0:
+        raise ValueError("motion_trace_max_steps must be a positive integer")
+    if type(canary_video_max_frames) is not int or canary_video_max_frames <= 0:
+        raise ValueError("canary_video_max_frames must be a positive integer")
+    canary_video_root = (
+        Path(canary_video_dir).expanduser().resolve() if canary_video_dir is not None else None
+    )
+    canary_video_frame_paths: list[str] = []
+    canary_video_truncated = False
+
+    def persist_canary_video_manifest() -> None:
+        if canary_video_root is None:
+            return
+        manifest_path = canary_video_root / "canary_video_manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps({
+            "schema_version": "arrow_canary_video.v1",
+            "max_frames": int(canary_video_max_frames),
+            "truncated": bool(canary_video_truncated),
+            "frames": canary_video_frame_paths,
+        }, indent=2), encoding="utf-8")
+
+    def canary_motion_frame_callback(phase: str, frame_index: int) -> Path | None:
+        nonlocal canary_video_truncated
+        if canary_video_root is None:
+            return None
+        if len(canary_video_frame_paths) >= canary_video_max_frames:
+            canary_video_truncated = True
+            persist_canary_video_manifest()
+            return None
+        path = _save_phase_snapshot(
+            env,
+            canary_video_root,
+            len(canary_video_frame_paths),
+            f"{phase}_{int(frame_index):04d}",
+            width=capture.rgb.shape[1],
+            height=capture.rgb.shape[0],
+        )
+        canary_video_frame_paths.append(path.as_posix())
+        persist_canary_video_manifest()
+        return path
+
+    def finalize_canary_video() -> dict[str, Any] | None:
+        if canary_video_root is None:
+            return None
+        persist_canary_video_manifest()
+        result: dict[str, Any] = {
+            "enabled": True,
+            "frames": list(canary_video_frame_paths),
+            "frame_count": len(canary_video_frame_paths),
+            "max_frames": int(canary_video_max_frames),
+            "truncated": bool(canary_video_truncated),
+            "video_path": None,
+            "video_sha256": None,
+            "status": "no_frames",
+        }
+        if not canary_video_frame_paths:
+            setattr(env, "_arrow_canary_video", dict(result))
+            return result
+        try:
+            import imageio.v2 as imageio
+
+            # MP4 is intentionally assembled only from the post-step RGB
+            # snapshots.  These frames are diagnostics and never re-enter
+            # controller input or evaluator timing.
+            video_path = canary_video_root / "motion.mp4"
+            with imageio.get_writer(
+                video_path,
+                format="FFMPEG",
+                mode="I",
+                fps=20,
+                codec="libx264",
+                macro_block_size=1,
+            ) as writer:
+                for path in canary_video_frame_paths:
+                    writer.append_data(imageio.imread(path))
+            digest = hashlib.sha256(video_path.read_bytes()).hexdigest()
+            result.update({
+                "video_path": video_path.as_posix(),
+                "video_sha256": digest,
+                "status": "complete",
+            })
+        except Exception as exc:  # canary artifact failure must remain visible
+            result.update({"status": "failed", "error_type": type(exc).__name__, "error": str(exc)})
+        setattr(env, "_arrow_canary_video", dict(result))
+        return result
 
     def phase_frame_callback(phase: str, phase_index: int) -> Path:
         path = _save_phase_snapshot(
@@ -2855,6 +3348,19 @@ def run_episode(
             height=capture.rgb.shape[0],
         )
         phase_frame_paths.append(path.as_posix())
+        return path
+
+    def failure_snapshot_callback(
+        phase: str, phase_index: int, _record: Mapping[str, Any]
+    ) -> Path:
+        path = _save_phase_snapshot(
+            env,
+            output_root / "failure_snapshots",
+            phase_index,
+            phase,
+            width=capture.rgb.shape[1],
+            height=capture.rgb.shape[0],
+        )
         return path
 
     def grasp_search_frame_callback(
@@ -2885,6 +3391,23 @@ def run_episode(
     )
     setattr(env, "_arrow_grasp_search_audit", grasp_search_audit)
     setattr(env, "_arrow_micro_correction_audit", micro_correction_audit)
+
+    effective_retention_gate = post_lift_retention_gate
+    if (
+        effective_retention_gate is None
+        and not dry_run
+        and variant.grasp_search is not None
+        and variant.grasp_search.enabled
+        and "post_lift_retention" in variant.grasp_search.trigger_on
+    ):
+        def effective_retention_gate(record: Mapping[str, Any], proprio: Mapping[str, np.ndarray]) -> dict[str, Any]:
+            del record  # phase identity is supplied by the motion loop
+            return _post_lift_retention_decision(
+                list(getattr(env, "_arrow_motion_trace", []) or []),
+                proprio,
+                variant.grasp_search.empty_gripper_threshold,
+            )
+        setattr(env, "_arrow_post_lift_retention_gate", {"enabled": True, "source": "lift_proprioception_trace"})
 
     def _after_motion_phase(
         phase: str, record: Mapping[str, Any], _proprio: Mapping[str, np.ndarray]
@@ -2921,8 +3444,16 @@ def run_episode(
             micro_action_budget=micro_action_budget,
             post_phase_callback=_after_motion_phase,
             eef_orientation_transform=eef_orientation_transform,
+            motion_trace_max_steps=motion_trace_max_steps,
+            motion_trace_path=output_root / "motion_trace.json",
+            failure_snapshot_callback=failure_snapshot_callback,
+            motion_frame_callback=(canary_motion_frame_callback if canary_video_root is not None else None),
+            post_lift_retention_gate=effective_retention_gate,
         )
-    except (_GraspSearchRequested, TimeoutError) as exc:
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            finalize_canary_video()
+            raise
         phase_audit = list(getattr(env, "_arrow_phase_audit", []) or [])
         search_policy = variant.grasp_search
         last_phase = str(phase_audit[-1].get("phase")) if phase_audit else ""
@@ -3290,6 +3821,7 @@ def run_episode(
                 if recovery_audit and recovery_audit[-1].get("approved"):
                     break
         if not search_completed:
+            finalize_canary_video()
             raise exc
     grasp_retry_audit: list[dict[str, Any]] = []
     # Publish retry evidence on the environment as soon as the motion phase
@@ -3366,6 +3898,7 @@ def run_episode(
                 break
     # Evaluator state is intentionally queried only after all motion phases.
     full_execution = stop_after_phase == "retreat"
+    canary_video_audit = finalize_canary_video()
     evaluator_error: dict[str, str] | None = None
     if dry_run or not full_execution or evaluator is None:
         success = None
@@ -3447,6 +3980,13 @@ def run_episode(
             "source_grasp": bowl_point.tolist(),
             "destination_release": destination_point.tolist(),
         },
+        "source_approach": source_approach_audit,
+        "support_plane": support_plane_audit,
+        "placement_observable": (
+            getattr(env, "_arrow_placement_observable", None)
+            if destination_policy is not None and bool(destination_policy.get("enabled"))
+            else None
+        ),
         "classical_destination_release_target_m": classical_destination_point.tolist(),
         "waypoints_world_m": serialized_waypoints,
         "source_grasp_offset_m": source_offset.tolist(),
@@ -3473,6 +4013,19 @@ def run_episode(
             if "diagnostic_frame_error" in record
         },
         "phases": phase_audit,
+        "motion_trace": list(getattr(env, "_arrow_motion_trace", []) or []),
+        "motion_trace_max_steps": int(motion_trace_max_steps),
+        "motion_trace_truncated": bool(getattr(env, "_arrow_motion_trace_truncated", False)),
+        "motion_trace_path": getattr(env, "_arrow_motion_trace_path", None),
+        "failure_snapshots": list(getattr(env, "_arrow_failure_snapshots", []) or []),
+        "post_lift_retention_gate": {
+            "enabled": bool(effective_retention_gate is not None),
+            "records": [
+                record.get("retention_gate") for record in phase_audit
+                if isinstance(record.get("retention_gate"), Mapping)
+            ],
+        },
+        "canary_video": canary_video_audit,
         "evaluator_success": success,
         "evaluator_error": evaluator_error,
         "evaluator_read_after_action": bool(not dry_run and full_execution),

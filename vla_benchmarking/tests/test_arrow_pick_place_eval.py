@@ -109,6 +109,25 @@ def test_capture_requests_one_synchronized_rgb_depth_pair(runner):
     assert env.render_calls == [("agentview", 32, 32, True)]
 
 
+def test_post_lift_retention_uses_only_lift_proprioception(runner):
+    trace = [
+        {"phase": "lift", "gripper_qpos": [0.004, -0.004]},
+        {"phase": "lift", "gripper_qpos": [0.003, -0.003]},
+    ]
+    decision = runner._post_lift_retention_decision(
+        trace, {"gripper_qpos": np.asarray([0.003, -0.003])}, 0.0015
+    )
+    assert decision["decision"] == "retained"
+    assert decision["retained"] is True
+    assert decision["sample_count"] == 3
+
+
+def test_post_lift_retention_fails_closed_when_qpos_is_unobservable(runner):
+    decision = runner._post_lift_retention_decision([], {}, 0.0015)
+    assert decision["decision"] == "unobservable"
+    assert decision["retained"] is False
+
+
 def test_capture_owns_renderer_buffers_before_second_observation_read(runner, monkeypatch):
     class _ReusingEnv(_Env):
         def render(self, camera_name, width, height, depth=False):
@@ -692,6 +711,126 @@ def test_motion_timeout_keeps_partial_phase_audit(runner, monkeypatch):
     assert env._arrow_phase_audit[-1]["phase"] == "pregrasp"
     assert env._arrow_phase_audit[-1]["status"] == "timeout"
     assert env._arrow_phase_audit[-1]["steps"] == 1
+
+
+def test_motion_trace_is_bounded_and_persisted(runner, monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    env = _MotionEnv()
+    with pytest.raises(runner.ControllerMotionTimeout):
+        runner._run_motion(
+            env,
+            np.ones((6, 3), dtype=np.float64),
+            _motion_proprio(),
+            phase_timeout_steps=4,
+            gripper_dwell_steps=2,
+            stop_after_phase="pregrasp",
+            dry_run=False,
+            stall_window_steps=0,
+            motion_trace_max_steps=2,
+            motion_trace_path=tmp_path / "trace.json",
+        )
+    assert len(env._arrow_motion_trace) == 2
+    assert env._arrow_motion_trace_truncated is True
+    persisted = json.loads((tmp_path / "trace.json").read_text(encoding="utf-8"))
+    assert persisted["truncated"] is True
+    assert len(persisted["steps"]) == 2
+    assert {"eef_pos_m", "gripper_qpos", "residual_vector_m"} <= set(persisted["steps"][0])
+
+
+def test_motion_failure_snapshot_callback_runs_for_timeout(runner, monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    snapshots = []
+
+    def save_snapshot(phase, index, record):
+        path = tmp_path / f"failure_{index}_{phase}.json"
+        path.write_text(json.dumps({"phase": phase, "status": record["status"]}), encoding="utf-8")
+        snapshots.append(path)
+        return path
+
+    env = _MotionEnv()
+    with pytest.raises(runner.ControllerMotionTimeout):
+        runner._run_motion(
+            env,
+            np.ones((6, 3), dtype=np.float64),
+            _motion_proprio(),
+            phase_timeout_steps=1,
+            gripper_dwell_steps=2,
+            stop_after_phase="pregrasp",
+            dry_run=False,
+            failure_snapshot_callback=save_snapshot,
+        )
+    assert len(snapshots) == 1 and snapshots[0].is_file()
+    assert env._arrow_phase_audit[-1]["failure_snapshot"] == snapshots[0].as_posix()
+
+
+def test_post_lift_retention_gate_rejects_before_preplace(runner, monkeypatch):
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    env = _MotionEnv()
+    gate_calls = []
+
+    def retention_gate(record, proprio):
+        gate_calls.append((record["phase"], dict(proprio)))
+        return {"retained": False, "source": "pure_proprio_helper"}
+
+    with pytest.raises(runner._GraspSearchRequested, match="post_lift_retention"):
+        runner._run_motion(
+            env,
+            np.zeros((6, 3), dtype=np.float64),
+            _motion_proprio(),
+            phase_timeout_steps=2,
+            gripper_dwell_steps=2,
+            stop_after_phase="retreat",
+            dry_run=False,
+            post_lift_retention_gate=retention_gate,
+        )
+    assert gate_calls and gate_calls[0][0] == "lift"
+    assert env._arrow_phase_audit[-1]["retention_gate"]["retained"] is False
+    assert [record["phase"] for record in env._arrow_phase_audit] == [
+        "pregrasp", "descend", "close", "lift"
+    ]
+
+
+def test_legacy_motion_trace_and_retention_are_disabled_by_default(runner, monkeypatch):
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    env = _MotionEnv()
+    audit = runner._run_motion(
+        env,
+        np.zeros((6, 3), dtype=np.float64),
+        _motion_proprio(),
+        phase_timeout_steps=2,
+        gripper_dwell_steps=2,
+        stop_after_phase="pregrasp",
+        dry_run=True,
+    )
+    assert [item["phase"] for item in audit] == ["pregrasp"]
+    assert env._arrow_motion_trace == []
+    assert not any("retention_gate" in item for item in audit)
+
+
+def test_canary_video_is_opt_in_and_records_artifact_hash(runner, monkeypatch, tmp_path: Path):
+    _patch_episode_controller(runner, monkeypatch)
+    canary_dir = tmp_path / "suite_v10" / "variant_zg" / "task_0" / "episode_0"
+    audit = runner.run_episode(
+        env=_MotionEnv(),
+        task_id=0,
+        seed=1000,
+        output_dir=tmp_path / "episode",
+        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+        capture=_episode_capture(runner),
+        dry_run=False,
+        stop_after_phase="retreat",
+        canary_video_dir=canary_dir,
+        canary_video_max_frames=4,
+        evaluator=lambda _env: True,
+    )
+    video = audit["canary_video"]
+    assert video["enabled"] is True
+    assert video["frame_count"] == 4
+    assert video["truncated"] is True
+    assert Path(video["video_path"]).is_file()
+    assert len(video["video_sha256"]) == 64
+    assert json.loads((canary_dir / "canary_video_manifest.json").read_text(encoding="utf-8"))["truncated"] is True
+    assert audit["evaluator_success"] is True
 
 
 def test_cli_defaults_use_verified_rim_profile(runner):

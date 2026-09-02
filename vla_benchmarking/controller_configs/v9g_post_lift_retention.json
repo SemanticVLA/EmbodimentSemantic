@@ -1,0 +1,9 @@
+{
+  "extends": "v9d_rgbd_region_grasp_search.json",
+  "name": "libero_spatial_akita_bowl_agentview_v9g_post_lift_retention",
+  "grasp_search": {
+    "trigger_on": [
+      "post_lift_retention"
+    ]
+  }
+}

@@ -16,6 +16,9 @@ from arrow_controller import (  # noqa: E402
     COLOR_ENDPOINT_ARROW_ENCODING,
     BowlWaypointConfig,
     build_bowl_waypoints,
+    derive_rgbd_source_approach_candidates,
+    estimate_destination_support_plane,
+    analyze_depth_support,
     compute_endpoint_change_evidence,
     decode_arrow,
     decode_arrow_diagnostics,
@@ -24,6 +27,8 @@ from arrow_controller import (  # noqa: E402
     estimate_endpoint_depth,
     normalized_osc_action,
     refine_rgbd_endpoint,
+    release_point_on_support_plane,
+    assess_grasp_retention,
 )
 
 
@@ -87,6 +92,69 @@ def test_decode_ignores_disconnected_changed_speck_for_endpoint_geometry():
     assert decoded.source_xy == pytest.approx(baseline.source_xy)
     assert decoded.target_xy == pytest.approx(baseline.target_xy)
     assert decoded.confidence == pytest.approx(baseline.confidence)
+
+
+def test_post_lift_retention_is_derived_from_qpos_trace_and_strictly_validated():
+    retained = assess_grasp_retention(np.array([[0.02, 0.01], [0.018, 0.012]]), closed_threshold=0.01)
+    assert retained.retained is True
+    assert retained.closed_fraction == pytest.approx(1.0)
+    assert retained.qpos_units == "proprioceptive gripper joint units"
+    released = assess_grasp_retention(np.array([[0.02, 0.01], [0.0, 0.0]]), closed_threshold=0.01, min_closed_fraction=1.0)
+    assert released.retained is False
+    with pytest.raises(ValueError, match="finite"):
+        assess_grasp_retention(np.array([[np.nan]]))
+    with pytest.raises(ValueError, match="positive integer"):
+        assess_grasp_retention([[0.1]], min_samples=True)
+
+
+def test_depth_support_reports_gradient_invalid_samples_and_clipping():
+    depth = np.ones((7, 7), dtype=np.float64)
+    yy, xx = np.mgrid[:7, :7]
+    depth += 0.01 * xx + 0.02 * yy
+    support = analyze_depth_support(depth, (3, 3), patch_radius_px=2)
+    assert support.valid_fraction == pytest.approx(1.0)
+    assert support.gradient_m_per_pixel == pytest.approx((0.01, 0.02))
+    invalid = depth.copy()
+    invalid[2:5, 2:5] = np.nan
+    unsupported = analyze_depth_support(invalid, (3, 3), patch_radius_px=1)
+    assert unsupported.valid_fraction == pytest.approx(0.0)
+    assert unsupported.center_depth_m is None
+    clipped = analyze_depth_support(depth, (-1, 3), patch_radius_px=1)
+    assert clipped.clipped is True
+
+
+def test_rgbd_source_candidates_follow_so3_arrow_basis_and_workspace_bounds():
+    depth = np.ones((8, 8), dtype=np.float64)
+    K = np.array([[100.0, 0.0, 3.0], [0.0, 100.0, 3.0], [0.0, 0.0, 1.0]])
+    rotation = np.array(((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    transform[:3, 3] = (0.2, -0.1, 0.3)
+    candidates = derive_rgbd_source_approach_candidates(
+        (3, 3), (4, 3), depth, K, transform,
+        ((0.05, 0.0, 0.0), (0.0, 0.04, 0.02)),
+        ((-0.2, -0.2, 1.1), (0.5, 0.5, 1.5)),
+    )
+    assert len(candidates) == 2
+    assert candidates[0].forward_world_unit == pytest.approx((0.0, 1.0, 0.0))
+    assert candidates[0].lateral_world_unit == pytest.approx((-1.0, 0.0, 0.0))
+    assert candidates[0].approach_world_m == pytest.approx(candidates[0].source_world_m + np.array((0.0, 0.05, 0.0)))
+    with pytest.raises(ValueError, match="outside workspace"):
+        derive_rgbd_source_approach_candidates(
+            (3, 3), (4, 3), depth, K, transform, ((2.0, 0.0, 0.0),),
+            ((-0.2, -0.2, 1.1), (0.5, 0.5, 1.5)),
+        )
+
+
+def test_destination_support_plane_round_trip_release_point_and_bounds():
+    depth = np.ones((7, 7), dtype=np.float64)
+    K = np.array([[100.0, 0.0, 3.0], [0.0, 100.0, 3.0], [0.0, 0.0, 1.0]])
+    plane = estimate_destination_support_plane(depth, (3, 3), K, np.eye(4), patch_radius_px=2)
+    assert plane.normal_world_unit == pytest.approx((0.0, 0.0, 1.0))
+    release = release_point_on_support_plane(plane, (0.1, -0.2))
+    assert release == pytest.approx((0.1, -0.2, 1.0))
+    with pytest.raises(ValueError, match="outside workspace"):
+        release_point_on_support_plane(plane, (0.1, -0.2), workspace_bounds_m=((-0.01, -0.01, 0.0), (0.01, 0.01, 2.0)))
 
 
 def test_decode_rejects_two_separate_valid_arrow_components():

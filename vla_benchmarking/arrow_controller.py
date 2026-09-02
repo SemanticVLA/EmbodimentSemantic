@@ -293,6 +293,209 @@ class EndpointChangeEvidence:
         return self.endpoint_distance
 
 
+@dataclass(frozen=True)
+class GraspRetentionEvidence:
+    """Post-lift gripper-joint evidence, expressed only in proprioception.
+
+    ``qpos_trace`` is an ``N x D`` trace of gripper joint positions.  The
+    values are intentionally not interpreted as a simulator state: callers
+    provide the already exposed proprioceptive signal and its units are kept
+    explicit in the result.  A sample is considered closed when the largest
+    absolute joint value is at least ``closed_threshold``.
+    """
+
+    qpos_trace: np.ndarray
+    closed_threshold: float
+    min_samples: int
+    min_closed_fraction: float
+    closed_fraction: float
+    final_abs_qpos: np.ndarray
+    retained: bool
+    qpos_units: str = "proprioceptive gripper joint units"
+    frame: str = "post_lift_proprioception_samples"
+
+    def __post_init__(self) -> None:
+        trace = _as_finite_array(self.qpos_trace, name="qpos_trace", ndim=2)
+        if trace.shape[0] < 1 or trace.shape[1] < 1:
+            raise ValueError("qpos_trace must have at least one sample and one joint")
+        if type(self.min_samples) is not int or self.min_samples < 1:
+            raise ValueError("min_samples must be a positive integer")
+        threshold = float(self.closed_threshold)
+        if not np.isfinite(threshold) or threshold <= 0.0:
+            raise ValueError("closed_threshold must be finite and positive")
+        fraction = float(self.min_closed_fraction)
+        if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+            raise ValueError("min_closed_fraction must be finite and in [0, 1]")
+        observed_fraction = float(self.closed_fraction)
+        if not np.isfinite(observed_fraction) or not 0.0 <= observed_fraction <= 1.0:
+            raise ValueError("closed_fraction must be finite and in [0, 1]")
+        final = _as_finite_array(self.final_abs_qpos, name="final_abs_qpos").reshape(-1)
+        if final.size != trace.shape[1]:
+            raise ValueError("final_abs_qpos must match qpos_trace joint count")
+        if not isinstance(self.retained, (bool, np.bool_)):
+            raise TypeError("retained must be a boolean")
+        if not self.qpos_units or not self.frame:
+            raise ValueError("qpos_units and frame must be non-empty")
+
+
+def assess_grasp_retention(
+    qpos_trace: ArrayLike,
+    *,
+    closed_threshold: float = 0.0015,
+    min_samples: int = 1,
+    min_closed_fraction: float = 1.0,
+) -> GraspRetentionEvidence:
+    """Assess post-lift retention from a finite gripper qpos trace.
+
+    This is a pure threshold policy.  It accepts no handles or hidden state;
+    an empty, malformed, or non-finite trace fails closed with ``ValueError``.
+    A one-dimensional input is treated as one sample for convenience.
+    """
+    raw = _as_finite_array(qpos_trace, name="qpos_trace")
+    trace = raw.reshape(1, -1) if raw.ndim == 1 else raw
+    if trace.ndim != 2 or trace.shape[0] < 1 or trace.shape[1] < 1:
+        raise ValueError("qpos_trace must be a non-empty 1-D or 2-D numeric array")
+    if type(min_samples) is not int or min_samples < 1:
+        raise ValueError("min_samples must be a positive integer")
+    threshold = float(closed_threshold)
+    if not np.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("closed_threshold must be finite and positive")
+    required_fraction = float(min_closed_fraction)
+    if not np.isfinite(required_fraction) or not 0.0 <= required_fraction <= 1.0:
+        raise ValueError("min_closed_fraction must be finite and in [0, 1]")
+    closed = np.max(np.abs(trace), axis=1) >= threshold
+    observed_fraction = float(np.mean(closed))
+    retained = bool(trace.shape[0] >= min_samples and observed_fraction >= required_fraction)
+    return GraspRetentionEvidence(
+        qpos_trace=np.array(trace, dtype=np.float64, copy=True),
+        closed_threshold=threshold,
+        min_samples=min_samples,
+        min_closed_fraction=required_fraction,
+        closed_fraction=observed_fraction,
+        final_abs_qpos=np.abs(trace[-1]).astype(np.float64, copy=True),
+        retained=retained,
+    )
+
+
+# Explicit aliases make the evidence primitive discoverable without coupling
+# callers to one particular report vocabulary.
+evaluate_post_lift_grasp_retention = assess_grasp_retention
+post_lift_grasp_retention = assess_grasp_retention
+PostLiftGraspRetentionEvidence = GraspRetentionEvidence
+
+
+@dataclass(frozen=True)
+class DepthSupportEvidence:
+    """Local metric-depth support around one image pixel.
+
+    Pixel coordinates are ``(u, v)`` in the top-left image frame.  Depth is in
+    metres along camera ``+Z`` and the gradient is ``(dZ/du, dZ/dv)`` in
+    metres per pixel.  Clipping is reported instead of silently extrapolated.
+    """
+
+    pixel_xy: tuple[float, float]
+    image_shape: tuple[int, int]
+    patch_radius_px: int
+    sample_count: int
+    valid_sample_count: int
+    valid_fraction: float
+    clipped: bool
+    center_depth_m: float | None
+    gradient_m_per_pixel: tuple[float, float] | None
+    depth_units: str = "metres"
+    pixel_frame: str = "image_top_left_uv"
+
+    def __post_init__(self) -> None:
+        _pixel(self.pixel_xy, name="pixel_xy")
+        if len(self.image_shape) != 2 or any(type(v) is not int or v < 1 for v in self.image_shape):
+            raise ValueError("image_shape must contain two positive integers")
+        if type(self.patch_radius_px) is not int or self.patch_radius_px < 0:
+            raise ValueError("patch_radius_px must be a non-negative integer")
+        if type(self.sample_count) is not int or self.sample_count < 0:
+            raise ValueError("sample_count must be a non-negative integer")
+        if type(self.valid_sample_count) is not int or not 0 <= self.valid_sample_count <= self.sample_count:
+            raise ValueError("valid_sample_count must be between zero and sample_count")
+        fraction = float(self.valid_fraction)
+        if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+            raise ValueError("valid_fraction must be finite and in [0, 1]")
+        if not isinstance(self.clipped, (bool, np.bool_)):
+            raise TypeError("clipped must be a boolean")
+        if self.center_depth_m is not None and (not np.isfinite(self.center_depth_m) or self.center_depth_m <= 0.0):
+            raise ValueError("center_depth_m must be finite and positive when present")
+        if self.gradient_m_per_pixel is not None:
+            gradient = _as_finite_array(self.gradient_m_per_pixel, name="gradient_m_per_pixel").reshape(-1)
+            if gradient.size != 2:
+                raise ValueError("gradient_m_per_pixel must have two values")
+        if not self.depth_units or not self.pixel_frame:
+            raise ValueError("depth_units and pixel_frame must be non-empty")
+
+
+def analyze_depth_support(
+    depth_m: np.ndarray,
+    pixel_xy: ArrayLike,
+    *,
+    patch_radius_px: int = 2,
+) -> DepthSupportEvidence:
+    """Measure valid local depth support and a finite-difference gradient."""
+    depth = np.asarray(depth_m, dtype=np.float64)
+    if depth.ndim != 2 or depth.shape[0] < 1 or depth.shape[1] < 1:
+        raise ValueError("depth_m must be a non-empty HxW array")
+    if type(patch_radius_px) is not int or patch_radius_px < 0:
+        raise ValueError("patch_radius_px must be a non-negative integer")
+    pixel = _pixel(pixel_xy)
+    u, v = np.rint(pixel).astype(int)
+    h, w = depth.shape
+    # Use the original floating pixel for clipping; rounding an out-of-frame
+    # coordinate such as ``-0.1`` to zero must not turn it into valid support.
+    clipped = not (0.0 <= pixel[0] < w and 0.0 <= pixel[1] < h)
+    cu, cv = int(np.clip(u, 0, w - 1)), int(np.clip(v, 0, h - 1))
+    x0, x1 = max(0, cu - patch_radius_px), min(w, cu + patch_radius_px + 1)
+    y0, y1 = max(0, cv - patch_radius_px), min(h, cv + patch_radius_px + 1)
+    local = depth[y0:y1, x0:x1]
+    valid = np.isfinite(local) & (local > 0.0)
+    valid_count = int(valid.sum())
+    sample_count = int(local.size)
+    center = float(depth[cv, cu]) if np.isfinite(depth[cv, cu]) and depth[cv, cu] > 0.0 else None
+    gradient: tuple[float, float] | None = None
+    if center is not None:
+        neighbours: dict[str, float] = {}
+        for name, nx, ny in (("left", cu - 1, cv), ("right", cu + 1, cv), ("up", cu, cv - 1), ("down", cu, cv + 1)):
+            if 0 <= nx < w and 0 <= ny < h and np.isfinite(depth[ny, nx]) and depth[ny, nx] > 0.0:
+                neighbours[name] = float(depth[ny, nx])
+        if "left" in neighbours and "right" in neighbours:
+            du = (neighbours["right"] - neighbours["left"]) / 2.0
+        elif "right" in neighbours:
+            du = neighbours["right"] - center
+        elif "left" in neighbours:
+            du = center - neighbours["left"]
+        else:
+            du = None
+        if "up" in neighbours and "down" in neighbours:
+            dv = (neighbours["down"] - neighbours["up"]) / 2.0
+        elif "down" in neighbours:
+            dv = neighbours["down"] - center
+        elif "up" in neighbours:
+            dv = center - neighbours["up"]
+        else:
+            dv = None
+        if du is not None and dv is not None:
+            gradient = (float(du), float(dv))
+    return DepthSupportEvidence(
+        pixel_xy=(float(pixel[0]), float(pixel[1])),
+        image_shape=(h, w),
+        patch_radius_px=patch_radius_px,
+        sample_count=sample_count,
+        valid_sample_count=valid_count,
+        valid_fraction=float(valid_count / sample_count),
+        clipped=clipped,
+        center_depth_m=center,
+        gradient_m_per_pixel=gradient,
+    )
+
+
+depth_support_evidence = analyze_depth_support
+
+
 def _validate_images(clean_rgb: np.ndarray, arrow_rgb: np.ndarray) -> None:
     if not isinstance(clean_rgb, np.ndarray) or not isinstance(arrow_rgb, np.ndarray):
         raise TypeError("clean_rgb and arrow_rgb must be NumPy arrays")
@@ -903,6 +1106,397 @@ def arrow_world_xy_basis(
     return forward, lateral
 
 
+@dataclass(frozen=True)
+class RGBDApproachCandidate:
+    """One bounded candidate in the arrow-derived approach frame.
+
+    ``offset_arrow_frame_m`` is ``(forward, lateral, vertical)`` in metres.
+    ``candidate_world_m`` and ``offset_world_m`` are in the world frame and
+    are also metres.  No candidate is constructed outside the supplied
+    workspace bounds.
+    """
+
+    candidate_world_m: np.ndarray
+    offset_arrow_frame_m: np.ndarray
+    offset_world_m: np.ndarray
+    workspace_bounds_m: tuple[np.ndarray, np.ndarray]
+    frame: str = "world"
+    units: str = "metres"
+
+    def __post_init__(self) -> None:
+        candidate = _as_finite_array(self.candidate_world_m, name="candidate_world_m").reshape(-1)
+        arrow_offset = _as_finite_array(self.offset_arrow_frame_m, name="offset_arrow_frame_m").reshape(-1)
+        world_offset = _as_finite_array(self.offset_world_m, name="offset_world_m").reshape(-1)
+        if candidate.size != 3 or arrow_offset.size != 3 or world_offset.size != 3:
+            raise ValueError("candidate and offsets must each contain three values")
+        if not isinstance(self.workspace_bounds_m, tuple) or len(self.workspace_bounds_m) != 2:
+            raise ValueError("workspace_bounds_m must be a (minimum, maximum) tuple")
+        minimum = _as_finite_array(self.workspace_bounds_m[0], name="workspace_minimum").reshape(-1)
+        maximum = _as_finite_array(self.workspace_bounds_m[1], name="workspace_maximum").reshape(-1)
+        if minimum.size != 3 or maximum.size != 3 or np.any(minimum > maximum):
+            raise ValueError("workspace bounds must be ordered three-vectors")
+        if np.any(candidate < minimum) or np.any(candidate > maximum):
+            raise ValueError("candidate_world_m lies outside workspace bounds")
+        if self.frame != "world" or self.units != "metres":
+            raise ValueError("candidate frame must be world and units must be metres")
+
+
+@dataclass(frozen=True)
+class RGBDBoundedApproachGeometry:
+    """Arrow-frame candidate set plus the RGB-D evidence used to anchor it."""
+
+    anchor_world_m: np.ndarray
+    direction_world_m: np.ndarray
+    forward_world_unit: np.ndarray
+    lateral_world_unit: np.ndarray
+    candidates: tuple[RGBDApproachCandidate, ...]
+    anchor_support: DepthSupportEvidence
+    direction_support: DepthSupportEvidence
+    workspace_bounds_m: tuple[np.ndarray, np.ndarray]
+    frame: str = "world"
+    units: str = "metres"
+
+    def __post_init__(self) -> None:
+        for name in ("anchor_world_m", "direction_world_m", "forward_world_unit", "lateral_world_unit"):
+            value = _as_finite_array(getattr(self, name), name=name).reshape(-1)
+            if value.size != 3:
+                raise ValueError(f"{name} must contain three values")
+        if not self.candidates:
+            raise ValueError("candidates must not be empty")
+        if not isinstance(self.anchor_support, DepthSupportEvidence) or not isinstance(self.direction_support, DepthSupportEvidence):
+            raise TypeError("anchor_support and direction_support must be DepthSupportEvidence")
+        if self.frame != "world" or self.units != "metres":
+            raise ValueError("geometry frame must be world and units must be metres")
+
+    @property
+    def world_points_m(self) -> np.ndarray:
+        """Return candidate points as a defensive ``N x 3`` copy."""
+        return np.vstack([candidate.candidate_world_m for candidate in self.candidates]).copy()
+
+
+def _workspace_bounds(
+    bounds: Mapping[str, Sequence[float]] | Sequence[Sequence[float]],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Normalize either named-axis or minimum/maximum workspace bounds."""
+    if isinstance(bounds, Mapping):
+        if "minimum" in bounds or "maximum" in bounds:
+            if set(bounds) != {"minimum", "maximum"}:
+                raise ValueError("workspace bounds mapping may only contain minimum and maximum")
+            minimum = _as_finite_array(bounds["minimum"], name="workspace minimum").reshape(-1)
+            maximum = _as_finite_array(bounds["maximum"], name="workspace maximum").reshape(-1)
+        else:
+            if set(bounds) != {"x", "y", "z"}:
+                raise ValueError("workspace bounds mapping must contain x, y, and z")
+            axis_bounds = [_as_finite_array(bounds[axis], name=f"workspace {axis}").reshape(-1) for axis in ("x", "y", "z")]
+            if any(axis.size != 2 for axis in axis_bounds):
+                raise ValueError("each workspace axis must contain [minimum, maximum]")
+            minimum = np.array([axis[0] for axis in axis_bounds], dtype=np.float64)
+            maximum = np.array([axis[1] for axis in axis_bounds], dtype=np.float64)
+    else:
+        matrix = _as_finite_array(bounds, name="workspace_bounds_m", ndim=2)
+        if matrix.shape != (2, 3):
+            raise ValueError("workspace_bounds_m must have shape (2, 3): minimum then maximum")
+        minimum, maximum = matrix[0].copy(), matrix[1].copy()
+    if minimum.size != 3 or maximum.size != 3 or np.any(minimum > maximum):
+        raise ValueError("workspace bounds must contain ordered three-vectors")
+    return minimum, maximum
+
+
+def derive_rgbd_bounded_approach_candidates(
+    depth_m: np.ndarray,
+    anchor_pixel_xy: ArrayLike,
+    direction_pixel_xy: ArrayLike,
+    K: ArrayLike,
+    T_world_camera: ArrayLike,
+    offset_arrow_frame_m: Sequence[Sequence[float]],
+    workspace_bounds_m: Mapping[str, Sequence[float]] | Sequence[Sequence[float]],
+    *,
+    patch_radius_px: int = 2,
+    min_valid_fraction: float = 0.5,
+) -> RGBDBoundedApproachGeometry:
+    """Build bounded RGB-D approach/support candidates around an arrow anchor.
+
+    The two pixels are deprojected from the supplied metric depth image.  The
+    horizontal world displacement defines a right-handed arrow frame:
+    ``forward`` follows the arrow and ``lateral = (-forward_y, forward_x)``.
+    Each configured ``(forward, lateral, vertical)`` metre offset is mapped to
+    world coordinates and checked against the explicit workspace.  Invalid or
+    clipped depth support fails closed before any candidate is returned.
+    """
+    depth = np.asarray(depth_m, dtype=np.float64)
+    if depth.ndim != 2 or depth.shape[0] < 1 or depth.shape[1] < 1:
+        raise ValueError("depth_m must be a non-empty HxW array")
+    intrinsics = _validate_intrinsics(K)
+    transform = _validate_transform(T_world_camera)
+    anchor_pixel = _pixel(anchor_pixel_xy, name="anchor_pixel_xy")
+    direction_pixel = _pixel(direction_pixel_xy, name="direction_pixel_xy")
+    anchor_support = analyze_depth_support(depth, anchor_pixel, patch_radius_px=patch_radius_px)
+    direction_support = analyze_depth_support(depth, direction_pixel, patch_radius_px=patch_radius_px)
+    fraction = float(min_valid_fraction)
+    if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        raise ValueError("min_valid_fraction must be finite and in (0, 1]")
+    for label, support in (("anchor", anchor_support), ("direction", direction_support)):
+        if support.clipped:
+            raise ValueError(f"{label} pixel is clipped by the RGB-D image")
+        if support.center_depth_m is None or support.valid_fraction < fraction:
+            raise ValueError(f"{label} pixel lacks sufficient valid metric-depth support")
+    anchor_world = deproject_endpoint(anchor_pixel, anchor_support.center_depth_m, intrinsics, transform)
+    direction_world = deproject_endpoint(direction_pixel, direction_support.center_depth_m, intrinsics, transform)
+    forward, lateral = arrow_world_xy_basis(anchor_world, direction_world)
+    raw_offsets = np.asarray(offset_arrow_frame_m, dtype=np.float64)
+    if raw_offsets.ndim != 2 or raw_offsets.shape[0] < 1 or raw_offsets.shape[1] != 3:
+        raise ValueError("offset_arrow_frame_m must be a non-empty N x 3 sequence")
+    if not np.all(np.isfinite(raw_offsets)):
+        raise ValueError("offset_arrow_frame_m must contain only finite values")
+    minimum, maximum = _workspace_bounds(workspace_bounds_m)
+    bounds = (minimum.copy(), maximum.copy())
+    candidates: list[RGBDApproachCandidate] = []
+    world_up = np.array((0.0, 0.0, 1.0), dtype=np.float64)
+    for offset in raw_offsets:
+        world_offset = float(offset[0]) * forward + float(offset[1]) * lateral + float(offset[2]) * world_up
+        candidate_world = anchor_world + world_offset
+        if np.any(candidate_world < minimum) or np.any(candidate_world > maximum):
+            raise ValueError("configured approach candidate lies outside workspace bounds")
+        candidates.append(
+            RGBDApproachCandidate(
+                candidate_world_m=candidate_world,
+                offset_arrow_frame_m=offset.copy(),
+                offset_world_m=world_offset,
+                workspace_bounds_m=bounds,
+            )
+        )
+    return RGBDBoundedApproachGeometry(
+        anchor_world_m=anchor_world,
+        direction_world_m=direction_world,
+        forward_world_unit=forward,
+        lateral_world_unit=lateral,
+        candidates=tuple(candidates),
+        anchor_support=anchor_support,
+        direction_support=direction_support,
+        workspace_bounds_m=bounds,
+    )
+
+
+# Compatibility spellings for evidence/reporting callers.
+build_rgbd_approach_candidates = derive_rgbd_bounded_approach_candidates
+derive_rgbd_approach_candidates = derive_rgbd_bounded_approach_candidates
+
+
+@dataclass(frozen=True)
+class SourceApproachCandidate:
+    """A bounded source-side approach point in explicit world metres."""
+
+    approach_world_m: np.ndarray
+    offset_arrow_frame_m: np.ndarray
+    offset_world_m: np.ndarray
+    source_world_m: np.ndarray
+    forward_world_unit: np.ndarray
+    lateral_world_unit: np.ndarray
+    workspace_bounds_m: tuple[np.ndarray, np.ndarray]
+    frame: str = "world"
+    units: str = "metres"
+
+    def __post_init__(self) -> None:
+        for name in (
+            "approach_world_m",
+            "offset_arrow_frame_m",
+            "offset_world_m",
+            "source_world_m",
+            "forward_world_unit",
+            "lateral_world_unit",
+        ):
+            value = _as_finite_array(getattr(self, name), name=name).reshape(-1)
+            if value.size != 3:
+                raise ValueError(f"{name} must contain three values")
+        if not isinstance(self.workspace_bounds_m, tuple) or len(self.workspace_bounds_m) != 2:
+            raise ValueError("workspace_bounds_m must be a (minimum, maximum) tuple")
+        minimum = _as_finite_array(self.workspace_bounds_m[0], name="workspace_minimum").reshape(-1)
+        maximum = _as_finite_array(self.workspace_bounds_m[1], name="workspace_maximum").reshape(-1)
+        if minimum.size != 3 or maximum.size != 3 or np.any(minimum > maximum):
+            raise ValueError("workspace bounds must be ordered three-vectors")
+        approach = _as_finite_array(self.approach_world_m, name="approach_world_m").reshape(-1)
+        if np.any(approach < minimum) or np.any(approach > maximum):
+            raise ValueError("approach_world_m lies outside workspace bounds")
+        if self.frame != "world" or self.units != "metres":
+            raise ValueError("candidate frame must be world and units must be metres")
+
+    @property
+    def world_xyz_m(self) -> np.ndarray:
+        return self.approach_world_m
+
+
+def derive_rgbd_source_approach_candidates(
+    source_pixel_xy: ArrayLike,
+    direction_pixel_xy: ArrayLike,
+    depth_m: np.ndarray,
+    K: ArrayLike,
+    T_world_camera: ArrayLike,
+    offset_arrow_frame_m: Sequence[Sequence[float]],
+    workspace_bounds_m: Mapping[str, Sequence[float]] | Sequence[Sequence[float]],
+    *,
+    patch_radius_px: int = 2,
+    min_valid_fraction: float = 0.5,
+) -> tuple[SourceApproachCandidate, ...]:
+    """Derive bounded source-side candidates from two RGB-D arrow pixels."""
+    geometry = derive_rgbd_bounded_approach_candidates(
+        depth_m,
+        source_pixel_xy,
+        direction_pixel_xy,
+        K,
+        T_world_camera,
+        offset_arrow_frame_m,
+        workspace_bounds_m,
+        patch_radius_px=patch_radius_px,
+        min_valid_fraction=min_valid_fraction,
+    )
+    return tuple(
+        SourceApproachCandidate(
+            approach_world_m=candidate.candidate_world_m.copy(),
+            offset_arrow_frame_m=candidate.offset_arrow_frame_m.copy(),
+            offset_world_m=candidate.offset_world_m.copy(),
+            source_world_m=geometry.anchor_world_m.copy(),
+            forward_world_unit=geometry.forward_world_unit.copy(),
+            lateral_world_unit=geometry.lateral_world_unit.copy(),
+            workspace_bounds_m=(geometry.workspace_bounds_m[0].copy(), geometry.workspace_bounds_m[1].copy()),
+        )
+        for candidate in geometry.candidates
+    )
+
+
+@dataclass(frozen=True)
+class SupportPlaneEstimate:
+    """A local destination support plane fit from metric RGB-D points."""
+
+    origin_world_m: np.ndarray
+    normal_world_unit: np.ndarray
+    residual_rms_m: float
+    residual_max_m: float
+    valid_point_count: int
+    pixel_xy: tuple[float, float]
+    support: DepthSupportEvidence
+    frame: str = "world"
+    units: str = "metres"
+
+    def __post_init__(self) -> None:
+        origin = _as_finite_array(self.origin_world_m, name="origin_world_m").reshape(-1)
+        normal = _as_finite_array(self.normal_world_unit, name="normal_world_unit").reshape(-1)
+        if origin.size != 3 or normal.size != 3:
+            raise ValueError("origin_world_m and normal_world_unit must contain three values")
+        norm = float(np.linalg.norm(normal))
+        if not np.isfinite(norm) or abs(norm - 1.0) > 1e-4:
+            raise ValueError("normal_world_unit must be unit length")
+        for name in ("residual_rms_m", "residual_max_m"):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if type(self.valid_point_count) is not int or self.valid_point_count < 3:
+            raise ValueError("valid_point_count must be an integer >= 3")
+        if not isinstance(self.support, DepthSupportEvidence):
+            raise TypeError("support must be DepthSupportEvidence")
+        if self.frame != "world" or self.units != "metres":
+            raise ValueError("support plane frame must be world and units must be metres")
+
+    @property
+    def point_world_m(self) -> np.ndarray:
+        return self.origin_world_m
+
+
+def estimate_destination_support_plane(
+    depth_m: np.ndarray,
+    destination_pixel_xy: ArrayLike,
+    K: ArrayLike,
+    T_world_camera: ArrayLike,
+    *,
+    patch_radius_px: int = 2,
+    min_valid_fraction: float = 0.5,
+    max_residual_m: float = 0.01,
+) -> SupportPlaneEstimate:
+    """Fit a finite local support plane from deprojected metric depth."""
+    depth = np.asarray(depth_m, dtype=np.float64)
+    if depth.ndim != 2 or depth.shape[0] < 1 or depth.shape[1] < 1:
+        raise ValueError("depth_m must be a non-empty HxW array")
+    intrinsics = _validate_intrinsics(K)
+    transform = _validate_transform(T_world_camera)
+    pixel = _pixel(destination_pixel_xy, name="destination_pixel_xy")
+    support = analyze_depth_support(depth, pixel, patch_radius_px=patch_radius_px)
+    fraction = float(min_valid_fraction)
+    residual_limit = float(max_residual_m)
+    if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        raise ValueError("min_valid_fraction must be finite and in (0, 1]")
+    if not np.isfinite(residual_limit) or residual_limit <= 0.0:
+        raise ValueError("max_residual_m must be finite and positive")
+    if support.clipped or support.valid_fraction < fraction:
+        raise ValueError("destination pixel lacks sufficient unclipped metric-depth support")
+    u, v = np.rint(pixel).astype(int)
+    radius = patch_radius_px
+    y0, y1 = max(0, v - radius), min(depth.shape[0], v + radius + 1)
+    x0, x1 = max(0, u - radius), min(depth.shape[1], u + radius + 1)
+    local = depth[y0:y1, x0:x1]
+    valid_y, valid_x = np.nonzero(np.isfinite(local) & (local > 0.0))
+    values = local[valid_y, valid_x]
+    if values.size < 3:
+        raise ValueError("support plane needs at least three valid metric-depth points")
+    pixel_x = valid_x + x0
+    pixel_y = valid_y + y0
+    camera_points = np.column_stack(
+        (
+            (pixel_x - intrinsics[0, 2]) * values / intrinsics[0, 0],
+            (pixel_y - intrinsics[1, 2]) * values / intrinsics[1, 1],
+            values,
+            np.ones(values.size, dtype=np.float64),
+        )
+    )
+    points = (transform @ camera_points.T).T[:, :3]
+    if not np.all(np.isfinite(points)):
+        raise ValueError("support plane deprojection produced non-finite points")
+    origin = np.mean(points, axis=0)
+    centered = points - origin
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    normal = vh[-1]
+    normal /= np.linalg.norm(normal)
+    if normal[2] < 0.0:
+        normal = -normal
+    residuals = np.abs(centered @ normal)
+    rms = float(np.sqrt(np.mean(residuals * residuals)))
+    maximum = float(np.max(residuals))
+    if maximum > residual_limit:
+        raise ValueError(f"support plane residual exceeds max_residual_m: {maximum:.6g}")
+    return SupportPlaneEstimate(
+        origin_world_m=origin,
+        normal_world_unit=normal,
+        residual_rms_m=rms,
+        residual_max_m=maximum,
+        valid_point_count=int(points.shape[0]),
+        pixel_xy=(float(pixel[0]), float(pixel[1])),
+        support=support,
+    )
+
+
+def release_point_on_support_plane(
+    support_plane: SupportPlaneEstimate,
+    world_xy_m: ArrayLike,
+    *,
+    workspace_bounds_m: Mapping[str, Sequence[float]] | Sequence[Sequence[float]] | None = None,
+) -> np.ndarray:
+    """Return the point at requested world XY lying on a fitted support plane."""
+    if not isinstance(support_plane, SupportPlaneEstimate):
+        raise TypeError("support_plane must be SupportPlaneEstimate")
+    xy = _as_finite_array(world_xy_m, name="world_xy_m").reshape(-1)
+    if xy.size != 2:
+        raise ValueError("world_xy_m must contain exactly two values")
+    origin = support_plane.origin_world_m
+    normal = support_plane.normal_world_unit
+    if abs(float(normal[2])) <= 1e-9:
+        raise ValueError("support plane is vertical and has no finite Z at requested XY")
+    z = float(origin[2] - (normal[0] * (xy[0] - origin[0]) + normal[1] * (xy[1] - origin[1])) / normal[2])
+    point = np.array((xy[0], xy[1], z), dtype=np.float64)
+    if workspace_bounds_m is not None:
+        minimum, maximum = _workspace_bounds(workspace_bounds_m)
+        if np.any(point < minimum) or np.any(point > maximum):
+            raise ValueError("release point lies outside workspace bounds")
+    return point
+
+
 def derive_rgbd_region_grasp_candidates(
     clean_rgb: np.ndarray,
     depth_m: np.ndarray,
@@ -1285,6 +1879,14 @@ __all__ = [
     "ArrowDecodeDiagnostics",
     "RGBDEndpoint",
     "EndpointChangeEvidence",
+    "GraspRetentionEvidence",
+    "PostLiftGraspRetentionEvidence",
+    "assess_grasp_retention",
+    "evaluate_post_lift_grasp_retention",
+    "post_lift_grasp_retention",
+    "DepthSupportEvidence",
+    "analyze_depth_support",
+    "depth_support_evidence",
     "BowlWaypointConfig",
     "resolve_arrow_encoding",
     "decode_arrow",
@@ -1297,6 +1899,16 @@ __all__ = [
     "refine_rgbd",
     "build_bowl_waypoints",
     "arrow_world_xy_basis",
+    "RGBDApproachCandidate",
+    "RGBDBoundedApproachGeometry",
+    "derive_rgbd_bounded_approach_candidates",
+    "build_rgbd_approach_candidates",
+    "derive_rgbd_approach_candidates",
+    "SourceApproachCandidate",
+    "derive_rgbd_source_approach_candidates",
+    "SupportPlaneEstimate",
+    "estimate_destination_support_plane",
+    "release_point_on_support_plane",
     "derive_rgbd_region_grasp_candidates",
     "normalized_osc_action",
     "compute_endpoint_change_evidence",

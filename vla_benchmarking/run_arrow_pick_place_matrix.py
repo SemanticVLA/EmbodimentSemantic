@@ -51,6 +51,17 @@ SUMMARY_FILENAME = "arrow_pick_place_matrix_summary.json"
 MANIFEST_JSON_FILENAME = "arrow_pick_place_matrix_manifest.json"
 STATUS_FILENAME = "arrow_pick_place_matrix_status.json"
 MATRIX_SCHEMA_VERSION = "arrow_pick_place_matrix.v1"
+
+# Additive evidence fields introduced by the v9 persistence contract.  They
+# are deliberately not included in the protocol/contract hash, so historical
+# v1-v9 artifacts retain their original identity when these fields are absent.
+P4_EVIDENCE_FIELDS = (
+    "motion_trace", "motion_trace_path", "motion_trace_sha256",
+    "motion_trace_max_steps", "motion_trace_truncated", "failure_snapshots",
+    "failure_bundle", "post_lift_retention_gate", "retention_gate",
+    "source_approach", "support_plane", "placement_observable",
+    "placement_after_retention", "canary_video", "input_budget", "forbidden_input_audit",
+)
 VERIFIED_TASK_ID = 0
 VERIFIED_SEED = 1000
 VERIFIED_RESOLUTION = 256
@@ -556,6 +567,21 @@ def _error_record(
         "grasp_search": [],
         "micro_corrections": [],
         "zerograsp": None,
+        "motion_trace": [],
+        "motion_trace_path": None,
+        "motion_trace_sha256": None,
+        "motion_trace_max_steps": None,
+        "motion_trace_truncated": False,
+        "failure_snapshots": [],
+        "failure_bundle": None,
+        "post_lift_retention_gate": None,
+        "retention_gate": None,
+        "source_approach": None,
+        "support_plane": None,
+        "placement_observable": None,
+        "placement_after_retention": None,
+        "input_budget": None,
+        "forbidden_input_audit": None,
         "frames": [],
         "phase_frames": [],
         "phases": [],
@@ -576,6 +602,21 @@ def _error_record(
             "grasp_search": [],
             "micro_corrections": [],
             "zerograsp": None,
+            "motion_trace": [],
+            "motion_trace_path": None,
+            "motion_trace_sha256": None,
+            "motion_trace_max_steps": None,
+            "motion_trace_truncated": False,
+            "failure_snapshots": [],
+            "failure_bundle": None,
+            "post_lift_retention_gate": None,
+            "retention_gate": None,
+            "source_approach": None,
+            "support_plane": None,
+            "placement_observable": None,
+            "placement_after_retention": None,
+            "input_budget": None,
+            "forbidden_input_audit": None,
             "recovery": [],
             "evaluator_result": None,
             "settle_diagnostics": None,
@@ -606,6 +647,7 @@ def _audit_diagnostics(audit: Mapping[str, Any]) -> dict[str, Any]:
         "grasp_retries": audit.get("grasp_retries", []),
         "grasp_search": audit.get("grasp_search", []),
         "micro_corrections": audit.get("micro_corrections", []),
+        **{field: audit.get(field) for field in P4_EVIDENCE_FIELDS},
         "recovery": audit.get("recovery", []),
         "evaluator_result": audit.get("evaluator_success"),
     }
@@ -641,6 +683,22 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
         ("_arrow_grasp_search_audit", "grasp_search"),
         ("_arrow_micro_correction_audit", "micro_corrections"),
         ("_arrow_zerograsp_audit", "zerograsp"),
+        ("_arrow_motion_trace", "motion_trace"),
+        ("_arrow_motion_trace_path", "motion_trace_path"),
+        ("_arrow_motion_trace_sha256", "motion_trace_sha256"),
+        ("_arrow_motion_trace_max_steps", "motion_trace_max_steps"),
+        ("_arrow_motion_trace_truncated", "motion_trace_truncated"),
+        ("_arrow_failure_snapshots", "failure_snapshots"),
+        ("_arrow_failure_bundle", "failure_bundle"),
+        ("_arrow_post_lift_retention_gate", "post_lift_retention_gate"),
+        ("_arrow_retention_gate", "retention_gate"),
+        ("_arrow_source_approach", "source_approach"),
+        ("_arrow_support_plane", "support_plane"),
+        ("_arrow_placement_observable", "placement_observable"),
+        ("_arrow_placement_after_retention", "placement_after_retention"),
+        ("_arrow_canary_video", "canary_video"),
+        ("_arrow_input_budget", "input_budget"),
+        ("_arrow_forbidden_input_audit", "forbidden_input_audit"),
     ):
         try:
             value = getattr(env, attribute, None)
@@ -1511,6 +1569,13 @@ def _run_matrix_impl(
                         episode_kwargs["motion_started_callback"] = motion_started_callback
                     if evaluator_fn is not None:
                         episode_kwargs["evaluator"] = evaluator_fn
+                    # Every motion canary receives a bounded, per-cell video
+                    # directory.  It is nested under the immutable matrix
+                    # output so the desktop exporter can preserve the same
+                    # variant/suite/task/episode provenance without changing
+                    # controller inputs or timing.
+                    if execute_motion and not dry_run:
+                        episode_kwargs["canary_video_dir"] = attempt_output_dir / "canary_video"
                     # Keep the established kwargs call for the runner's core
                     # inputs, but remove newly introduced condition metadata
                     # when a legacy injected fake does not accept it.
@@ -1686,6 +1751,18 @@ def _run_matrix_impl(
                 if isinstance(audit_value, Mapping) and (isinstance(audit_value.get(field), (list, Mapping))):
                     value = audit_value[field]
                 elif isinstance(early_runtime_diagnostics.get(field), (list, Mapping)):
+                    value = early_runtime_diagnostics[field]
+                if value is not None:
+                    cell_record[field] = value
+                    cell_record.setdefault("diagnostics", {})[field] = value
+            # Promote additive persistence evidence to the terminal record so
+            # JSONL consumers do not need to dereference the audit first.
+            audit_value = cell_record.get("audit")
+            for field in P4_EVIDENCE_FIELDS:
+                value = None
+                if isinstance(audit_value, Mapping) and field in audit_value:
+                    value = audit_value[field]
+                elif field in early_runtime_diagnostics:
                     value = early_runtime_diagnostics[field]
                 if value is not None:
                     cell_record[field] = value
