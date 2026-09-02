@@ -9,6 +9,8 @@ umask 027
 
 readonly ZERO_GRASP_OFFICIAL_URL="https://github.com/sh8/ZeroGrasp.git"
 readonly ZERO_GRASP_PIN="152f67c27269ff3f089783bd2f041d67641fa506"
+readonly OCTREE_SUBMODULE_PATH="submodules/octree_feature_extractor"
+readonly OCTREE_SUBMODULE_URL="https://github.com/TRI-ML/octree_feature_extractor.git"
 
 die() {
   printf 'ZeroGrasp bootstrap: %s\n' "$*" >&2
@@ -92,7 +94,7 @@ ROOT_PARENT="$(dirname -- "$ROOT_INPUT")"
 
 if [[ ! -e "$ROOT_INPUT" ]]; then
   ((VERIFY_ONLY == 0)) || die "checkout is missing in verify-only mode: $ROOT_INPUT"
-  git clone --recursive "$ZERO_GRASP_OFFICIAL_URL" "$ROOT_INPUT" || die 'official checkout clone failed'
+  git clone "$ZERO_GRASP_OFFICIAL_URL" "$ROOT_INPUT" || die 'official checkout clone failed'
 fi
 
 ROOT="$(realpath -e -- "$ROOT_INPUT")" || die 'cannot canonicalize checkout root'
@@ -117,6 +119,20 @@ fi
 
 [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$ZERO_GRASP_PIN" ]] || die 'pinned revision verification failed'
 [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]] || die 'checkout became dirty during pinning'
+
+# The official repository records this public submodule with an SSH URL.
+# Compute nodes cannot service interactive SSH authentication, so pin the
+# repository-local submodule URL to the equivalent public HTTPS endpoint.
+if ((VERIFY_ONLY == 0)); then
+  git -C "$ROOT" config "submodule.${OCTREE_SUBMODULE_PATH}.url" "$OCTREE_SUBMODULE_URL" || die 'could not configure HTTPS submodule URL'
+  git -C "$ROOT" submodule update --init --recursive || die 'could not initialize pinned octree submodule over HTTPS'
+fi
+SUBMODULE_STATUS="$(git -C "$ROOT" submodule status --recursive)" || die 'cannot inspect submodule status'
+[[ -n "$SUBMODULE_STATUS" ]] || die 'expected octree submodule is absent'
+if printf '%s\n' "$SUBMODULE_STATUS" | grep -Eq '^[+-U]'; then
+  die 'submodule checkout is missing or differs from the pinned superproject state'
+fi
+[[ -z "$(git -C "$ROOT/$OCTREE_SUBMODULE_PATH" status --porcelain --untracked-files=all)" ]] || die 'octree submodule is dirty'
 
 if ((CREATE_VENV)) && [[ -z "$PYTHON_INPUT" ]]; then
   if [[ -z "$VENV_INPUT" ]]; then
