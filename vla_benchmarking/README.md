@@ -249,7 +249,9 @@ is likewise filtered and installed at its pinned ref after Torch with build
 isolation disabled, because its build imports Torch and compiles a CUDA
 extension. The runtime lock records and verifies the compiler module names and
 the resolved paths, versions, and executable hashes for `nvcc`, `gcc`, and
-`g++`. It installs `gdown==5.2.0` only on
+`g++`. Because Legion compute-node DNS does not reliably resolve the PyG wheel
+host, pinned `torch_cluster==1.6.3` is built once in that persistent venv with
+build isolation disabled. It installs `gdown==5.2.0` only on
 the compute node and fetches the official Drive file id
 `1xUmFdgT_Ozu4zIPIsh_1SJMcegeQUWqQ` only when the checkpoint path is absent;
 existing checkpoint files are never overwritten. Acquisition exits before any

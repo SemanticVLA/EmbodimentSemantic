@@ -233,7 +233,10 @@ if ((INSTALL)); then
   (cd -- "$SUBMODULE" && "$PYTHON" setup.py install) || die 'octree_feature_extractor install failed'
   "$PYTHON" -m pip install "graspnetAPI @ git+https://github.com/graspnet/graspnetAPI.git@${GRASPNETAPI_PIN}" --no-deps || die 'graspnetAPI install failed'
   "$PYTHON" -m pip install transforms3d autolab_core cvxopt grasp_nms || die 'grasp utility install failed'
-  "$PYTHON" -m pip install torch_cluster -f https://data.pyg.org/whl/torch-2.2.0+cu121.html || die 'torch_cluster install failed'
+  # The PyG wheel host is not reliably resolvable from Legion compute nodes.
+  # Build the exact PyPI release against the already-pinned Torch/toolchain;
+  # the persistent venv makes this a one-time cost.
+  "$PYTHON" -m pip install --no-build-isolation --no-deps torch_cluster==1.6.3 || die 'torch_cluster install failed'
   NUMPY_VERSION="$($PYTHON -c 'import numpy; print(numpy.__version__)')" || die 'cannot import NumPy after installation'
   [[ "$NUMPY_VERSION" == "1.26.4" ]] || die "NumPy version drifted during installation: $NUMPY_VERSION"
   unset PIP_CONSTRAINT
