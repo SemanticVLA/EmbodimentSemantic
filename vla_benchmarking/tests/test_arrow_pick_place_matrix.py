@@ -594,6 +594,30 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
             "status": "rejected",
             "rejection_reason": "invalid metric depth at arrow endpoint",
         }
+        _arrow_endpoint_depths_m = {
+            "source_tail": 0.8,
+            "destination_head": 0.9,
+        }
+        _arrow_endpoint_depth_statistics = {
+            "source_tail": {"statistic": "median", "valid_count": 9},
+            "destination_head": {"statistic": "median", "valid_count": 9},
+        }
+        _arrow_deprojected_visual_endpoint_world_points_m = {
+            "source_tail": [0.1, 0.2, 0.3],
+            "destination_head": [0.4, 0.5, 0.6],
+        }
+        _arrow_control_targets_world_m = {
+            "source_grasp": [0.1, 0.2, 0.33],
+            "destination_release": [0.4, 0.5, 0.63],
+        }
+        _arrow_workspace_validation = {
+            "status": "rejected",
+            "reason": "synthetic early workspace failure",
+        }
+        _arrow_waypoints_world_m = {
+            "waypoint_0": [0.1, 0.2, 0.4],
+            "waypoint_1": [0.1, 0.2, 0.3],
+        }
         _arrow_phase_audit = [
             {"phase": "preplace", "status": "reached", "steps": 4},
             {"phase": "descend_place", "status": "timeout", "steps": 80},
@@ -631,6 +655,18 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
     assert record["audit"] is None
     assert record["partial_audit"]["capture_contract"] == expected_capture
     assert record["partial_audit"]["depth_sanitization_policy"] == expected_policy
+    for field in (
+        "endpoint_depths_m",
+        "endpoint_depth_statistics",
+        "deprojected_visual_endpoint_world_points_m",
+        "control_targets_world_m",
+        "workspace_validation",
+        "waypoints_world_m",
+    ):
+        expected = getattr(Env, f"_arrow_{field}")
+        assert record[field] == expected
+        assert record["diagnostics"][field] == expected
+        assert record["partial_audit"][field] == expected
     assert summary["phase_aggregates"]["descend_place"] == {
         "count": 1,
         "statuses": {"timeout": 1},

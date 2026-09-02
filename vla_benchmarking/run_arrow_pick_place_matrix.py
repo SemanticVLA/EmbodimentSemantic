@@ -463,6 +463,12 @@ def _error_record(
         "partial_audit": None,
         "capture_contract": None,
         "depth_sanitization_policy": None,
+        "endpoint_depths_m": None,
+        "endpoint_depth_statistics": None,
+        "deprojected_visual_endpoint_world_points_m": None,
+        "control_targets_world_m": None,
+        "workspace_validation": None,
+        "waypoints_world_m": None,
         "frames": [],
         "phase_frames": [],
         "phases": [],
@@ -474,8 +480,10 @@ def _error_record(
             "capture_contract": None,
             "depth_sanitization_policy": None,
             "endpoint_depths_m": None,
+            "endpoint_depth_statistics": None,
             "deprojected_visual_endpoint_world_points_m": None,
             "control_targets_world_m": None,
+            "workspace_validation": None,
             "waypoints_world_m": None,
             "recovery": [],
             "evaluator_result": None,
@@ -497,10 +505,12 @@ def _audit_diagnostics(audit: Mapping[str, Any]) -> dict[str, Any]:
         "capture_contract": audit.get("capture_contract"),
         "depth_sanitization_policy": audit.get("depth_sanitization_policy"),
         "endpoint_depths_m": audit.get("endpoint_depths_m"),
+        "endpoint_depth_statistics": audit.get("endpoint_depth_statistics"),
         "deprojected_visual_endpoint_world_points_m": audit.get(
             "deprojected_visual_endpoint_world_points_m"
         ),
         "control_targets_world_m": audit.get("control_targets_world_m"),
+        "workspace_validation": audit.get("workspace_validation"),
         "waypoints_world_m": audit.get("waypoints_world_m"),
         "recovery": audit.get("recovery", []),
         "evaluator_result": audit.get("evaluator_success"),
@@ -520,6 +530,15 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, dict[str, Any]]:
     for attribute, field in (
         ("_arrow_capture_contract", "capture_contract"),
         ("_arrow_depth_sanitization_policy", "depth_sanitization_policy"),
+        ("_arrow_endpoint_depths_m", "endpoint_depths_m"),
+        ("_arrow_endpoint_depth_statistics", "endpoint_depth_statistics"),
+        (
+            "_arrow_deprojected_visual_endpoint_world_points_m",
+            "deprojected_visual_endpoint_world_points_m",
+        ),
+        ("_arrow_control_targets_world_m", "control_targets_world_m"),
+        ("_arrow_workspace_validation", "workspace_validation"),
+        ("_arrow_waypoints_world_m", "waypoints_world_m"),
     ):
         try:
             value = getattr(env, attribute, None)
@@ -753,11 +772,16 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
                 result["parser"]["success"] += 1
             else:
                 result["parser"]["failure"] += 1
-            if audit.get("endpoint_depths_m") is not None:
+            depth_policy = audit.get("depth_sanitization_policy")
+            if (
+                isinstance(depth_policy, Mapping)
+                and depth_policy.get("status") == "rejected"
+            ):
+                result["depth"]["failure"] += 1
+            elif audit.get("endpoint_depths_m") is not None:
                 result["depth"]["recorded"] += 1
-            elif isinstance(audit.get("depth_sanitization_policy"), Mapping):
-                policy_status = audit["depth_sanitization_policy"].get("status")
-                if policy_status in {"accepted", "valid"}:
+            elif isinstance(depth_policy, Mapping):
+                if depth_policy.get("status") in {"accepted", "valid"}:
                     result["depth"]["recorded"] += 1
                 else:
                     result["depth"]["failure"] += 1
