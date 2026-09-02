@@ -672,6 +672,52 @@ def test_controller_variant_provenance_is_canonical_and_suite_scoped(runner):
         runner.ControllerVariantConfig(suite_mode="unknown")
 
 
+def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
+    candidate = runner.ControllerVariantConfig(
+        name=runner.CANDIDATE_CONTROLLER_VARIANT_NAME,
+        endpoint_depth_statistic="lower_quantile",
+        endpoint_depth_quantile=0.2,
+        approach_tolerance_m=0.02,
+    )
+    assert candidate.canonical()["endpoint_depth_statistic"] == "lower_quantile"
+    assert candidate.canonical()["endpoint_depth_quantile"] == 0.2
+    assert candidate.canonical()["approach_tolerance_m"] == 0.02
+    resolved = runner._resolve_controller_variant(
+        runner.CANDIDATE_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert resolved.endpoint_depth_statistic == "lower_quantile"
+    assert resolved.approach_tolerance_m == runner.CANDIDATE_APPROACH_TOLERANCE_M
+    with pytest.raises(ValueError, match="reserved for the candidate"):
+        runner.ControllerVariantConfig(name=runner.DEFAULT_PROFILE_NAME, approach_tolerance_m=0.02)
+
+
+def test_endpoint_depth_statistics_and_candidate_tolerance_are_audited(
+    runner, monkeypatch, tmp_path: Path
+):
+    _patch_episode_controller(runner, monkeypatch)
+    capture = _episode_capture(runner)
+    candidate = runner.ControllerVariantConfig(
+        name=runner.CANDIDATE_CONTROLLER_VARIANT_NAME,
+        endpoint_depth_statistic="lower_quantile",
+        endpoint_depth_quantile=0.25,
+        approach_tolerance_m=0.02,
+    )
+    audit = runner.run_episode(
+        env=_MotionEnv(),
+        task_id=0,
+        seed=1000,
+        resolution=256,
+        output_dir=tmp_path,
+        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+        capture=capture,
+        dry_run=True,
+        controller_variant=candidate,
+    )
+    assert audit["endpoint_depth_statistics"]["source_tail"]["statistic"] == "lower_quantile"
+    assert audit["controller_variant"]["canonical"]["approach_tolerance_m"] == 0.02
+    assert audit["phases"][1]["policy"]["tolerance_m"] == 0.02
+
+
 def test_randomization_dimensions_are_task_actual_not_suite_wide(runner):
     swapped = runner._randomization_dimensions(
         "sealed_randomized", ["plate_1"], {"applied": ["bowl_1", "cookies_1"]}

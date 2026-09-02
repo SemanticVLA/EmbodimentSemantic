@@ -71,6 +71,7 @@ DEFAULT_SUBJECT = "akita_black_bowl_1"
 # bowl-rim grasp/release point. These are constant transforms, never runtime
 # simulator object coordinates.
 DEFAULT_PROFILE_NAME = "libero_spatial_akita_bowl_agentview_v1"
+CANDIDATE_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v1"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -140,6 +141,13 @@ DEFAULT_STALL_DELTA_M = 1e-4
 DEFAULT_RECOVERY_ATTEMPTS = 1
 DEFAULT_RECOVERY_STEPS = 3
 MAX_NORMALIZED_MASK_FRACTION = 0.25
+ENDPOINT_DEPTH_STATISTICS = ("median", "lower_quantile", "nearest_valid")
+DEFAULT_ENDPOINT_DEPTH_STATISTIC = "median"
+DEFAULT_ENDPOINT_DEPTH_QUANTILE = 0.25
+CANDIDATE_ENDPOINT_DEPTH_STATISTIC = "lower_quantile"
+CANDIDATE_ENDPOINT_DEPTH_QUANTILE = 0.25
+CANDIDATE_APPROACH_TOLERANCE_M = 0.015
+MAX_APPROACH_TOLERANCE_M = 0.025
 
 
 @dataclass(frozen=True)
@@ -160,6 +168,9 @@ class ControllerVariantConfig:
     stall_delta_m: float = DEFAULT_STALL_DELTA_M
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS
     recovery_steps: int = DEFAULT_RECOVERY_STEPS
+    endpoint_depth_statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC
+    endpoint_depth_quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE
+    approach_tolerance_m: float | None = None
 
     def __post_init__(self) -> None:
         if self.suite_mode not in SUITE_MODES:
@@ -168,6 +179,22 @@ class ControllerVariantConfig:
             raise ValueError("controller phase and gripper step limits must be positive")
         if self.stall_window_steps < 0 or self.stall_delta_m < 0 or self.recovery_attempts < 0 or self.recovery_steps < 0:
             raise ValueError("stall/recovery limits must be non-negative")
+        if self.endpoint_depth_statistic not in ENDPOINT_DEPTH_STATISTICS:
+            raise ValueError(
+                f"endpoint_depth_statistic must be one of {ENDPOINT_DEPTH_STATISTICS}"
+            )
+        if not 0.0 <= float(self.endpoint_depth_quantile) <= 1.0:
+            raise ValueError("endpoint_depth_quantile must be in [0, 1]")
+        if self.approach_tolerance_m is not None and (
+            not np.isfinite(float(self.approach_tolerance_m))
+            or float(self.approach_tolerance_m) <= 0.0
+            or float(self.approach_tolerance_m) > MAX_APPROACH_TOLERANCE_M
+        ):
+            raise ValueError(
+                f"approach_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
+            )
+        if self.approach_tolerance_m is not None and self.name != CANDIDATE_CONTROLLER_VARIANT_NAME:
+            raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
 
     def canonical(self) -> dict[str, Any]:
         return {
@@ -180,6 +207,11 @@ class ControllerVariantConfig:
             "stall_delta_m": float(self.stall_delta_m),
             "recovery_attempts": int(self.recovery_attempts),
             "recovery_steps": int(self.recovery_steps),
+            "endpoint_depth_statistic": self.endpoint_depth_statistic,
+            "endpoint_depth_quantile": float(self.endpoint_depth_quantile),
+            "approach_tolerance_m": (
+                None if self.approach_tolerance_m is None else float(self.approach_tolerance_m)
+            ),
         }
 
     @property
@@ -207,16 +239,27 @@ def _resolve_controller_variant(
     gripper_dwell_steps: int = DEFAULT_GRIPPER_DWELL_STEPS,
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
     recovery_steps: int = DEFAULT_RECOVERY_STEPS,
+    endpoint_depth_statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC,
+    endpoint_depth_quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE,
+    approach_tolerance_m: float | None = None,
 ) -> ControllerVariantConfig:
     if isinstance(value, ControllerVariantConfig):
         return value
+    name = str(value) if value is not None else DEFAULT_PROFILE_NAME
+    if name == CANDIDATE_CONTROLLER_VARIANT_NAME:
+        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
+        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
+        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
     return ControllerVariantConfig(
-        name=str(value) if value is not None else DEFAULT_PROFILE_NAME,
+        name=name,
         suite_mode=suite_mode,
         phase_timeout_steps=phase_timeout_steps,
         gripper_dwell_steps=gripper_dwell_steps,
         recovery_attempts=recovery_attempts,
         recovery_steps=recovery_steps,
+        endpoint_depth_statistic=endpoint_depth_statistic,
+        endpoint_depth_quantile=endpoint_depth_quantile,
+        approach_tolerance_m=approach_tolerance_m,
     )
 
 
@@ -656,7 +699,18 @@ def decode_arrow_pixels(
     return source, target
 
 
-def _depth_at(depth: np.ndarray, uv: np.ndarray, radius: int = 2) -> float:
+def _depth_at_with_audit(
+    depth: np.ndarray,
+    uv: np.ndarray,
+    radius: int = 2,
+    *,
+    statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC,
+    quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE,
+) -> tuple[float, dict[str, Any]]:
+    if statistic not in ENDPOINT_DEPTH_STATISTICS:
+        raise ValueError(f"endpoint_depth_statistic must be one of {ENDPOINT_DEPTH_STATISTICS}")
+    if not 0.0 <= float(quantile) <= 1.0:
+        raise ValueError("endpoint_depth_quantile must be in [0, 1]")
     u, v = np.rint(uv).astype(int)
     if not (0 <= u < depth.shape[1] and 0 <= v < depth.shape[0]):
         raise ValueError(f"arrow endpoint {(u, v)} lies outside depth frame {depth.shape[::-1]}")
@@ -664,7 +718,28 @@ def _depth_at(depth: np.ndarray, uv: np.ndarray, radius: int = 2) -> float:
     valid = patch[np.isfinite(patch) & (patch > 0)]
     if valid.size == 0:
         raise ValueError(f"no valid metric depth near arrow endpoint {(u, v)}")
-    return float(np.median(valid))
+    if statistic == "median":
+        selected = float(np.median(valid))
+    elif statistic == "lower_quantile":
+        selected = float(np.quantile(valid, float(quantile)))
+    else:  # nearest_valid
+        yy, xx = np.where(np.isfinite(patch) & (patch > 0))
+        center = np.asarray([v - max(0, v - radius), u - max(0, u - radius)], dtype=np.float64)
+        distances = (yy - center[0]) ** 2 + (xx - center[1]) ** 2
+        selected = float(valid[int(np.argmin(distances))])
+    return selected, {
+        "statistic": statistic,
+        "quantile": float(quantile),
+        "patch_radius": int(radius),
+        "valid_sample_count": int(valid.size),
+        "selected_depth_m": selected,
+    }
+
+
+def _depth_at(depth: np.ndarray, uv: np.ndarray, radius: int = 2) -> float:
+    """Backward-compatible median robust depth estimator."""
+    selected, _audit = _depth_at_with_audit(depth, uv, radius)
+    return selected
 
 
 def assess_depth_sanitization_for_motion(
@@ -1180,6 +1255,8 @@ def recover_grasp_or_release(
     resolution: int,
     arrow_encoding: str | Any | None = None,
     endpoint_pixels: tuple[Sequence[float], Sequence[float]] | None = None,
+    endpoint_depth_statistic: str = DEFAULT_ENDPOINT_DEPTH_STATISTIC,
+    endpoint_depth_quantile: float = DEFAULT_ENDPOINT_DEPTH_QUANTILE,
     source_grasp_offset: Sequence[float] = DEFAULT_SOURCE_GRASP_OFFSET_M,
     destination_release_offset: Sequence[float] = DEFAULT_DESTINATION_RELEASE_OFFSET_M,
 ) -> dict[str, Any]:
@@ -1200,8 +1277,16 @@ def recover_grasp_or_release(
         )
     source_uv = np.asarray(endpoint_pixels[0], dtype=np.float64)
     target_uv = np.asarray(endpoint_pixels[1], dtype=np.float64)
-    source_depth = _depth_at(recapture.metric_depth, source_uv)
-    target_depth = _depth_at(recapture.metric_depth, target_uv)
+    source_depth, source_depth_audit = _depth_at_with_audit(
+        recapture.metric_depth, source_uv,
+        statistic=endpoint_depth_statistic,
+        quantile=endpoint_depth_quantile,
+    )
+    target_depth, target_depth_audit = _depth_at_with_audit(
+        recapture.metric_depth, target_uv,
+        statistic=endpoint_depth_statistic,
+        quantile=endpoint_depth_quantile,
+    )
     source_point, source_refinement = _refine_or_deproject_endpoint(
         source_uv, source_depth, recapture.calibration.intrinsic,
         recapture.calibration.world_from_camera,
@@ -1221,6 +1306,10 @@ def recover_grasp_or_release(
         },
         "endpoint_depths_m": {
             "source_tail": float(source_depth), "destination_head": float(target_depth)
+        },
+        "endpoint_depth_statistics": {
+            "source_tail": source_depth_audit,
+            "destination_head": target_depth_audit,
         },
         "deprojected_visual_endpoint_world_points_m": {
             "source_tail": source_point.tolist(), "destination_head": target_point.tolist()
@@ -1293,6 +1382,8 @@ def run_episode(
     gripper_dwell_steps = int(variant.gripper_dwell_steps)
     recovery_attempts = int(variant.recovery_attempts)
     recovery_steps = int(variant.recovery_steps)
+    endpoint_depth_statistic = variant.endpoint_depth_statistic
+    endpoint_depth_quantile = float(variant.endpoint_depth_quantile)
     if resolution <= 0:
         raise ValueError("resolution must be positive")
     if gripper_dwell_steps <= 0:
@@ -1374,8 +1465,16 @@ def run_episode(
             "refusing motion: normalized depth sanitization policy rejected capture "
             f"({depth_sanitization_policy['rejection_reason']})"
         )
-    source_depth = _depth_at(capture.metric_depth, source_uv)
-    target_depth = _depth_at(capture.metric_depth, target_uv)
+    source_depth, source_depth_audit = _depth_at_with_audit(
+        capture.metric_depth, source_uv,
+        statistic=endpoint_depth_statistic,
+        quantile=endpoint_depth_quantile,
+    )
+    target_depth, target_depth_audit = _depth_at_with_audit(
+        capture.metric_depth, target_uv,
+        statistic=endpoint_depth_statistic,
+        quantile=endpoint_depth_quantile,
+    )
     calibration = asdict(capture.calibration)
     K = capture.calibration.intrinsic
     T_world_camera = capture.calibration.world_from_camera
@@ -1447,6 +1546,11 @@ def run_episode(
         )
         workspace_validation["status"] = "passed"
 
+    phase_policies = {name: dict(policy) for name, policy in PHASE_POLICIES.items()}
+    if variant.approach_tolerance_m is not None:
+        for approach_phase in ("descend", "descend_place"):
+            phase_policies[approach_phase]["tolerance_m"] = float(variant.approach_tolerance_m)
+
     output_root = Path(output_dir).expanduser().resolve()
     frame_paths = _save_capture(capture, arrow_rgb, output_root)
     phase_frame_paths: list[str] = []
@@ -1477,6 +1581,7 @@ def run_episode(
             motion_started_callback=motion_started_callback if not dry_run else None,
             stall_window_steps=variant.stall_window_steps,
             stall_delta_m=variant.stall_delta_m,
+            phase_policies=phase_policies,
         )
     except TimeoutError as exc:
         if (
@@ -1501,6 +1606,8 @@ def run_episode(
                         resolution=resolution,
                         arrow_encoding=arrow_encoding,
                         endpoint_pixels=(source_uv, target_uv),
+                        endpoint_depth_statistic=endpoint_depth_statistic,
+                        endpoint_depth_quantile=endpoint_depth_quantile,
                         source_grasp_offset=source_offset,
                         destination_release_offset=destination_offset,
                     )
@@ -1579,6 +1686,7 @@ def run_episode(
         "full_state_machine_completed": bool(full_execution and not dry_run),
         "gripper_dwell_steps": int(gripper_dwell_steps),
         "controller_variant": variant.provenance(),
+        "phase_policies": phase_policies,
         "suite_mode": suite_mode,
         "recovery": recovery_audit,
         "settle_diagnostics": settle_diagnostics,
@@ -1601,6 +1709,10 @@ def run_episode(
         "endpoint_depths_m": {
             "source_tail": float(source_depth),
             "destination_head": float(target_depth),
+        },
+        "endpoint_depth_statistics": {
+            "source_tail": source_depth_audit,
+            "destination_head": target_depth_audit,
         },
         "endpoint_refinement": {
             "source_tail": source_refinement,
@@ -1897,6 +2009,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stall-delta-m", type=float, default=DEFAULT_STALL_DELTA_M)
     parser.add_argument("--recovery-attempts", type=int, default=DEFAULT_RECOVERY_ATTEMPTS)
     parser.add_argument("--recovery-steps", type=int, default=DEFAULT_RECOVERY_STEPS)
+    parser.add_argument(
+        "--controller-variant",
+        choices=("default", CANDIDATE_CONTROLLER_VARIANT_NAME),
+        default="default",
+    )
+    parser.add_argument(
+        "--endpoint-depth-statistic",
+        choices=ENDPOINT_DEPTH_STATISTICS,
+        default=None,
+    )
+    parser.add_argument("--endpoint-depth-quantile", type=float, default=None)
+    parser.add_argument("--approach-tolerance-m", type=float, default=None)
     parser.add_argument("--suite-mode", choices=SUITE_MODES, default=DEFAULT_SUITE_MODE)
     parser.add_argument("--stop-after-phase", choices=PHASES, default="retreat")
     parser.add_argument("--source-grasp-offset", type=float, nargs=3, default=DEFAULT_SOURCE_GRASP_OFFSET_M, metavar=("DX", "DY", "DZ"))
@@ -1914,6 +2038,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    candidate_variant = args.controller_variant == CANDIDATE_CONTROLLER_VARIANT_NAME
+    variant_name = CANDIDATE_CONTROLLER_VARIANT_NAME if candidate_variant else DEFAULT_PROFILE_NAME
+    endpoint_depth_statistic = args.endpoint_depth_statistic or (
+        CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
+    )
+    endpoint_depth_quantile = args.endpoint_depth_quantile
+    if endpoint_depth_quantile is None:
+        endpoint_depth_quantile = (
+            CANDIDATE_ENDPOINT_DEPTH_QUANTILE if candidate_variant else DEFAULT_ENDPOINT_DEPTH_QUANTILE
+        )
+    approach_tolerance_m = args.approach_tolerance_m
+    if approach_tolerance_m is None and candidate_variant:
+        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode
     )
@@ -1957,6 +2094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             recovery_attempts=args.recovery_attempts,
             recovery_steps=args.recovery_steps,
             controller_variant=ControllerVariantConfig(
+                name=variant_name,
                 suite_mode=args.suite_mode,
                 phase_timeout_steps=args.phase_timeout_steps,
                 gripper_dwell_steps=args.gripper_dwell_steps,
@@ -1964,6 +2102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stall_delta_m=args.stall_delta_m,
                 recovery_attempts=args.recovery_attempts,
                 recovery_steps=args.recovery_steps,
+                endpoint_depth_statistic=endpoint_depth_statistic,
+                endpoint_depth_quantile=endpoint_depth_quantile,
+                approach_tolerance_m=approach_tolerance_m,
             ),
             stop_after_phase=args.stop_after_phase,
             source_grasp_offset=args.source_grasp_offset,
