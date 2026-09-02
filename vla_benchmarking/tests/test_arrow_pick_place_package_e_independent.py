@@ -226,3 +226,29 @@ def test_dual_wrapper_runs_vanilla_then_randomized_sequentially_and_combines_res
     # two runs and the second starts only after the first returns.
     assert 'run_suite vanilla "$VANILLA_ROOT" 0 &' not in text
     assert 'run_suite sealed_randomized "$RANDOMIZED_ROOT" 1 &' not in text
+
+
+@pytest.mark.parametrize(
+    "wrapper_name",
+    (
+        "run_arrow_pick_place_matrix.sbatch",
+        "run_arrow_pick_place_dual_matrix.sbatch",
+    ),
+)
+def test_launcher_job_context_has_no_blank_duplicate_controller_config_fields(wrapper_name):
+    """Resolved config fields must not be shadowed by an earlier blank write."""
+    wrapper = Path("vla_benchmarking/legion") / wrapper_name
+    text = wrapper.read_text(encoding="utf-8")
+    context_start = text.index('cat > "$RUN_ROOT/job_context.env" <<EOF')
+    context_end = text.index("\nEOF", context_start)
+    initial_context = text[context_start:context_end]
+    # The semantic fields are appended only after config validation.  A blank
+    # assignment in the initial heredoc would make naive env-file readers see
+    # the wrong value.
+    assert "controller_config_hash=" not in initial_context
+    assert "controller_config_canonical_path=" not in initial_context
+    append_start = text.index("printf 'controller_config_hash=%s\\n'", context_end)
+    append_end = text.index('} >> "$RUN_ROOT/job_context.env"', append_start)
+    appended = text[append_start:append_end]
+    assert appended.count("controller_config_hash=") == 1
+    assert appended.count("controller_config_canonical_path=") == 1
