@@ -102,6 +102,9 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
         "Python 3.11",
         "numpy==1.26.4",
         "numpy_version",
+        "setuptools==${SETUPTOOLS_VERSION}",
+        "setuptools_version",
+        "pkg_resources",
         "build_toolchain",
         "existing runtime lock build_toolchain differs",
         "existing runtime lock {key} differs",
@@ -130,6 +133,8 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
     assert '(cd -- "$SUBMODULE" && "$PYTHON" setup.py install)' not in text
     assert "CUDA_HOME with a complete CUDA toolkit and pinned host compilers is required" in text
     assert text.index('torch==2.2.0 torchvision==0.17.0') < text.index('"dwconv @ ${DWCONV_URL}@${DWCONV_PIN}"') < text.index('torch-scatter')
+    assert 'readonly SETUPTOOLS_VERSION="80.9.0"' in text
+    assert 'importlib.metadata.version("setuptools") != data.get("setuptools_version")' in text
     assert "checkpoint URL is provenance only" in text
     assert "--install" in text and "--smoke" in text and "--verify-only" in text
     assert text.index("if [[ -f \"$LOCK\" ]]; then") < text.index(
@@ -213,6 +218,8 @@ def test_runtime_lock_rejects_stale_or_different_interpreter_identity():
     assert "pip_freeze differs" in launcher_text
     assert "Torch/CUDA identity differs" in launcher_text
     assert "NumPy identity differs" in launcher_text
+    assert "setuptools/pkg_resources import failed" in launcher_text
+    assert "setuptools identity differs" in launcher_text
     assert "torchvision identity differs" in launcher_text
     assert '"python_executable_sha256": python_sha' in launcher_text
 

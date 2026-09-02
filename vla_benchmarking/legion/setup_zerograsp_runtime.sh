@@ -17,6 +17,9 @@ readonly OCNN_PIN="779d9a110c708934b29bb4f21e8e776565fe30b6"
 readonly DWCONV_URL="git+https://github.com/octree-nn/dwconv.git"
 readonly DWCONV_PIN="ae53057eaf36dab01aa2727fcc93a749fd995af5"
 readonly GRASPNETAPI_PIN="eb57dd2092d8dbe05312a29c3d0c22f3226efbfc"
+# ZeroGrasp's released dependency stack still imports pkg_resources. Setuptools
+# 82 removed that module, so keep the last compatible release explicit.
+readonly SETUPTOOLS_VERSION="80.9.0"
 
 die() { printf 'ZeroGrasp runtime setup: %s\n' "$*" >&2; exit 2; }
 usage() {
@@ -208,6 +211,13 @@ except Exception as exc:
     raise SystemExit(f"existing runtime lock NumPy import failed: {exc}")
 if numpy.__version__ != data.get("numpy_version"):
     raise SystemExit("existing runtime lock NumPy identity differs")
+try:
+    import importlib.metadata
+    import pkg_resources  # noqa: F401 - required by the released model stack
+except Exception as exc:
+    raise SystemExit(f"existing runtime lock setuptools/pkg_resources import failed: {exc}")
+if importlib.metadata.version("setuptools") != data.get("setuptools_version"):
+    raise SystemExit("existing runtime lock setuptools identity differs")
 PY
   # A lock is immutable provenance: an existing environment is verification
   # only, never a reason to reinstall packages or rewrite the lock.
@@ -229,10 +239,10 @@ if ((INSTALL)); then
   # visible. Omit both and install their reviewed immutable refs explicitly
   # after Torch is present.
   awk '!/^ocnn[[:space:]]*@/ && !/^dwconv[[:space:]]*@/' "$ROOT/requirements.txt" > "$REQ_TMP"
-  printf 'numpy==1.26.4\n' > "$CONSTRAINT_TMP"
+  printf 'numpy==1.26.4\nsetuptools==%s\n' "$SETUPTOOLS_VERSION" > "$CONSTRAINT_TMP"
   export PIP_CONSTRAINT="$CONSTRAINT_TMP"
   export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.0+PTX}"
-  "$PYTHON" -m pip install --upgrade pip setuptools wheel ninja || die 'build tools install failed'
+  "$PYTHON" -m pip install --upgrade pip "setuptools==${SETUPTOOLS_VERSION}" wheel ninja || die 'build tools install failed'
   "$PYTHON" -m pip install --force-reinstall --no-deps numpy==1.26.4 || die 'NumPy install failed'
   "$PYTHON" -m pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121 || die 'Torch install failed'
   "$PYTHON" -m pip install --no-build-isolation --no-deps "dwconv @ ${DWCONV_URL}@${DWCONV_PIN}" || die 'dwconv install failed'
@@ -257,6 +267,9 @@ fi
 
 NUMPY_VERSION="$($PYTHON -c 'import numpy; print(numpy.__version__)')" || die 'cannot query NumPy version'
 [[ "$NUMPY_VERSION" == "1.26.4" ]] || die "official runtime requires NumPy 1.26.4 (found $NUMPY_VERSION)"
+SETUPTOOLS_VERSION_ACTUAL="$($PYTHON -c 'import importlib.metadata; print(importlib.metadata.version("setuptools"))')" || die 'cannot query setuptools version'
+[[ "$SETUPTOOLS_VERSION_ACTUAL" == "$SETUPTOOLS_VERSION" ]] || die "official runtime requires setuptools $SETUPTOOLS_VERSION (found $SETUPTOOLS_VERSION_ACTUAL)"
+"$PYTHON" -c 'import pkg_resources' || die 'released ZeroGrasp stack requires pkg_resources'
 
 if ((SMOKE)); then
   "$PYTHON" - "$ROOT" "$CHECKPOINT" "$CONFIG" <<'PY'
@@ -265,6 +278,7 @@ root, checkpoint, config = map(pathlib.Path, sys.argv[1:])
 sys.path.insert(0, str(root))
 import torch
 import numpy
+import pkg_resources  # noqa: F401 - released ZeroGrasp dependency contract
 assert torch.__version__.split("+")[0] == "2.2.0", torch.__version__
 assert torch.version.cuda == "12.1", torch.version.cuda
 assert numpy.__version__ == "1.26.4", numpy.__version__
@@ -304,6 +318,7 @@ data = {
     "python_executable_sha256": python_sha,
     "python_version": python_version,
     "numpy_version": "1.26.4",
+    "setuptools_version": "80.9.0",
     "build_toolchain": {
         "cuda_module": cuda_module,
         "host_compiler_module": host_module,
@@ -340,6 +355,7 @@ printf 'zero_grasp_checkpoint_sha256=%s\n' "$CHECKPOINT_SHA"
 printf 'zero_grasp_config=%s\n' "$CONFIG"
 printf 'zero_grasp_config_sha256=%s\n' "$CONFIG_SHA"
 printf 'zero_grasp_numpy_version=%s\n' "$NUMPY_VERSION"
+printf 'zero_grasp_setuptools_version=%s\n' "$SETUPTOOLS_VERSION_ACTUAL"
 printf 'zero_grasp_build_cuda_home=%s\n' "$CUDA_HOME_CANONICAL"
 printf 'zero_grasp_build_nvcc_release=%s\n' "$NVCC_VERSION"
 printf 'zero_grasp_build_cc=%s\n' "$CC_CANONICAL"

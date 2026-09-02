@@ -245,6 +245,8 @@ torchvision 0.17.0, PyG wheels, xformers 0.0.24), pinned
 `dwconv`/`graspnetAPI` refs, O-CNN `v2.2.6`, and the octree submodule. O-CNN is
 pinned before its `v2.3` Triton-kernel transition because that newer line is
 incompatible with ZeroGrasp's Torch 2.2.0 / Triton 2.2.0 runtime. The upstream
+stack also still imports `pkg_resources`, so the environment pins setuptools
+80.9.0 instead of accepting setuptools 82+, which removed that module. The upstream
 requirements leave `ocnn` floating, so the setup fails closed unless the
 script's reviewed immutable ref is used. The upstream `dwconv` VCS requirement
 is likewise filtered and installed at its pinned ref after Torch with build

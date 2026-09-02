@@ -380,6 +380,13 @@ except Exception as exc:
 if numpy.__version__ != data.get("numpy_version"):
     raise SystemExit("ZeroGrasp runtime lock NumPy identity differs from selected interpreter")
 try:
+    from importlib.metadata import version as package_version
+    import pkg_resources  # noqa: F401 - required by released ZeroGrasp stack
+except Exception as exc:
+    raise SystemExit(f"selected ZeroGrasp interpreter setuptools/pkg_resources import failed: {exc}")
+if package_version("setuptools") != data.get("setuptools_version"):
+    raise SystemExit("ZeroGrasp runtime lock setuptools identity differs from selected interpreter")
+try:
     import torch
 except Exception as exc:
     raise SystemExit(f"selected ZeroGrasp interpreter Torch import failed: {exc}")
@@ -389,7 +396,6 @@ actual_cuda = torch.version.cuda
 if actual_torch != torch_info.get("version") or actual_cuda != torch_info.get("cuda"):
     raise SystemExit("ZeroGrasp runtime lock Torch/CUDA identity differs from selected interpreter")
 try:
-    from importlib.metadata import version as package_version
     actual_torchvision = package_version("torchvision").split("+")[0]
 except Exception as exc:
     raise SystemExit(f"selected ZeroGrasp interpreter torchvision lookup failed: {exc}")
