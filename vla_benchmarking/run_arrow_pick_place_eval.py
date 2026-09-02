@@ -45,6 +45,7 @@ try:
         deproject_endpoint,
         refine_rgbd_endpoint,
         normalized_osc_action,
+        arrow_world_xy_basis,
     )
 except (ImportError, ValueError):  # pragma: no cover - direct script fallback
     try:
@@ -55,10 +56,21 @@ except (ImportError, ValueError):  # pragma: no cover - direct script fallback
             deproject_endpoint,
             refine_rgbd_endpoint,
             normalized_osc_action,
+            arrow_world_xy_basis,
         )
     except ImportError:  # pragma: no cover - a clear error is raised on use
         build_bowl_waypoints = decode_arrow = decode_arrow_diagnostics = None
         deproject_endpoint = refine_rgbd_endpoint = normalized_osc_action = None
+        arrow_world_xy_basis = None
+
+try:
+    from .controller_configs import (
+        ControllerConfigError,
+        controller_config_hash,
+        load_controller_config,
+    )
+except (ImportError, ValueError):  # pragma: no cover - direct script fallback
+    from controller_configs import ControllerConfigError, controller_config_hash, load_controller_config
 
 
 CAMERA_NAME = "agentview"
@@ -174,6 +186,173 @@ MAX_MASK_FRACTION_FOR_MOTION = 0.50
 MAX_OSC_POSITION_SCALE_M = 0.10
 
 
+def _finite_number(value: Any, name: str, *, minimum: float | None = None) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+    if not np.isfinite(number) or (minimum is not None and number < minimum):
+        suffix = f" >= {minimum}" if minimum is not None else " finite"
+        raise ValueError(f"{name} must be{suffix}")
+    return number
+
+
+def _strict_bool(value: Any, name: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"{name} must be a boolean")
+    return value
+
+
+def _strict_int(value: Any, name: str) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{name} must be an integer")
+    return value
+
+
+@dataclass(frozen=True)
+class GraspSearchPolicy:
+    """Bounded, arrow-derived source search policy.
+
+    Offsets are ``(forward, lateral, vertical)`` metres in the world frame.
+    They are interpreted against the visual arrow basis by the runner; no
+    object or simulator information is accepted here.
+    """
+
+    enabled: bool = False
+    empty_gripper_threshold: float = 0.0015
+    offsets_m: Sequence[Sequence[float]] = ()
+    max_attempts: int = 0
+    phase_timeout_steps: int = 80
+    max_actions: int = 900
+    trigger_on: Sequence[str] = (
+        "empty_gripper_likely", "close_stall", "close_timeout", "lift_stall", "lift_timeout"
+    )
+
+    def __post_init__(self) -> None:
+        enabled = _strict_bool(self.enabled, "grasp_search.enabled")
+        threshold = _finite_number(self.empty_gripper_threshold, "grasp_search.empty_gripper_threshold")
+        if threshold <= 0.0 or threshold > 0.01:
+            raise ValueError("grasp_search.empty_gripper_threshold must be in (0, 0.01]")
+        max_attempts = _strict_int(self.max_attempts, "grasp_search.max_attempts")
+        phase_steps = _strict_int(self.phase_timeout_steps, "grasp_search.phase_timeout_steps")
+        max_actions = _strict_int(self.max_actions, "grasp_search.max_actions")
+        if max_attempts < 0 or phase_steps <= 0 or max_actions < 0:
+            raise ValueError("grasp_search attempt/step limits are invalid")
+        offsets = tuple(tuple(_finite_number(v, "grasp_search.offset") for v in row) for row in self.offsets_m)
+        if any(len(row) != 3 or any(abs(v) > 0.05 for v in row) for row in offsets):
+            raise ValueError("grasp_search.offsets_m must contain 3-vectors within +/-0.05 m")
+        triggers = tuple(str(item) for item in self.trigger_on)
+        allowed = {"empty_gripper_likely", "close_stall", "close_timeout", "lift_stall", "lift_timeout"}
+        if not set(triggers) <= allowed:
+            raise ValueError(f"grasp_search.trigger_on must contain only {sorted(allowed)}")
+        object.__setattr__(self, "empty_gripper_threshold", threshold)
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "offsets_m", offsets)
+        object.__setattr__(self, "max_attempts", max_attempts)
+        object.__setattr__(self, "phase_timeout_steps", phase_steps)
+        object.__setattr__(self, "max_actions", max_actions)
+        object.__setattr__(self, "trigger_on", triggers)
+
+    @classmethod
+    def from_value(cls, value: Mapping[str, Any] | "GraspSearchPolicy" | None) -> "GraspSearchPolicy | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise ValueError("grasp_search must be an object")
+        allowed = {field.name for field in dataclass_fields(cls)}
+        unknown = set(value) - allowed
+        if unknown:
+            raise ValueError(f"unknown grasp_search keys: {sorted(unknown)}")
+        return cls(**dict(value))
+
+    def canonical(self) -> dict[str, Any]:
+        result = {
+            "enabled": bool(self.enabled),
+            "empty_gripper_threshold": float(self.empty_gripper_threshold),
+            "offsets_m": [[float(v) for v in row] for row in self.offsets_m],
+            "max_attempts": int(self.max_attempts),
+            "phase_timeout_steps": int(self.phase_timeout_steps),
+            "max_actions": int(self.max_actions),
+            "trigger_on": list(self.trigger_on),
+        }
+        return result
+
+
+@dataclass(frozen=True)
+class MicroCorrectionPolicy:
+    """Finite residual plateau correction policy for configured phases."""
+
+    enabled: bool = False
+    phases: Sequence[str] = ("descend", "lift", "preplace", "descend_place")
+    plateau_window_steps: int = 10
+    plateau_delta_m: float = 0.0001
+    residual_max_m: float = 0.005
+    correction_gain: float = 1.0
+    burst_steps: int = 8
+    max_rounds: int = 2
+    max_actions: int = 16
+
+    def __post_init__(self) -> None:
+        enabled = _strict_bool(self.enabled, "micro_correction.enabled")
+        phases = tuple(str(item) for item in self.phases)
+        if not set(phases) <= set(PHASES) - {"close", "open"}:
+            raise ValueError("micro_correction.phases must name positional phases")
+        window = _strict_int(self.plateau_window_steps, "micro_correction.plateau_window_steps")
+        burst = _strict_int(self.burst_steps, "micro_correction.burst_steps")
+        rounds = _strict_int(self.max_rounds, "micro_correction.max_rounds")
+        actions = _strict_int(self.max_actions, "micro_correction.max_actions")
+        if window <= 0 or burst <= 0 or rounds < 0 or actions < 0:
+            raise ValueError("micro_correction step limits are invalid")
+        delta = _finite_number(self.plateau_delta_m, "micro_correction.plateau_delta_m", minimum=0.0)
+        residual = _finite_number(self.residual_max_m, "micro_correction.residual_max_m")
+        gain = _finite_number(self.correction_gain, "micro_correction.correction_gain")
+        if residual <= 0.0 or gain <= 0.0:
+            raise ValueError("micro_correction residual_max_m and correction_gain must be positive")
+        object.__setattr__(self, "phases", phases)
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "plateau_window_steps", window)
+        object.__setattr__(self, "plateau_delta_m", delta)
+        object.__setattr__(self, "residual_max_m", residual)
+        object.__setattr__(self, "correction_gain", gain)
+        object.__setattr__(self, "burst_steps", burst)
+        object.__setattr__(self, "max_rounds", rounds)
+        object.__setattr__(self, "max_actions", actions)
+
+    @classmethod
+    def from_value(cls, value: Mapping[str, Any] | "MicroCorrectionPolicy" | None) -> "MicroCorrectionPolicy | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise ValueError("micro_correction must be an object")
+        allowed = {field.name for field in dataclass_fields(cls)}
+        unknown = set(value) - allowed
+        if unknown:
+            raise ValueError(f"unknown micro_correction keys: {sorted(unknown)}")
+        return cls(**dict(value))
+
+    def canonical(self) -> dict[str, Any]:
+        result = {
+            "enabled": bool(self.enabled), "phases": list(self.phases),
+            "plateau_window_steps": int(self.plateau_window_steps),
+            "plateau_delta_m": float(self.plateau_delta_m),
+            "residual_max_m": float(self.residual_max_m),
+            "correction_gain": float(self.correction_gain),
+            "burst_steps": int(self.burst_steps), "max_rounds": int(self.max_rounds),
+            "max_actions": int(self.max_actions),
+        }
+        return result
+
+
+def dataclass_fields(cls: type[Any]) -> tuple[Any, ...]:
+    """Local wrapper keeps policy parsing import-light and testable."""
+    from dataclasses import fields
+    return fields(cls)
+
+
 @dataclass(frozen=True)
 class ControllerVariantConfig:
     """Canonical, hashable controller/runtime configuration provenance.
@@ -203,8 +382,15 @@ class ControllerVariantConfig:
     grasp_retry_offsets_m: Sequence[float] | None = None
     max_mask_fraction_for_motion: float | None = None
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
+    grasp_search: GraspSearchPolicy | Mapping[str, Any] | None = None
+    micro_correction: MicroCorrectionPolicy | Mapping[str, Any] | None = None
+    config_source: str | None = None
+    external_config_hash: str | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "grasp_search", GraspSearchPolicy.from_value(self.grasp_search))
+        object.__setattr__(self, "micro_correction", MicroCorrectionPolicy.from_value(self.micro_correction))
+        external = self.config_source is not None or self.grasp_search is not None or self.micro_correction is not None
         if self.suite_mode not in SUITE_MODES:
             raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {self.suite_mode!r}")
         if self.phase_timeout_steps <= 0 or self.gripper_dwell_steps <= 0:
@@ -225,7 +411,7 @@ class ControllerVariantConfig:
             raise ValueError(
                 f"approach_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
             )
-        if self.approach_tolerance_m is not None and self.name != CANDIDATE_CONTROLLER_VARIANT_NAME:
+        if self.approach_tolerance_m is not None and not external and self.name != CANDIDATE_CONTROLLER_VARIANT_NAME:
             if self.name not in {
                 CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
@@ -244,7 +430,7 @@ class ControllerVariantConfig:
             raise ValueError(
                 f"waypoint_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
             )
-        if self.waypoint_tolerance_m is not None and self.name != CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
+        if self.waypoint_tolerance_m is not None and not external and self.name != CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
             raise ValueError("waypoint tolerance is reserved for the v3 candidate controller variant")
         if self.osc_position_scale_m is not None and (
             not np.isfinite(float(self.osc_position_scale_m))
@@ -254,13 +440,13 @@ class ControllerVariantConfig:
             raise ValueError(
                 f"osc_position_scale_m must be in (0, {MAX_OSC_POSITION_SCALE_M}]"
             )
-        if self.osc_position_scale_m is not None and self.name != CANDIDATE_V4_CONTROLLER_VARIANT_NAME:
+        if self.osc_position_scale_m is not None and not external and self.name != CANDIDATE_V4_CONTROLLER_VARIANT_NAME:
             raise ValueError("OSC position scale is reserved for the v4 candidate controller variant")
         if self.arrow_anchor_policy not in ARROW_ANCHOR_POLICIES:
             raise ValueError(
                 f"arrow_anchor_policy must be one of {ARROW_ANCHOR_POLICIES}"
             )
-        if self.arrow_anchor_policy != "bbox_center" and self.name != CANDIDATE_V5_CONTROLLER_VARIANT_NAME:
+        if self.arrow_anchor_policy != "bbox_center" and not external and self.name != CANDIDATE_V5_CONTROLLER_VARIANT_NAME:
             raise ValueError("non-center arrow anchors are reserved for the v5 candidate controller variant")
         if self.approach_lateral_offset_m is not None and (
             not np.isfinite(float(self.approach_lateral_offset_m))
@@ -268,7 +454,7 @@ class ControllerVariantConfig:
             or float(self.approach_lateral_offset_m) > 0.10
         ):
             raise ValueError("approach_lateral_offset_m must be in (0, 0.10]")
-        if self.approach_lateral_offset_m is not None and self.name != CANDIDATE_V6_CONTROLLER_VARIANT_NAME:
+        if self.approach_lateral_offset_m is not None and not external and self.name != CANDIDATE_V6_CONTROLLER_VARIANT_NAME:
             raise ValueError("directional approach offset is reserved for the v6 candidate controller variant")
         if self.grasp_contact_threshold is not None and (
             not np.isfinite(float(self.grasp_contact_threshold))
@@ -276,7 +462,7 @@ class ControllerVariantConfig:
             or float(self.grasp_contact_threshold) > 0.01
         ):
             raise ValueError("grasp_contact_threshold must be in (0, 0.01]")
-        if self.grasp_contact_threshold is not None and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
+        if self.grasp_contact_threshold is not None and not external and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
             raise ValueError("grasp contact detection is reserved for the v8 candidate controller variant")
         if self.grasp_retry_offsets_m is not None:
             offsets = tuple(float(value) for value in self.grasp_retry_offsets_m)
@@ -284,7 +470,7 @@ class ControllerVariantConfig:
                 not np.isfinite(value) or abs(value) > 0.03 for value in offsets
             ):
                 raise ValueError("grasp_retry_offsets_m must contain at most three offsets within +/-0.03 m")
-        if self.grasp_retry_offsets_m is not None and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
+        if self.grasp_retry_offsets_m is not None and not external and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
             raise ValueError("grasp retries are reserved for the v8 candidate controller variant")
         if self.max_mask_fraction_for_motion is not None and (
             not np.isfinite(float(self.max_mask_fraction_for_motion))
@@ -302,7 +488,7 @@ class ControllerVariantConfig:
                 raise ValueError("workspace_bounds_m z max cannot exceed 1.8 m")
 
     def canonical(self) -> dict[str, Any]:
-        return {
+        result = {
             "name": self.name,
             "controller": self.controller,
             "suite_mode": self.suite_mode,
@@ -350,6 +536,13 @@ class ControllerVariantConfig:
                 }
             ),
         }
+        # Keep the historical v1--v8 canonical payload byte-for-byte stable;
+        # nested policies are semantic additions only for external v9 configs.
+        if self.grasp_search is not None:
+            result["grasp_search"] = self.grasp_search.canonical()
+        if self.micro_correction is not None:
+            result["micro_correction"] = self.micro_correction.canonical()
+        return result
 
     @property
     def config_hash(self) -> str:
@@ -365,7 +558,44 @@ class ControllerVariantConfig:
         return json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"))
 
     def provenance(self) -> dict[str, Any]:
-        return {"canonical": self.canonical(), "config_hash": self.config_hash}
+        result = {"canonical": self.canonical(), "config_hash": self.config_hash}
+        if self.config_source is not None:
+            result["config_source"] = self.config_source
+        if self.external_config_hash is not None:
+            result["external_config_hash"] = self.external_config_hash
+        return result
+
+
+def controller_variant_from_config(
+    config: Mapping[str, Any], *, suite_mode: str = DEFAULT_SUITE_MODE
+) -> ControllerVariantConfig:
+    """Build a validated runtime variant from a fully expanded JSON mapping."""
+    if not isinstance(config, Mapping):
+        raise ControllerConfigError("expanded controller config must be an object")
+    data = dict(config)
+    source = data.pop("config_source", None)
+    external_hash = data.pop("config_hash", None)
+    declared_suite = data.pop("suite_mode", None)
+    if declared_suite is not None and str(declared_suite) != suite_mode:
+        raise ControllerConfigError(
+            f"controller config suite_mode {declared_suite!r} does not match {suite_mode!r}"
+        )
+    allowed = {
+        "name", "controller", "phase_timeout_steps", "gripper_dwell_steps",
+        "stall_window_steps", "stall_delta_m", "recovery_attempts", "recovery_steps",
+        "endpoint_depth_statistic", "endpoint_depth_quantile", "approach_tolerance_m",
+        "waypoint_tolerance_m", "osc_position_scale_m", "arrow_anchor_policy",
+        "approach_lateral_offset_m", "grasp_contact_threshold", "grasp_retry_offsets_m",
+        "max_mask_fraction_for_motion", "workspace_bounds_m", "grasp_search",
+        "micro_correction",
+    }
+    unknown = set(data) - allowed
+    if unknown:
+        raise ControllerConfigError(f"unknown controller config keys: {sorted(unknown)}")
+    data["suite_mode"] = suite_mode
+    data["config_source"] = source
+    data["external_config_hash"] = external_hash
+    return ControllerVariantConfig(**data)
 
 
 def _resolve_controller_variant(
@@ -386,7 +616,11 @@ def _resolve_controller_variant(
 ) -> ControllerVariantConfig:
     if isinstance(value, ControllerVariantConfig):
         return value
+    if isinstance(value, Mapping):
+        return controller_variant_from_config(value, suite_mode=suite_mode)
     name = str(value) if value is not None else DEFAULT_PROFILE_NAME
+    if name.endswith(".json") or "/" in name or "\\" in name:
+        return controller_variant_from_config(load_controller_config(name), suite_mode=suite_mode)
     if name in {
         CANDIDATE_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
@@ -1245,6 +1479,52 @@ def _gripper_contact_likely(
     return bool(qpos.size and np.isfinite(qpos).all() and np.max(np.abs(qpos)) <= float(threshold))
 
 
+def _empty_gripper_likely(
+    phase_audit: Sequence[Mapping[str, Any]], threshold: float
+) -> bool:
+    """Proprioception-only empty-gripper diagnostic used by v9 policies."""
+    return _gripper_contact_likely(phase_audit, threshold)
+
+
+def _observed_gripper_qpos(
+    phase_audit: Sequence[Mapping[str, Any]],
+) -> list[float] | None:
+    for record in reversed(phase_audit):
+        if record.get("phase") == "close" and "gripper_qpos" in record:
+            values = np.asarray(record["gripper_qpos"], dtype=np.float64).reshape(-1)
+            if values.size and np.isfinite(values).all():
+                return values.tolist()
+    return None
+
+
+class _GraspSearchRequested(RuntimeError):
+    """Internal control-flow marker; no simulator state is attached."""
+
+    def __init__(self, trigger: str):
+        super().__init__(trigger)
+        self.trigger = trigger
+
+
+class ControllerMotionTimeout(TimeoutError):
+    """Timeout/stall raised by this controller, distinct from env failures."""
+
+
+@dataclass
+class _ActionBudget:
+    limit: int
+    used: int = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, int(self.limit) - int(self.used))
+
+    def consume(self) -> bool:
+        if self.remaining <= 0:
+            return False
+        self.used += 1
+        return True
+
+
 def _position(waypoint: Any) -> np.ndarray:
     if isinstance(waypoint, Mapping):
         for key in ("position", "pos", "eef_pos"):
@@ -1340,6 +1620,11 @@ def _run_motion(
     stall_delta_m: float = DEFAULT_STALL_DELTA_M,
     phase_policies: Mapping[str, Mapping[str, Any]] | None = None,
     osc_position_scale_m: float | None = None,
+    micro_correction: MicroCorrectionPolicy | None = None,
+    post_phase_callback: Callable[[str, Mapping[str, Any], Mapping[str, np.ndarray]], None] | None = None,
+    start_phase: str | None = None,
+    action_budget: int | None = None,
+    micro_action_budget: _ActionBudget | None = None,
 ) -> list[dict[str, Any]]:
     if phase_timeout_steps <= 0:
         raise ValueError("phase_timeout_steps must be positive")
@@ -1347,8 +1632,12 @@ def _run_motion(
         raise ValueError("gripper_dwell_steps must be positive")
     if stop_after_phase not in PHASES:
         raise ValueError(f"stop_after_phase must be one of {PHASES}, got {stop_after_phase!r}")
+    if start_phase is not None and start_phase not in PHASES:
+        raise ValueError(f"start_phase must be one of {PHASES}, got {start_phase!r}")
     if stall_window_steps < 0 or stall_delta_m < 0 or not np.isfinite(stall_delta_m):
         raise ValueError("stall_window_steps and stall_delta_m must be finite and non-negative")
+    if action_budget is not None and int(action_budget) <= 0:
+        raise ValueError("action_budget must be positive when supplied")
     policies = phase_policies or PHASE_POLICIES
     # Preserve a failure-safe motion marker for batch diagnostics.  A phase can
     # fail during its first simulator step, before an episode audit is written;
@@ -1361,10 +1650,24 @@ def _run_motion(
     if held_rotation is None:
         raise ValueError("initial observation lacks EEF orientation proprioception")
     phase_audit: list[dict[str, Any]] = []
+    sent_actions = 0
     # Keep a live reference so a timeout or other controller exception can be
     # serialized by the matrix runner even though no final audit is produced.
     setattr(env, "_arrow_phase_audit", phase_audit)
+    correction_policy = micro_correction
+    if correction_policy is not None and correction_policy.enabled and micro_action_budget is None:
+        micro_action_budget = _ActionBudget(correction_policy.max_actions)
+    live_corrections = getattr(env, "_arrow_micro_correction_audit", None)
+    if not isinstance(live_corrections, list):
+        live_corrections = []
+        setattr(env, "_arrow_micro_correction_audit", live_corrections)
+    started = start_phase is None
     for phase in PHASES:
+        if not started:
+            if phase == start_phase:
+                started = True
+            else:
+                continue
         waypoint = _phase_waypoint(waypoints, phase)
         gripper = 1.0 if phase == "close" else -1.0 if phase == "open" else 0.0
         is_gripper_phase = phase in {"close", "open"}
@@ -1382,10 +1685,16 @@ def _run_motion(
             "policy": dict(policies.get(phase, {})),
         }
         error_history: list[float] = []
+        correction_target = _position(waypoint)[:3]
+        correction_remaining = 0
+        correction_rounds = 0
+        correction_actions = 0
+        phase_correction_events: list[dict[str, Any]] = []
         for step in range(required_steps):
+            correction_was_active = correction_remaining > 0
             action = normalized_action_for_waypoint(
                 proprio,
-                waypoint,
+                {"position": correction_target},
                 gripper=gripper,
                 held_rotation=held_rotation,
                 osc_position_scale_m=osc_position_scale_m,
@@ -1394,6 +1703,12 @@ def _run_motion(
             record["steps"] = step + 1
             if dry_run:
                 break
+            if action_budget is not None and sent_actions >= int(action_budget):
+                record["status"] = "timeout"
+                record["action_budget"] = int(action_budget)
+                phase_audit.append(record)
+                setattr(env, "_arrow_phase_audit", phase_audit)
+                raise ControllerMotionTimeout(f"phase {phase} exhausted action budget {action_budget}")
             if not motion_notified:
                 # Let a batch coordinator durably record the transition to
                 # physical motion before the first simulator action is sent.
@@ -1403,6 +1718,7 @@ def _run_motion(
             setattr(env, "_arrow_motion_began", True)
             try:
                 observation, done, _info = _step_once(env, action)
+                sent_actions += 1
             except TimeoutError as exc:
                 # Preserve a partial gripper record so run_episode can offer a
                 # bounded, explicitly-approved RGB-D recovery.  This is the
@@ -1418,6 +1734,13 @@ def _run_motion(
             proprio = _proprioception(observation)
             if observation is None or "eef_pos" not in proprio:
                 raise RuntimeError(f"phase {phase} lost EEF proprioception; failing closed")
+            # Charge a correction action as soon as its simulator step
+            # succeeds.  This must happen before the nominal tolerance check:
+            # the final correction step may itself reach the waypoint.
+            if correction_was_active:
+                correction_actions += 1
+                if micro_action_budget is not None:
+                    micro_action_budget.consume()
             # LIBERO's ``done`` includes evaluator success.  It is intentionally
             # ignored while executing the bounded state machine: reading it or
             # changing phase based on it would make evaluator state influence
@@ -1429,10 +1752,84 @@ def _run_motion(
             elif np.linalg.norm(_position(waypoint) - proprio["eef_pos"][:3]) < phase_tolerance:
                 record["status"] = "reached"
                 break
-            elif stall_window_steps and "eef_pos" in proprio:
+            elif "eef_pos" in proprio:
                 error = float(np.linalg.norm(_position(waypoint)[:3] - proprio["eef_pos"][:3]))
                 error_history.append(error)
+                # A correction burst gets a bounded chance to move beyond a
+                # nominal target before the historical stall gate fires.
+                # The policy is entirely numeric and phase-configured.
                 if (
+                    correction_policy is not None
+                    and correction_policy.enabled
+                    and phase in correction_policy.phases
+                    and correction_remaining > 0
+                ):
+                    correction_remaining -= 1
+                    if correction_remaining == 0:
+                        correction_target = _position(waypoint)[:3]
+                        if phase_correction_events:
+                            event = phase_correction_events[-1]
+                            final_residual = np.asarray(_position(waypoint)[:3], dtype=np.float64) - np.asarray(proprio["eef_pos"][:3], dtype=np.float64)
+                            event["post_residual_vector_m"] = final_residual.tolist()
+                            event["post_residual_norm_m"] = float(np.linalg.norm(final_residual))
+                            event["status"] = "completed"
+                if (
+                    correction_policy is not None
+                    and correction_policy.enabled
+                    and phase in correction_policy.phases
+                    and correction_rounds < correction_policy.max_rounds
+                    and micro_action_budget is not None
+                    and micro_action_budget.remaining > 0
+                    and len(error_history) >= correction_policy.plateau_window_steps
+                    and max(error_history[-correction_policy.plateau_window_steps:])
+                    - min(error_history[-correction_policy.plateau_window_steps:])
+                    <= correction_policy.plateau_delta_m
+                    and error > phase_tolerance
+                    and correction_remaining == 0
+                ):
+                    current = np.asarray(proprio["eef_pos"][:3], dtype=np.float64)
+                    nominal = np.asarray(_position(waypoint)[:3], dtype=np.float64)
+                    residual = nominal - current
+                    residual_norm = float(np.linalg.norm(residual))
+                    if np.isfinite(residual_norm) and residual_norm > 0.0:
+                        distance = min(
+                            float(correction_policy.residual_max_m),
+                            residual_norm * float(correction_policy.correction_gain),
+                        )
+                        correction_target = nominal + residual / residual_norm * distance
+                        correction_remaining = min(
+                            int(correction_policy.burst_steps),
+                            int(micro_action_budget.remaining),
+                        )
+                        if correction_remaining > 0:
+                            correction_rounds += 1
+                            event = {
+                                "phase": phase,
+                                "trigger": "residual_plateau",
+                                "trigger_step": int(step + 1),
+                                "round": int(correction_rounds),
+                                "residual_vector_m": residual.tolist(),
+                                "residual_norm_m": residual_norm,
+                                "correction_target_m": correction_target.tolist(),
+                                "burst_steps": int(correction_remaining),
+                                "status": "triggered",
+                                "post_residual_vector_m": None,
+                                "post_residual_norm_m": None,
+                            }
+                            live_corrections.append(event)
+                            phase_correction_events.append(event)
+                            record.setdefault("micro_corrections", []).append(event)
+                if (
+                    correction_policy is not None
+                    and correction_policy.enabled
+                    and phase in correction_policy.phases
+                    and correction_remaining > 0
+                ):
+                    # A correction target is active for the next bounded burst.
+                    continue
+                if (
+                    stall_window_steps
+                    and
                     len(error_history) >= stall_window_steps
                     and max(error_history[-stall_window_steps:])
                     - min(error_history[-stall_window_steps:]) <= stall_delta_m
@@ -1443,7 +1840,7 @@ def _run_motion(
                     record["position_error_norm_m"] = error
                     phase_audit.append(record)
                     setattr(env, "_arrow_phase_audit", phase_audit)
-                    raise TimeoutError(f"phase {phase} stalled for {stall_window_steps} steps")
+                    raise ControllerMotionTimeout(f"phase {phase} stalled for {stall_window_steps} steps")
         else:
             record["status"] = "timeout"
             if "eef_pos" in proprio:
@@ -1454,8 +1851,8 @@ def _run_motion(
                 )
             phase_audit.append(record)
             if is_gripper_phase:
-                raise TimeoutError(f"phase {phase} failed to complete {gripper_dwell_steps}-step dwell")
-            raise TimeoutError(f"phase {phase} exceeded {phase_timeout_steps} steps")
+                raise ControllerMotionTimeout(f"phase {phase} failed to complete {gripper_dwell_steps}-step dwell")
+            raise ControllerMotionTimeout(f"phase {phase} exceeded {phase_timeout_steps} steps")
         # Record only robot proprioception observed at phase end.  These
         # diagnostics are not fed back into the controller or evaluator.
         if "eef_pos" in proprio:
@@ -1466,6 +1863,12 @@ def _run_motion(
             )
         if "gripper_qpos" in proprio:
             record["gripper_qpos"] = np.asarray(proprio["gripper_qpos"], dtype=np.float64).tolist()
+        for event in phase_correction_events:
+            if event.get("status") == "triggered":
+                final_residual = np.asarray(_position(waypoint)[:3], dtype=np.float64) - np.asarray(proprio.get("eef_pos", _position(waypoint))[:3], dtype=np.float64)
+                event["post_residual_vector_m"] = final_residual.tolist()
+                event["post_residual_norm_m"] = float(np.linalg.norm(final_residual))
+                event["status"] = "phase_end"
         if phase == stop_after_phase:
             record["stop_after_phase"] = True
             if dry_run:
@@ -1485,6 +1888,8 @@ def _run_motion(
                     record["diagnostic_frame"] = (
                         Path(frame_path).expanduser().resolve().as_posix()
                     )
+        if post_phase_callback is not None:
+            post_phase_callback(phase, record, proprio)
         if phase == stop_after_phase:
             break
     return phase_audit
@@ -1961,6 +2366,32 @@ def run_episode(
         return path
 
     recovery_audit: list[dict[str, Any]] = []
+    grasp_search_audit: list[dict[str, Any]] = []
+    micro_correction_audit: list[dict[str, Any]] = []
+    micro_action_budget = (
+        _ActionBudget(variant.micro_correction.max_actions)
+        if variant.micro_correction is not None and variant.micro_correction.enabled
+        else None
+    )
+    setattr(env, "_arrow_grasp_search_audit", grasp_search_audit)
+    setattr(env, "_arrow_micro_correction_audit", micro_correction_audit)
+
+    def _after_motion_phase(
+        phase: str, record: Mapping[str, Any], _proprio: Mapping[str, np.ndarray]
+    ) -> None:
+        # An empty gripper is a proprioceptive signal only.  Raising here
+        # stops immediately after close, before lift/place can proceed.
+        policy = variant.grasp_search
+        if (
+            policy is not None
+            and policy.enabled
+            and stop_after_phase == "retreat"
+            and phase == "close"
+            and "empty_gripper_likely" in policy.trigger_on
+            and _empty_gripper_likely([record], policy.empty_gripper_threshold)
+        ):
+            raise _GraspSearchRequested("empty_gripper_likely")
+
     try:
         phase_audit = _run_motion(
             env,
@@ -1976,10 +2407,206 @@ def run_episode(
             stall_delta_m=variant.stall_delta_m,
             phase_policies=phase_policies,
             osc_position_scale_m=variant.osc_position_scale_m,
+            micro_correction=variant.micro_correction,
+            micro_action_budget=micro_action_budget,
+            post_phase_callback=_after_motion_phase,
         )
-    except TimeoutError as exc:
-        if (
+    except (_GraspSearchRequested, TimeoutError) as exc:
+        phase_audit = list(getattr(env, "_arrow_phase_audit", []) or [])
+        search_policy = variant.grasp_search
+        last_phase = str(phase_audit[-1].get("phase")) if phase_audit else ""
+        last_status = str(phase_audit[-1].get("status")) if phase_audit else ""
+        if isinstance(exc, _GraspSearchRequested):
+            trigger = exc.trigger
+        elif isinstance(exc, ControllerMotionTimeout) and last_phase in {"close", "lift"} and last_status in {"stall", "timeout"}:
+            trigger = f"{last_phase}_{last_status}"
+        else:
+            trigger = None
+        can_search = bool(
             not dry_run
+            and stop_after_phase == "retreat"
+            and search_policy is not None
+            and search_policy.enabled
+            and trigger in search_policy.trigger_on
+            and search_policy.max_attempts > 0
+            and search_policy.offsets_m
+        )
+        if can_search:
+            basis_fn = _require(arrow_world_xy_basis, "arrow_world_xy_basis")
+            forward, lateral = basis_fn(source_visual_point, destination_visual_point)
+            search_actions = 0
+            selected_waypoints = None
+            for attempt_index, offset in enumerate(
+                search_policy.offsets_m[: search_policy.max_attempts], start=1
+            ):
+                if search_actions >= search_policy.max_actions:
+                    break
+                offset = np.asarray(offset, dtype=np.float64)
+                retry_bowl_point = (
+                    np.asarray(bowl_point, dtype=np.float64)
+                    + forward * offset[0]
+                    + lateral * offset[1]
+                    + np.array((0.0, 0.0, offset[2]), dtype=np.float64)
+                )
+                attempt_record: dict[str, Any] = {
+                    "attempt": int(attempt_index),
+                    "trigger": trigger,
+                    "offset_frame": "arrow_world_xy_forward_lateral_vertical",
+                    "offset_m": offset.tolist(),
+                    "target_m": retry_bowl_point.tolist(),
+                    "status": "pending",
+                    "selected": False,
+                    "actions_before": int(search_actions),
+                }
+                base_phase_audit = list(phase_audit)
+                placement_started = False
+                try:
+                    validate_workspace_points(
+                        {"grasp_search_source": retry_bowl_point}, bounds=workspace_bounds
+                    )
+                    retry_waypoints = _require(build_bowl_waypoints, "build_bowl_waypoints")(
+                        retry_bowl_point,
+                        destination_point,
+                        initial_proprio.get("eef_quat"),
+                        {"lift_height_m": float(clearance_m)},
+                    )
+                    # Validate every generated candidate before sending action.
+                    retry_points = {
+                        f"waypoint_{idx}": _position(value)[:3]
+                        for idx, value in enumerate(retry_waypoints)
+                    }
+                    validate_workspace_points(retry_points, bounds=workspace_bounds)
+                    # Explicitly open and retreat from the previous grasp
+                    # before every candidate.  A retry never begins while the
+                    # gripper is still closed at the failed source point.
+                    current_proprio = _proprioception(_raw_observation(env))
+                    current_pos = current_proprio.get("eef_pos")
+                    current_quat = current_proprio.get("eef_quat")
+                    if current_pos is None or current_quat is None:
+                        raise RuntimeError("grasp search requires EEF proprioception for open/retreat")
+                    reset_waypoints = np.tile(np.asarray(current_pos[:3], dtype=np.float64), (6, 1))
+                    reset_waypoints[5] = _position(retry_waypoints[0])[:3]
+                    reset_audit = _run_motion(
+                        env, reset_waypoints, _raw_observation(env),
+                        phase_timeout_steps=search_policy.phase_timeout_steps,
+                        gripper_dwell_steps=gripper_dwell_steps,
+                        stop_after_phase="retreat", start_phase="open", dry_run=False,
+                        phase_frame_callback=None,
+                        motion_started_callback=motion_started_callback,
+                        stall_window_steps=variant.stall_window_steps,
+                        stall_delta_m=variant.stall_delta_m,
+                        phase_policies=phase_policies,
+                        osc_position_scale_m=variant.osc_position_scale_m,
+                        micro_correction=None,
+                        action_budget=search_policy.max_actions - search_actions,
+                    )
+                    search_actions += sum(int(item.get("steps", 0)) for item in reset_audit)
+                    for item in reset_audit:
+                        item["grasp_search_attempt"] = int(attempt_index)
+                    phase_audit.extend(reset_audit)
+                    setattr(env, "_arrow_phase_audit", phase_audit)
+                    retry_audit = _run_motion(
+                        env, retry_waypoints, _raw_observation(env),
+                        phase_timeout_steps=search_policy.phase_timeout_steps,
+                        gripper_dwell_steps=gripper_dwell_steps,
+                        stop_after_phase="lift", dry_run=False,
+                        phase_frame_callback=None,
+                        motion_started_callback=motion_started_callback,
+                        stall_window_steps=variant.stall_window_steps,
+                        stall_delta_m=variant.stall_delta_m,
+                        phase_policies=phase_policies,
+                        osc_position_scale_m=variant.osc_position_scale_m,
+                        micro_correction=variant.micro_correction,
+                        micro_action_budget=micro_action_budget,
+                        action_budget=search_policy.max_actions - search_actions,
+                    )
+                    search_actions += sum(int(item.get("steps", 0)) for item in retry_audit)
+                    for item in retry_audit:
+                        item["grasp_search_attempt"] = int(attempt_index)
+                    phase_audit.extend(retry_audit)
+                    if _empty_gripper_likely(retry_audit, search_policy.empty_gripper_threshold):
+                        attempt_record["status"] = "empty_gripper_likely"
+                        attempt_record["gripper_qpos"] = _observed_gripper_qpos(retry_audit)
+                        attempt_record["actions_after"] = int(search_actions)
+                        attempt_record["phase_statuses"] = [
+                            {"phase": item.get("phase"), "status": item.get("status")}
+                            for item in retry_audit
+                        ]
+                        grasp_search_audit.append(attempt_record)
+                        setattr(env, "_arrow_phase_audit", phase_audit)
+                        continue
+                    selected_waypoints = retry_waypoints
+                    attempt_record["status"] = "selected"
+                    attempt_record["selected"] = True
+                    attempt_record["gripper_qpos"] = _observed_gripper_qpos(retry_audit)
+                    # Continue from preplace only after a proprioception-gated
+                    # grasp has been obtained; placement is never evaluated in
+                    # a failed candidate.
+                    placement_started = True
+                    placement_audit = _run_motion(
+                        env, retry_waypoints, _raw_observation(env),
+                        phase_timeout_steps=search_policy.phase_timeout_steps,
+                        gripper_dwell_steps=gripper_dwell_steps,
+                        stop_after_phase="retreat", start_phase="preplace", dry_run=False,
+                        phase_frame_callback=None,
+                        motion_started_callback=motion_started_callback,
+                        stall_window_steps=variant.stall_window_steps,
+                        stall_delta_m=variant.stall_delta_m,
+                        phase_policies=phase_policies,
+                        osc_position_scale_m=variant.osc_position_scale_m,
+                        micro_correction=variant.micro_correction,
+                        micro_action_budget=micro_action_budget,
+                        action_budget=search_policy.max_actions - search_actions,
+                    )
+                    search_actions += sum(int(item.get("steps", 0)) for item in placement_audit)
+                    attempt_record["actions_after"] = int(search_actions)
+                    for item in placement_audit:
+                        item["grasp_search_attempt"] = int(attempt_index)
+                    phase_audit.extend(placement_audit)
+                    setattr(env, "_arrow_phase_audit", phase_audit)
+                    grasp_search_audit.append(attempt_record)
+                    break
+                except ControllerMotionTimeout as search_exc:
+                    partial = list(getattr(env, "_arrow_phase_audit", []) or [])
+                    search_actions += sum(int(item.get("steps", 0)) for item in partial)
+                    phase_audit = base_phase_audit + partial
+                    setattr(env, "_arrow_phase_audit", phase_audit)
+                    attempt_record["status"] = "failed"
+                    attempt_record["error_type"] = type(search_exc).__name__
+                    attempt_record["error"] = str(search_exc)
+                    attempt_record["actions_after"] = int(search_actions)
+                    grasp_search_audit.append(attempt_record)
+                    if locals().get("placement_started", False):
+                        raise
+                    continue
+                except Exception as search_exc:
+                    # Environment/runtime failures are not controller stalls;
+                    # continuing with another candidate could hide corruption
+                    # or an unsafe partially executed trajectory.
+                    attempt_record["status"] = "failed"
+                    attempt_record["error_type"] = type(search_exc).__name__
+                    attempt_record["error"] = str(search_exc)
+                    attempt_record["selected"] = bool(placement_started)
+                    attempt_record["actions_after"] = int(search_actions)
+                    grasp_search_audit.append(attempt_record)
+                    raise
+            if selected_waypoints is not None:
+                waypoints = selected_waypoints
+                setattr(env, "_arrow_waypoints_world_m", {
+                    f"waypoint_{idx}": _position(value)[:3].tolist()
+                    for idx, value in enumerate(waypoints)
+                })
+            else:
+                grasp_search_audit.append({
+                    "status": "exhausted", "trigger": trigger, "selected": False,
+                    "actions": int(search_actions), "actions_after": int(search_actions),
+                    "max_actions": int(search_policy.max_actions),
+                })
+                raise exc
+        if (
+            isinstance(exc, TimeoutError)
+            and not can_search
+            and not dry_run
             and recovery_attempts > 0
             and isinstance(getattr(env, "_arrow_phase_audit", None), list)
             and env._arrow_phase_audit
@@ -2157,6 +2784,8 @@ def run_episode(
         "suite_mode": suite_mode,
         "recovery": recovery_audit,
         "grasp_retries": grasp_retry_audit,
+        "grasp_search": grasp_search_audit,
+        "micro_corrections": micro_correction_audit,
         "settle_diagnostics": settle_diagnostics,
         "environment_audit": getattr(env, "_arrow_environment_audit", None),
         "capture_contract": capture_contract,
@@ -2506,6 +3135,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="default",
     )
     parser.add_argument(
+        "--controller-config",
+        type=Path,
+        default=None,
+        help="external JSON controller config (supports relative extends); mutually exclusive with a non-default --controller-variant",
+    )
+    parser.add_argument(
         "--endpoint-depth-statistic",
         choices=ENDPOINT_DEPTH_STATISTICS,
         default=None,
@@ -2529,6 +3164,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.controller_config is not None and args.controller_variant != "default":
+        raise SystemExit("--controller-config cannot be combined with a non-default --controller-variant")
+    external_variant = None
+    if args.controller_config is not None:
+        # Resolve and validate before constructing an environment or sending
+        # any action.  Invalid explicit configs never fall back to v8.
+        external_variant = controller_variant_from_config(
+            load_controller_config(args.controller_config), suite_mode=args.suite_mode
+        )
     candidate_variant = args.controller_variant in {
         CANDIDATE_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
@@ -2588,8 +3232,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     grasp_retry_offsets_m = (
         CANDIDATE_V8_GRASP_RETRY_OFFSETS_M if candidate_v8 else None
     )
+    selected_variant = external_variant or ControllerVariantConfig(
+        name=variant_name,
+        suite_mode=args.suite_mode,
+        phase_timeout_steps=phase_timeout_steps,
+        gripper_dwell_steps=args.gripper_dwell_steps,
+        stall_window_steps=stall_window_steps,
+        stall_delta_m=args.stall_delta_m,
+        recovery_attempts=args.recovery_attempts,
+        recovery_steps=args.recovery_steps,
+        endpoint_depth_statistic=endpoint_depth_statistic,
+        endpoint_depth_quantile=endpoint_depth_quantile,
+        approach_tolerance_m=approach_tolerance_m,
+        waypoint_tolerance_m=waypoint_tolerance_m,
+        osc_position_scale_m=osc_position_scale_m,
+        arrow_anchor_policy=arrow_anchor_policy,
+        approach_lateral_offset_m=approach_lateral_offset_m,
+        grasp_contact_threshold=grasp_contact_threshold,
+        grasp_retry_offsets_m=grasp_retry_offsets_m,
+        max_mask_fraction_for_motion=max_mask_fraction_for_motion,
+        workspace_bounds_m=workspace_bounds_m,
+    )
     env = build_libero_env(
-        args.task, args.seed, args.resolution, suite_mode=args.suite_mode
+        args.task, args.seed, args.resolution, suite_mode=args.suite_mode,
+        controller_variant=selected_variant,
     )
     try:
         # Input-generation integration is intentionally explicit: a caller can
@@ -2630,27 +3296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             gripper_dwell_steps=args.gripper_dwell_steps,
             recovery_attempts=args.recovery_attempts,
             recovery_steps=args.recovery_steps,
-            controller_variant=ControllerVariantConfig(
-                name=variant_name,
-                suite_mode=args.suite_mode,
-                phase_timeout_steps=phase_timeout_steps,
-                gripper_dwell_steps=args.gripper_dwell_steps,
-                stall_window_steps=stall_window_steps,
-                stall_delta_m=args.stall_delta_m,
-                recovery_attempts=args.recovery_attempts,
-                recovery_steps=args.recovery_steps,
-                endpoint_depth_statistic=endpoint_depth_statistic,
-                endpoint_depth_quantile=endpoint_depth_quantile,
-                approach_tolerance_m=approach_tolerance_m,
-                waypoint_tolerance_m=waypoint_tolerance_m,
-                osc_position_scale_m=osc_position_scale_m,
-                arrow_anchor_policy=arrow_anchor_policy,
-                approach_lateral_offset_m=approach_lateral_offset_m,
-                grasp_contact_threshold=grasp_contact_threshold,
-                grasp_retry_offsets_m=grasp_retry_offsets_m,
-                max_mask_fraction_for_motion=max_mask_fraction_for_motion,
-                workspace_bounds_m=workspace_bounds_m,
-            ),
+            controller_variant=selected_variant,
             stop_after_phase=args.stop_after_phase,
             source_grasp_offset=args.source_grasp_offset,
             destination_release_offset=args.destination_release_offset,

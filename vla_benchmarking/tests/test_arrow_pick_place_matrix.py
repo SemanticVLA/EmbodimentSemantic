@@ -740,3 +740,105 @@ def test_timeout_phase_is_included_in_phase_aggregates(matrix):
         "statuses": {"timeout": 1},
         "failed": 1,
     }
+
+
+def test_external_controller_config_is_resolved_once_and_recorded(matrix, tmp_path: Path):
+    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9_patient_control.json"
+    observed = {}
+
+    class Env:
+        def close(self):
+            pass
+
+    def external_env_builder(task_id, seed, resolution, *, suite_mode, controller_variant):
+        observed["environment_controller_variant"] = controller_variant
+        return Env()
+
+    def episode_runner(**kwargs):
+        observed.update(kwargs)
+        variant = kwargs["controller_variant"]
+        return {
+            "evaluator_success": None,
+            "controller_variant": variant.provenance(),
+            "capture_contract": {"valid": True},
+            "phases": [],
+            "grasp_search": [],
+            "micro_corrections": [],
+        }
+
+    summary = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[0],
+        episodes_per_task=1,
+        controller_config=config,
+        dry_run=True,
+        env_builder=external_env_builder,
+        episode_runner=episode_runner,
+        arrow_input_builder=lambda env, task_id, resolution: {},
+    )
+
+    assert "controller_config" not in observed
+    assert not isinstance(observed["controller_variant"], str)
+    assert observed["environment_controller_variant"] is observed["controller_variant"]
+    config_provenance = summary["controller_config"]
+    assert config_provenance["config_hash"]
+    assert summary["protocol"]["controller_config"] == config_provenance
+    record = json.loads(
+        (tmp_path / matrix.MANIFEST_JSONL_FILENAME).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert record["controller_config_hash"] == config_provenance["config_hash"]
+    assert record["controller_config_path"] == config_provenance["path"]
+    assert record["controller_config"] == config_provenance
+
+
+def test_invalid_external_controller_config_fails_before_environment_build(
+    matrix, tmp_path: Path
+):
+    invalid = tmp_path / "invalid-controller.json"
+    invalid.write_text(json.dumps({"name": "v9", "unknown_policy": 1}), encoding="utf-8")
+    env_calls = []
+
+    with pytest.raises(ValueError, match="unknown controller config keys"):
+        matrix.run_matrix(
+            output_root=tmp_path / "outputs",
+            task_ids=[0],
+            episodes_per_task=1,
+            controller_config=invalid,
+            dry_run=True,
+            env_builder=lambda *args: env_calls.append(args),
+            episode_runner=lambda **kwargs: {},
+            arrow_input_builder=lambda *args: {},
+        )
+
+    assert env_calls == []
+    assert not (tmp_path / "outputs").exists()
+
+
+def test_external_runtime_provenance_survives_controller_failure(matrix, tmp_path: Path):
+    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9_patient_control.json"
+
+    class Env:
+        _arrow_capture_contract = {"valid": True}
+        _arrow_phase_audit = [{"phase": "descend", "status": "timeout", "steps": 160}]
+        _arrow_grasp_search_audit = []
+        _arrow_micro_correction_audit = []
+
+        def close(self):
+            pass
+
+    summary = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[0],
+        episodes_per_task=1,
+        controller_config=config,
+        dry_run=True,
+        env_builder=lambda task_id, seed, resolution: Env(),
+        episode_runner=lambda **kwargs: (_ for _ in ()).throw(TimeoutError("controller timeout")),
+        arrow_input_builder=lambda env, task_id, resolution: {},
+    )
+    record = json.loads(
+        (tmp_path / matrix.MANIFEST_JSONL_FILENAME).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert record["status"] == "failed"
+    assert record["controller_config_observed"]["config_hash"] == summary["controller_config"]["runtime_hash"]
+    assert record["controller_config_observed"]["canonical"] == summary["controller_config"]["canonical"]

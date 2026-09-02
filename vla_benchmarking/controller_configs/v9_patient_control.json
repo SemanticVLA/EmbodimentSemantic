@@ -1,0 +1,4 @@
+{
+  "extends": "v9_patient_base.json",
+  "name": "libero_spatial_akita_bowl_agentview_v9_patient_control"
+}

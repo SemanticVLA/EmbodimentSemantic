@@ -1,0 +1,9 @@
+{
+  "extends": "v9_patient_base.json",
+  "name": "libero_spatial_akita_bowl_agentview_v9a_bounded_grasp_search",
+  "grasp_search": {
+    "enabled": true,
+    "offsets_m": [[0.0, 0.0, -0.012], [0.0, 0.010, -0.012], [0.0, -0.010, -0.012]],
+    "max_attempts": 3
+  }
+}

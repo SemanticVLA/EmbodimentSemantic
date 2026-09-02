@@ -1556,3 +1556,134 @@ def test_partial_recovery_failure_preserves_steps_already_sent(runner, monkeypat
     assert recovery[0]["attempted_steps"] == 2
     assert recovery[0]["executed_steps"] == 1
     assert recovery[0]["error_type"] == "RuntimeError"
+
+
+def test_external_v9_config_inheritance_and_hash_are_stable(runner, tmp_path: Path):
+    base = tmp_path / "base.json"
+    child = tmp_path / "child.json"
+    base.write_text(json.dumps({"name": "base", "phase_timeout_steps": 12, "grasp_search": {"enabled": False}}), encoding="utf-8")
+    child.write_text(json.dumps({"extends": "base.json", "name": "child", "grasp_search": {"enabled": True, "offsets_m": [[0, 0, -0.01]], "max_attempts": 1}}), encoding="utf-8")
+    expanded = runner.load_controller_config(child)
+    variant = runner.controller_variant_from_config(expanded)
+    assert expanded["phase_timeout_steps"] == 12
+    assert "extends" not in expanded
+    assert expanded["config_hash"] == runner.controller_config_hash(expanded)
+    assert variant.grasp_search.enabled is True
+    assert variant.canonical()["grasp_search"]["offsets_m"] == [[0.0, 0.0, -0.01]]
+
+
+def test_external_v9_config_cycle_rejected_before_motion(runner, tmp_path: Path):
+    left = tmp_path / "left.json"
+    right = tmp_path / "right.json"
+    left.write_text(json.dumps({"extends": "right.json"}), encoding="utf-8")
+    right.write_text(json.dumps({"extends": "left.json"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="cycle"):
+        runner.load_controller_config(left)
+
+
+def test_invalid_explicit_controller_config_fails_before_environment_build(runner, monkeypatch, tmp_path: Path):
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(json.dumps({"grasp_search": {"enabled": True, "offsets_m": [[0, 0, 0]], "max_attempts": 1}, "unknown": 1}), encoding="utf-8")
+    monkeypatch.setattr(runner, "build_libero_env", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("environment built")))
+    with pytest.raises(ValueError, match="unknown"):
+        runner.main(["--controller-config", str(invalid)])
+
+
+def test_controller_timeout_subclass_preserves_raw_environment_timeout(runner, monkeypatch):
+    assert issubclass(runner.ControllerMotionTimeout, TimeoutError)
+
+    class RawTimeoutEnv(_MotionEnv):
+        def step(self, action):
+            raise TimeoutError("transport timeout")
+
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    with pytest.raises(TimeoutError) as caught:
+        runner._run_motion(
+            RawTimeoutEnv(), np.zeros((6, 3)), _motion_proprio(),
+            phase_timeout_steps=2, gripper_dwell_steps=2,
+            stop_after_phase="pregrasp", dry_run=False,
+        )
+    assert type(caught.value) is TimeoutError
+
+
+def test_micro_correction_event_records_trigger_and_post_residual(runner, monkeypatch):
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    env = _MotionEnv()
+    policy = runner.MicroCorrectionPolicy(
+        enabled=True, phases=("descend",), plateau_window_steps=1,
+        plateau_delta_m=0.0, residual_max_m=0.005, correction_gain=1.0,
+        burst_steps=1, max_rounds=1, max_actions=1,
+    )
+    with pytest.raises(runner.ControllerMotionTimeout):
+        runner._run_motion(
+            env, np.ones((6, 3)), _motion_proprio(),
+            phase_timeout_steps=3, gripper_dwell_steps=2,
+            stop_after_phase="descend", start_phase="descend", dry_run=False,
+            micro_correction=policy,
+        )
+    assert env._arrow_micro_correction_audit[0]["trigger"] == "residual_plateau"
+    assert env._arrow_micro_correction_audit[0]["status"] == "completed"
+    assert env._arrow_micro_correction_audit[0]["post_residual_norm_m"] is not None
+
+
+@pytest.mark.parametrize("field,value", [("enabled", "true"), ("max_attempts", 1.5), ("phase_timeout_steps", True)])
+def test_v9_policy_rejects_weakly_typed_limits(runner, field, value):
+    with pytest.raises(ValueError):
+        runner.GraspSearchPolicy(**{field: value})
+
+
+@pytest.mark.parametrize("field,value", [("enabled", 1), ("max_actions", 2.5), ("max_rounds", False)])
+def test_micro_policy_rejects_weakly_typed_limits(runner, field, value):
+    with pytest.raises(ValueError):
+        runner.MicroCorrectionPolicy(**{field: value})
+
+
+def test_micro_policy_budget_is_shared_across_phases(runner, monkeypatch):
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    env = _MotionEnv()
+    policy = runner.MicroCorrectionPolicy(
+        enabled=True, phases=("pregrasp", "descend"), plateau_window_steps=1,
+        plateau_delta_m=0.0, residual_max_m=0.005, burst_steps=1,
+        max_rounds=2, max_actions=1,
+    )
+    with pytest.raises(runner.ControllerMotionTimeout):
+        runner._run_motion(
+            env, np.ones((6, 3)), _motion_proprio(), phase_timeout_steps=2,
+            gripper_dwell_steps=2, stop_after_phase="descend", dry_run=False,
+            micro_correction=policy,
+        )
+    assert len(env._arrow_micro_correction_audit) == 1
+
+
+def test_correction_step_reaching_tolerance_is_charged_once(runner, monkeypatch):
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+
+    class ReachesNominalOnCorrection(_MotionEnv):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def step(self, action):
+            self.n += 1
+            pos = np.zeros(3) if self.n == 1 else np.ones(3)
+            return {
+                "robot0_eef_pos": pos,
+                "robot0_eef_quat": np.asarray([0.0, 0.0, 0.0, 1.0]),
+                "robot0_gripper_qpos": np.zeros(2),
+            }, 0.0, False, {}
+
+    env = ReachesNominalOnCorrection()
+    budget = runner._ActionBudget(1)
+    policy = runner.MicroCorrectionPolicy(
+        enabled=True, phases=("descend",), plateau_window_steps=1,
+        plateau_delta_m=0.0, residual_max_m=0.005, burst_steps=1,
+        max_rounds=1, max_actions=1,
+    )
+    audit = runner._run_motion(
+        env, np.ones((6, 3)), _motion_proprio(), phase_timeout_steps=3,
+        gripper_dwell_steps=2, stop_after_phase="descend", start_phase="descend",
+        dry_run=False, micro_correction=policy, micro_action_budget=budget,
+    )
+    assert audit[-1]["status"] == "stop"
+    assert audit[-1]["position_error_norm_m"] == pytest.approx(0.0)
+    assert budget.used == 1

@@ -220,3 +220,13 @@ def test_normalized_osc_action_is_7d_finite_and_bounded():
     assert np.all(np.isfinite(action)) and np.all(np.abs(action) <= 1.0)
     with pytest.raises(ValueError):
         normalized_osc_action((0, 0, 0), np.eye(3), (0, 0, 0), np.eye(3), 0, (0, 0, 1, 1, 1, 1))
+
+
+def test_arrow_world_xy_basis_is_derived_from_deprojected_endpoints():
+    from arrow_controller import arrow_world_xy_basis
+
+    forward, lateral = arrow_world_xy_basis((1.0, 2.0, 0.4), (1.0, 3.0, 9.0))
+    assert forward == pytest.approx((0.0, 1.0, 0.0))
+    assert lateral == pytest.approx((-1.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="degenerate"):
+        arrow_world_xy_basis((0, 0, 0), (0, 0, 1))

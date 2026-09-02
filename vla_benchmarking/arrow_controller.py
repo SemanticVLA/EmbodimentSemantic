@@ -875,6 +875,33 @@ def build_bowl_waypoints(
     )
 
 
+def arrow_world_xy_basis(
+    source_world: ArrayLike, target_world: ArrayLike, *, min_norm_m: float = 1e-9
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the forward/lateral unit basis induced by a visual arrow.
+
+    Only the horizontal world displacement is used.  The function is pure
+    geometry: callers provide deprojected arrow endpoints and receive
+    ``(forward, lateral)`` world vectors, both with zero Z component.  A
+    degenerate projected arrow fails closed instead of inventing an axis.
+    """
+    source = _as_finite_array(source_world, name="source_world").reshape(-1)
+    target = _as_finite_array(target_world, name="target_world").reshape(-1)
+    if source.size != 3 or target.size != 3:
+        raise ValueError("source_world and target_world must each contain three values")
+    threshold = float(min_norm_m)
+    if not np.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("min_norm_m must be finite and positive")
+    displacement = target - source
+    displacement[2] = 0.0
+    norm = float(np.linalg.norm(displacement))
+    if norm < threshold:
+        raise ValueError("arrow world-XY displacement is degenerate")
+    forward = displacement / norm
+    lateral = np.array((-forward[1], forward[0], 0.0), dtype=np.float64)
+    return forward, lateral
+
+
 def _rotation_matrix(rotation: ArrayLike) -> np.ndarray:
     arr = _as_finite_array(rotation, name="rotation")
     if arr.shape == (3, 3):
@@ -1027,6 +1054,7 @@ __all__ = [
     "refine_endpoint_from_rgbd",
     "refine_rgbd",
     "build_bowl_waypoints",
+    "arrow_world_xy_basis",
     "normalized_osc_action",
     "compute_endpoint_change_evidence",
     "endpoint_change_evidence",

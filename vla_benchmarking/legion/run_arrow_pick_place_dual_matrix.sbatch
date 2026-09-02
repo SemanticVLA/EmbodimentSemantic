@@ -2,6 +2,10 @@
 # Sequential vanilla and sealed-randomized arrow-only LIBERO matrix.
 # Requires REPO_ROOT (isolated clean checkout) and
 # ARROW_MATRIX_EXPECTED_COMMIT (exact 40-character checkout SHA).
+# Optional controller selection:
+#   ARROW_CONTROLLER_VARIANT legacy controller label; defaults to rgbd_arrow_v1
+#   CONTROLLER_CONFIG or ARROW_CONTROLLER_CONFIG external JSON controller config;
+#                    mutually exclusive with a non-default controller variant
 
 #SBATCH --job-name=arrow_pick_place_dual_matrix
 #SBATCH --partition=gpu_a40
@@ -43,17 +47,36 @@ MATRIX_EPISODES_PER_TASK="${MATRIX_EPISODES_PER_TASK:-10}"
 MATRIX_SEED_BASE="${MATRIX_SEED_BASE:-1000}"
 MATRIX_RESOLUTION="${MATRIX_RESOLUTION:-256}"
 CONTROLLER_VARIANT="${ARROW_CONTROLLER_VARIANT:-rgbd_arrow_v1}"
+CONTROLLER_CONFIG_INPUT="${CONTROLLER_CONFIG:-${ARROW_CONTROLLER_CONFIG:-}}"
+CONTROLLER_CONFIG_PATH=""
+CONTROLLER_CONFIG_FILE_SHA256=""
+CONTROLLER_CONFIG_HASH=""
+CONTROLLER_CONFIG_CANONICAL_PATH=""
 MATRIX_CONTINUE_ON_MOTION_FAILURE="${MATRIX_CONTINUE_ON_MOTION_FAILURE:-1}"
+
+if [[ -n "${CONTROLLER_CONFIG:-}" && -n "${ARROW_CONTROLLER_CONFIG:-}" && "$CONTROLLER_CONFIG" != "$ARROW_CONTROLLER_CONFIG" ]]; then
+  die 'CONTROLLER_CONFIG and ARROW_CONTROLLER_CONFIG disagree'
+fi
 
 [[ "$MATRIX_TASK_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]] || die 'MATRIX_TASK_IDS is invalid'
 [[ "$MATRIX_EPISODES_PER_TASK" =~ ^[1-9][0-9]*$ ]] || die 'MATRIX_EPISODES_PER_TASK is invalid'
 [[ "$MATRIX_SEED_BASE" =~ ^[0-9]+$ ]] || die 'MATRIX_SEED_BASE is invalid'
 [[ "$MATRIX_RESOLUTION" =~ ^[1-9][0-9]*$ ]] || die 'MATRIX_RESOLUTION is invalid'
 [[ "$CONTROLLER_VARIANT" =~ ^[A-Za-z0-9_.-]+$ ]] || die 'ARROW_CONTROLLER_VARIANT is invalid'
+if [[ -n "$CONTROLLER_CONFIG_INPUT" && "$CONTROLLER_VARIANT" != rgbd_arrow_v1 ]]; then
+  die 'CONTROLLER_CONFIG cannot be combined with a non-default ARROW_CONTROLLER_VARIANT'
+fi
 [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" =~ ^[01]$ ]] || die 'MATRIX_CONTINUE_ON_MOTION_FAILURE is invalid'
 
 [[ "$RUN_ROOT" = /* && "$OUTPUT_ROOT" = /* && "$ARCHIVE_ROOT" = /* ]] || die 'paths must be absolute'
 command -v realpath >/dev/null 2>&1 || die 'realpath is required for safe path validation'
+if [[ -n "$CONTROLLER_CONFIG_INPUT" ]]; then
+  [[ -f "$CONTROLLER_CONFIG_INPUT" ]] || die "controller config is not a regular file: $CONTROLLER_CONFIG_INPUT"
+  CONTROLLER_CONFIG_PATH="$(realpath -e -- "$CONTROLLER_CONFIG_INPUT")" || die 'cannot canonicalize CONTROLLER_CONFIG'
+  command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required for controller config provenance'
+  CONTROLLER_CONFIG_FILE_SHA256="$(sha256sum -- "$CONTROLLER_CONFIG_PATH" | awk '{print $1}')" || die 'cannot hash CONTROLLER_CONFIG'
+  [[ "$CONTROLLER_CONFIG_FILE_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'controller config SHA-256 is invalid'
+fi
 RUN_ROOT="$(realpath -m -- "$RUN_ROOT")" || die 'cannot canonicalize RUN_ROOT'
 OUTPUT_ROOT="$(realpath -m -- "$OUTPUT_ROOT")" || die 'cannot canonicalize OUTPUT_ROOT'
 ARCHIVE_ROOT="$(realpath -m -- "$ARCHIVE_ROOT")" || die 'cannot canonicalize ARCHIVE_ROOT'
@@ -116,6 +139,10 @@ archive_on_exit() {
     printf 'job_id=%s\n' "$SLURM_JOB_ID"
     printf 'expected_commit=%s\n' "$EXPECTED_COMMIT"
     printf 'controller_variant=%s\n' "$CONTROLLER_VARIANT"
+    printf 'controller_config_path=%s\n' "$CONTROLLER_CONFIG_PATH"
+    printf 'controller_config_file_sha256=%s\n' "$CONTROLLER_CONFIG_FILE_SHA256"
+    printf 'controller_config_hash=%s\n' "$CONTROLLER_CONFIG_HASH"
+    printf 'controller_config_canonical_path=%s\n' "$CONTROLLER_CONFIG_CANONICAL_PATH"
     printf 'run_root=%s\n' "$RUN_ROOT"
     printf 'output_root=%s\n' "$OUTPUT_ROOT"
     printf 'archive_root=%s\n' "$ARCHIVE_ROOT"
@@ -143,6 +170,10 @@ matrix_episodes_per_task=$MATRIX_EPISODES_PER_TASK
 matrix_seed_base=$MATRIX_SEED_BASE
 matrix_resolution=$MATRIX_RESOLUTION
 controller_variant=$CONTROLLER_VARIANT
+controller_config_path=$CONTROLLER_CONFIG_PATH
+controller_config_file_sha256=$CONTROLLER_CONFIG_FILE_SHA256
+controller_config_hash=$CONTROLLER_CONFIG_HASH
+controller_config_canonical_path=$CONTROLLER_CONFIG_CANONICAL_PATH
 suite_order=vanilla,sealed_randomized
 continue_on_motion_failure=$MATRIX_CONTINUE_ON_MOTION_FAILURE
 motion_mode=execute_motion
@@ -162,6 +193,32 @@ export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl LIBERO_CONFIG_PATH
 export LIBERO_CONFIG="$LIBERO_CONFIG_PATH/config.yaml"
 export TMPDIR="$RUN_ROOT/tmp" HF_HOME="$RUN_ROOT/cache/hf" XDG_CACHE_HOME="$RUN_ROOT/cache/xdg" TORCH_HOME="$RUN_ROOT/cache/torch"
 mkdir -p "$TMPDIR" "$HF_HOME" "$XDG_CACHE_HOME" "$TORCH_HOME"
+export ARROW_CONTROLLER_VARIANT="$CONTROLLER_VARIANT"
+if [[ -n "$CONTROLLER_CONFIG_PATH" ]]; then
+  CONTROLLER_CONFIG_CANONICAL_PATH="$RUN_ROOT/controller_config_canonical.json"
+  CONTROLLER_CONFIG_HASH="$($PYTHON - "$CONTROLLER_CONFIG_PATH" "$CONTROLLER_CONFIG_CANONICAL_PATH" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from controller_configs import load_controller_config
+
+config_path, canonical_path = sys.argv[1:]
+expanded = load_controller_config(config_path)
+Path(canonical_path).write_text(
+    json.dumps(expanded, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+print(expanded["config_hash"])
+PY
+  )" || die 'controller config failed semantic validation'
+  [[ "$CONTROLLER_CONFIG_HASH" =~ ^[0-9a-f]{64}$ ]] || die 'controller config semantic hash is invalid'
+  export ARROW_CONTROLLER_CONFIG="$CONTROLLER_CONFIG_PATH"
+  {
+    printf 'controller_config_hash=%s\n' "$CONTROLLER_CONFIG_HASH"
+    printf 'controller_config_canonical_path=%s\n' "$CONTROLLER_CONFIG_CANONICAL_PATH"
+  } >> "$RUN_ROOT/job_context.env"
+fi
 
 command -v nvidia-smi >/dev/null 2>&1 || die 'nvidia-smi is unavailable inside the allocation'
 nvidia-smi -L
@@ -170,6 +227,7 @@ nvidia-smi -L
 help_text="$("$PYTHON" "$MATRIX_LAUNCHER" --help)" || die 'matrix launcher help failed'
 grep -Fq -- '--suite-mode' <<<"$help_text" || die 'matrix launcher lacks --suite-mode'
 grep -Fq -- '--controller-variant' <<<"$help_text" || die 'matrix launcher lacks --controller-variant'
+grep -Fq -- '--controller-config' <<<"$help_text" || die 'matrix launcher lacks --controller-config'
 
 IFS=, read -r -a task_id_array <<<"$MATRIX_TASK_IDS"
 expected_cells_per_suite=$(( ${#task_id_array[@]} * MATRIX_EPISODES_PER_TASK ))
@@ -181,6 +239,10 @@ write_suite_context() {
   cat > "$suite_root/suite_context.env" <<EOF
 suite_mode=$suite
 controller_variant=$CONTROLLER_VARIANT
+controller_config_path=$CONTROLLER_CONFIG_PATH
+controller_config_file_sha256=$CONTROLLER_CONFIG_FILE_SHA256
+controller_config_hash=$CONTROLLER_CONFIG_HASH
+controller_config_canonical_path=$CONTROLLER_CONFIG_CANONICAL_PATH
 randomize_scenes=$randomize
 task_ids=$MATRIX_TASK_IDS
 episodes_per_task=$MATRIX_EPISODES_PER_TASK
@@ -206,6 +268,7 @@ run_suite() {
     --allow-unvalidated-profile
   )
   if [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" == 1 ]]; then matrix_args+=(--continue-on-motion-failure); fi
+  if [[ -n "$CONTROLLER_CONFIG_PATH" ]]; then matrix_args+=(--controller-config "$CONTROLLER_CONFIG_PATH"); fi
   "$PYTHON" "$MATRIX_LAUNCHER" "${matrix_args[@]}"
 }
 
@@ -214,12 +277,22 @@ run_suite sealed_randomized "$RANDOMIZED_ROOT" 1
 [[ -s "$VANILLA_ROOT/arrow_pick_place_matrix_summary.json" ]] || die 'vanilla summary is missing'
 [[ -s "$RANDOMIZED_ROOT/arrow_pick_place_matrix_summary.json" ]] || die 'sealed-randomized summary is missing'
 
-"$PYTHON" - "$VANILLA_ROOT/arrow_pick_place_matrix_summary.json" "$RANDOMIZED_ROOT/arrow_pick_place_matrix_summary.json" "$COMBINED_SUMMARY" "$expected_cells_per_suite" "$expected_cells_total" "$CONTROLLER_VARIANT" <<'PY'
+"$PYTHON" - "$VANILLA_ROOT/arrow_pick_place_matrix_summary.json" "$RANDOMIZED_ROOT/arrow_pick_place_matrix_summary.json" "$COMBINED_SUMMARY" "$expected_cells_per_suite" "$expected_cells_total" "$CONTROLLER_VARIANT" "$CONTROLLER_CONFIG_PATH" "$CONTROLLER_CONFIG_FILE_SHA256" "$CONTROLLER_CONFIG_HASH" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-vanilla_path, randomized_path, combined_path, expected_each, expected_total, variant = sys.argv[1:]
+(
+    vanilla_path,
+    randomized_path,
+    combined_path,
+    expected_each,
+    expected_total,
+    variant,
+    config_path,
+    config_file_sha256,
+    config_hash,
+) = sys.argv[1:]
 expected_each = int(expected_each)
 expected_total = int(expected_total)
 summaries = {}
@@ -230,6 +303,18 @@ for mode, path in (("vanilla", vanilla_path), ("sealed_randomized", randomized_p
     if int(payload.get("completed_cells", 0)) + int(payload.get("failed_cells_count", 0)) != expected_each:
         raise SystemExit(f"{mode} summary does not account for all planned cells")
     summaries[mode] = payload
+
+observed_variants = {str(payload.get("controller_variant")) for payload in summaries.values()}
+if len(observed_variants) != 1:
+    raise SystemExit("suite controller variants disagree")
+variant = observed_variants.pop()
+if config_hash:
+    observed_config_hashes = {
+        str((payload.get("controller_config") or {}).get("config_hash"))
+        for payload in summaries.values()
+    }
+    if observed_config_hashes != {config_hash}:
+        raise SystemExit("suite controller config hashes disagree with launcher preflight")
 
 def total(field):
     return sum(int(payload.get(field, 0) or 0) for payload in summaries.values())
@@ -243,6 +328,11 @@ if completed + failed != expected_total:
 combined = {
     "schema_version": "arrow_pick_place_dual_matrix.v1",
     "controller_variant": variant,
+    "controller_config": {
+        "path": config_path or None,
+        "file_sha256": config_file_sha256 or None,
+        "config_hash": config_hash or None,
+    },
     "suite_order": ["vanilla", "sealed_randomized"],
     "expected_cells_per_suite": expected_each,
     "expected_total_cells": expected_total,

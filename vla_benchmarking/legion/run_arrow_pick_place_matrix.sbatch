@@ -15,6 +15,9 @@
 #   MATRIX_EPISODES_PER_TASK positive episode count; defaults to 10
 #   MATRIX_SEED_BASE non-negative seed base; defaults to 1000
 #   MATRIX_RESOLUTION positive square capture resolution; defaults to 256
+#   ARROW_CONTROLLER_VARIANT legacy controller label; defaults to rgbd_arrow_v1
+#   CONTROLLER_CONFIG or ARROW_CONTROLLER_CONFIG external JSON controller config;
+#                    mutually exclusive with a non-default controller variant
 #
 # Submit this file with sbatch from the Legion login node. Do not execute it
 # directly on the login node or pass an active shared checkout as REPO_ROOT.
@@ -65,15 +68,36 @@ MATRIX_EPISODES_PER_TASK="${MATRIX_EPISODES_PER_TASK:-10}"
 MATRIX_SEED_BASE="${MATRIX_SEED_BASE:-1000}"
 MATRIX_RESOLUTION="${MATRIX_RESOLUTION:-256}"
 MATRIX_CONTINUE_ON_MOTION_FAILURE="${MATRIX_CONTINUE_ON_MOTION_FAILURE:-0}"
+CONTROLLER_VARIANT="${ARROW_CONTROLLER_VARIANT:-rgbd_arrow_v1}"
+CONTROLLER_CONFIG_INPUT="${CONTROLLER_CONFIG:-${ARROW_CONTROLLER_CONFIG:-}}"
+CONTROLLER_CONFIG_PATH=""
+CONTROLLER_CONFIG_FILE_SHA256=""
+CONTROLLER_CONFIG_HASH=""
+CONTROLLER_CONFIG_CANONICAL_PATH=""
+
+if [[ -n "${CONTROLLER_CONFIG:-}" && -n "${ARROW_CONTROLLER_CONFIG:-}" && "$CONTROLLER_CONFIG" != "$ARROW_CONTROLLER_CONFIG" ]]; then
+  die 'CONTROLLER_CONFIG and ARROW_CONTROLLER_CONFIG disagree'
+fi
 
 [[ "$MATRIX_TASK_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]] || die 'MATRIX_TASK_IDS must be comma-separated non-negative integers'
 [[ "$MATRIX_EPISODES_PER_TASK" =~ ^[1-9][0-9]*$ ]] || die 'MATRIX_EPISODES_PER_TASK must be a positive integer'
 [[ "$MATRIX_SEED_BASE" =~ ^[0-9]+$ ]] || die 'MATRIX_SEED_BASE must be a non-negative integer'
 [[ "$MATRIX_RESOLUTION" =~ ^[1-9][0-9]*$ ]] || die 'MATRIX_RESOLUTION must be a positive integer'
 [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" =~ ^[01]$ ]] || die 'MATRIX_CONTINUE_ON_MOTION_FAILURE must be 0 or 1'
+[[ "$CONTROLLER_VARIANT" =~ ^[A-Za-z0-9_.-]+$ ]] || die 'ARROW_CONTROLLER_VARIANT is invalid'
+if [[ -n "$CONTROLLER_CONFIG_INPUT" && "$CONTROLLER_VARIANT" != rgbd_arrow_v1 ]]; then
+  die 'CONTROLLER_CONFIG cannot be combined with a non-default ARROW_CONTROLLER_VARIANT'
+fi
 
 [[ "$RUN_ROOT" = /* && "$OUTPUT_ROOT" = /* && "$ARCHIVE_ROOT" = /* ]] || die 'RUN_ROOT, OUTPUT_ROOT, and ARCHIVE_ROOT must be absolute paths'
 command -v realpath >/dev/null 2>&1 || die 'realpath is required for safe run/archive path validation'
+if [[ -n "$CONTROLLER_CONFIG_INPUT" ]]; then
+  [[ -f "$CONTROLLER_CONFIG_INPUT" ]] || die "controller config is not a regular file: $CONTROLLER_CONFIG_INPUT"
+  CONTROLLER_CONFIG_PATH="$(realpath -e -- "$CONTROLLER_CONFIG_INPUT")" || die 'cannot canonicalize CONTROLLER_CONFIG'
+  command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required for controller config provenance'
+  CONTROLLER_CONFIG_FILE_SHA256="$(sha256sum -- "$CONTROLLER_CONFIG_PATH" | awk '{print $1}')" || die 'cannot hash CONTROLLER_CONFIG'
+  [[ "$CONTROLLER_CONFIG_FILE_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'controller config SHA-256 is invalid'
+fi
 RUN_ROOT="$(realpath -m -- "$RUN_ROOT")" || die 'cannot canonicalize RUN_ROOT'
 OUTPUT_ROOT="$(realpath -m -- "$OUTPUT_ROOT")" || die 'cannot canonicalize OUTPUT_ROOT'
 ARCHIVE_ROOT="$(realpath -m -- "$ARCHIVE_ROOT")" || die 'cannot canonicalize ARCHIVE_ROOT'
@@ -138,6 +162,11 @@ archive_on_exit() {
     printf 'job_exit_code=%s\n' "$workload_rc"
     printf 'job_id=%s\n' "$SLURM_JOB_ID"
     printf 'expected_commit=%s\n' "$EXPECTED_COMMIT"
+    printf 'controller_variant=%s\n' "$CONTROLLER_VARIANT"
+    printf 'controller_config_path=%s\n' "$CONTROLLER_CONFIG_PATH"
+    printf 'controller_config_file_sha256=%s\n' "$CONTROLLER_CONFIG_FILE_SHA256"
+    printf 'controller_config_hash=%s\n' "$CONTROLLER_CONFIG_HASH"
+    printf 'controller_config_canonical_path=%s\n' "$CONTROLLER_CONFIG_CANONICAL_PATH"
     printf 'run_root=%s\n' "$RUN_ROOT"
     printf 'output_root=%s\n' "$OUTPUT_ROOT"
     printf 'archive_root=%s\n' "$ARCHIVE_ROOT"
@@ -170,6 +199,11 @@ matrix_tasks=$MATRIX_TASK_IDS
 matrix_episodes_per_task=$MATRIX_EPISODES_PER_TASK
 matrix_seed_base=$MATRIX_SEED_BASE
 matrix_resolution=$MATRIX_RESOLUTION
+controller_variant=$CONTROLLER_VARIANT
+controller_config_path=$CONTROLLER_CONFIG_PATH
+controller_config_file_sha256=$CONTROLLER_CONFIG_FILE_SHA256
+controller_config_hash=$CONTROLLER_CONFIG_HASH
+controller_config_canonical_path=$CONTROLLER_CONFIG_CANONICAL_PATH
 continue_on_motion_failure=$MATRIX_CONTINUE_ON_MOTION_FAILURE
 motion_mode=execute_motion
 arrow_input_policy=hardcoded_subject_goal_bbox_renderer
@@ -190,6 +224,32 @@ export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
 export LIBERO_CONFIG_PATH
 export LIBERO_CONFIG="$LIBERO_CONFIG_PATH/config.yaml"
+export ARROW_CONTROLLER_VARIANT="$CONTROLLER_VARIANT"
+if [[ -n "$CONTROLLER_CONFIG_PATH" ]]; then
+  CONTROLLER_CONFIG_CANONICAL_PATH="$RUN_ROOT/controller_config_canonical.json"
+  CONTROLLER_CONFIG_HASH="$($PYTHON - "$CONTROLLER_CONFIG_PATH" "$CONTROLLER_CONFIG_CANONICAL_PATH" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from controller_configs import load_controller_config
+
+config_path, canonical_path = sys.argv[1:]
+expanded = load_controller_config(config_path)
+Path(canonical_path).write_text(
+    json.dumps(expanded, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+print(expanded["config_hash"])
+PY
+  )" || die 'controller config failed semantic validation'
+  [[ "$CONTROLLER_CONFIG_HASH" =~ ^[0-9a-f]{64}$ ]] || die 'controller config semantic hash is invalid'
+  export ARROW_CONTROLLER_CONFIG="$CONTROLLER_CONFIG_PATH"
+  {
+    printf 'controller_config_hash=%s\n' "$CONTROLLER_CONFIG_HASH"
+    printf 'controller_config_canonical_path=%s\n' "$CONTROLLER_CONFIG_CANONICAL_PATH"
+  } >> "$RUN_ROOT/job_context.env"
+fi
 export TMPDIR="$RUN_ROOT/tmp"
 export HF_HOME="$RUN_ROOT/cache/hf"
 export XDG_CACHE_HOME="$RUN_ROOT/cache/xdg"
@@ -207,10 +267,14 @@ matrix_args=( \
   --seed-base "$MATRIX_SEED_BASE" \
   --resolution "$MATRIX_RESOLUTION" \
   --output-root "$OUTPUT_ROOT" \
+  --controller-variant "$CONTROLLER_VARIANT" \
   --execute-motion \
   --allow-unvalidated-profile
 )
 if [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" == 1 ]]; then
   matrix_args+=(--continue-on-motion-failure)
+fi
+if [[ -n "$CONTROLLER_CONFIG_PATH" ]]; then
+  matrix_args+=(--controller-config "$CONTROLLER_CONFIG_PATH")
 fi
 "$PYTHON" "$REPO_ROOT/vla_benchmarking/run_arrow_pick_place_matrix.py" "${matrix_args[@]}"

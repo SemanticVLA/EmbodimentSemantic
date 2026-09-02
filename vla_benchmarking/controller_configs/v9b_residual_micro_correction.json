@@ -1,0 +1,7 @@
+{
+  "extends": "v9_patient_base.json",
+  "name": "libero_spatial_akita_bowl_agentview_v9b_residual_micro_correction",
+  "micro_correction": {
+    "enabled": true
+  }
+}

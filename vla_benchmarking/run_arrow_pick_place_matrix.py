@@ -30,6 +30,11 @@ try:  # Script and package-style imports are both useful in LIBERO checkouts.
 except ImportError:  # pragma: no cover - direct ``python file.py`` execution
     import run_arrow_pick_place_eval as _episode_module
 
+try:
+    from .controller_configs import load_controller_config
+except ImportError:  # pragma: no cover - direct script execution
+    from controller_configs import load_controller_config
+
 
 DEFAULT_TASK_IDS = tuple(range(10))
 DEFAULT_EPISODES_PER_TASK = 10
@@ -49,6 +54,43 @@ MATRIX_SCHEMA_VERSION = "arrow_pick_place_matrix.v1"
 VERIFIED_TASK_ID = 0
 VERIFIED_SEED = 1000
 VERIFIED_RESOLUTION = 256
+
+
+def _resolve_controller_selection(
+    *, controller_variant: str, controller_config: str | Path | None,
+    suite_mode: str,
+) -> tuple[str, Any | None, dict[str, Any] | None]:
+    """Resolve a legacy label or an external JSON config before env creation.
+
+    Config files are expanded and validated at the matrix boundary.  This is
+    intentionally fail-closed: an explicitly requested config can never fall
+    back to a historical controller variant after a load/validation error.
+    """
+    variant_label = parse_controller_variant(controller_variant)
+    if controller_config is None:
+        return variant_label, None, None
+    if variant_label != DEFAULT_CONTROLLER_VARIANT:
+        raise ValueError(
+            "--controller-config cannot be combined with a non-default "
+            "--controller-variant"
+        )
+    expanded = load_controller_config(controller_config)
+    converter = getattr(_episode_module, "controller_variant_from_config", None)
+    if converter is None:
+        raise RuntimeError("episode runner does not expose controller config support")
+    variant = converter(expanded, suite_mode=suite_mode)
+    canonical = variant.canonical()
+    source = expanded.get("config_source")
+    provenance = {
+        "path": str(source or Path(controller_config).expanduser().resolve()),
+        "canonical": canonical,
+        # The external semantic hash is stable across suite modes and file
+        # relocation.  The runtime hash additionally covers suite_mode and
+        # fully materialized defaults, so retain both identities explicitly.
+        "config_hash": str(expanded.get("config_hash")),
+        "runtime_hash": str(variant.config_hash),
+    }
+    return parse_controller_variant(str(variant.name)), variant, provenance
 
 
 def _validated_label(value: str, *, name: str) -> str:
@@ -206,11 +248,16 @@ def plan_cells(
     resolution: int = DEFAULT_RESOLUTION,
     suite_mode: str = DEFAULT_SUITE_MODE,
     controller_variant: str = DEFAULT_CONTROLLER_VARIANT,
+    controller_config: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Build deterministic task/episode cells without touching LIBERO."""
     tasks = parse_task_ids(task_ids)
     suite_mode = parse_suite_mode(suite_mode)
-    controller_variant = parse_controller_variant(controller_variant)
+    controller_variant, _resolved_variant, config_provenance = _resolve_controller_selection(
+        controller_variant=controller_variant,
+        controller_config=controller_config,
+        suite_mode=suite_mode,
+    )
     if episodes_per_task <= 0:
         raise ValueError("episodes_per_task must be positive")
     if resolution <= 0:
@@ -251,6 +298,12 @@ def plan_cells(
                     "resolution": int(resolution),
                     "suite_mode": suite_mode,
                     "controller_variant": controller_variant,
+                    "controller_config_path": (
+                        config_provenance["path"] if config_provenance else None
+                    ),
+                    "controller_config_hash": (
+                        config_provenance["config_hash"] if config_provenance else None
+                    ),
                     "condition_label": f"{suite_mode}__{controller_variant}",
                     "output_dir": cell_dir.as_posix(),
                     "profile_label": "validated" if validated else "exploratory_unvalidated",
@@ -401,6 +454,7 @@ def _protocol(
     continue_on_motion_failure: bool,
     suite_mode: str,
     controller_variant: str,
+    controller_config: Mapping[str, Any] | None = None,
     init_state_preflight: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -409,6 +463,7 @@ def _protocol(
         "camera": CAMERA_NAME,
         "suite_mode": suite_mode,
         "controller_variant": controller_variant,
+        "controller_config": dict(controller_config) if controller_config else None,
         "condition_label": f"{suite_mode}__{controller_variant}",
         "suite_contract": {
             "vanilla": "canonical_libero_spatial_bddl_without_custom_randomization",
@@ -493,6 +548,8 @@ def _error_record(
         "workspace_validation": None,
         "waypoints_world_m": None,
         "grasp_retries": None,
+        "grasp_search": [],
+        "micro_corrections": [],
         "frames": [],
         "phase_frames": [],
         "phases": [],
@@ -510,6 +567,8 @@ def _error_record(
             "workspace_validation": None,
             "waypoints_world_m": None,
             "grasp_retries": None,
+            "grasp_search": [],
+            "micro_corrections": [],
             "recovery": [],
             "evaluator_result": None,
             "settle_diagnostics": None,
@@ -538,6 +597,8 @@ def _audit_diagnostics(audit: Mapping[str, Any]) -> dict[str, Any]:
         "workspace_validation": audit.get("workspace_validation"),
         "waypoints_world_m": audit.get("waypoints_world_m"),
         "grasp_retries": audit.get("grasp_retries", []),
+        "grasp_search": audit.get("grasp_search", []),
+        "micro_corrections": audit.get("micro_corrections", []),
         "recovery": audit.get("recovery", []),
         "evaluator_result": audit.get("evaluator_success"),
     }
@@ -570,6 +631,8 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
         ("_arrow_workspace_validation", "workspace_validation"),
         ("_arrow_waypoints_world_m", "waypoints_world_m"),
         ("_arrow_grasp_retry_audit", "grasp_retries"),
+        ("_arrow_grasp_search_audit", "grasp_search"),
+        ("_arrow_micro_correction_audit", "micro_corrections"),
     ):
         try:
             value = getattr(env, attribute, None)
@@ -777,7 +840,29 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
         "settle": {"recorded": 0, "settled": 0, "unsettled": 0, "max_final_velocity_m_s": None},
         "controller": {"success": 0, "failure": 0},
         "evaluator": {"true": 0, "false": 0, "null": 0, "error": 0},
+        "grasp_search": {"records": 0, "triggers": {}, "statuses": {}},
+        "micro_corrections": {"records": 0, "triggers": {}, "statuses": {}},
     }
+
+    def add_policy_events(name: str, events: Any) -> None:
+        if not isinstance(events, list):
+            return
+        bucket = result[name]
+        bucket["records"] += len(events)
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            # Different controller phases use ``trigger`` and ``reason``;
+            # retain both as observed labels without imposing semantics here.
+            trigger = event.get("trigger", event.get("reason"))
+            status = event.get("status", event.get("outcome"))
+            if trigger is not None:
+                key = str(trigger)
+                bucket["triggers"][key] = bucket["triggers"].get(key, 0) + 1
+            if status is not None:
+                key = str(status)
+                bucket["statuses"][key] = bucket["statuses"].get(key, 0) + 1
+
     for record in records:
         settle = record.get("settle_diagnostics")
         if isinstance(settle, Mapping):
@@ -800,6 +885,14 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
             partial_audit = record.get("partial_audit")
             audit = partial_audit if isinstance(partial_audit, Mapping) else None
         if isinstance(audit, Mapping):
+            add_policy_events(
+                "grasp_search",
+                audit.get("grasp_search", record.get("grasp_search", [])),
+            )
+            add_policy_events(
+                "micro_corrections",
+                audit.get("micro_corrections", record.get("micro_corrections", [])),
+            )
             contract = audit.get("capture_contract")
             if isinstance(contract, Mapping) and contract.get("valid") is True:
                 result["capture"]["valid"] += 1
@@ -829,6 +922,11 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
                     result["depth"]["failure"] += 1
             else:
                 result["depth"]["failure"] += 1
+        else:
+            # Early/controller failures may only have a partial audit or the
+            # flattened record fields populated by the matrix finally block.
+            add_policy_events("grasp_search", record.get("grasp_search", []))
+            add_policy_events("micro_corrections", record.get("micro_corrections", []))
         failure_class = _record_failure_class(record)
         if failure_class == "controller_failure":
             result["controller"]["failure"] += 1
@@ -892,6 +990,7 @@ def run_matrix(
     resolution: int = DEFAULT_RESOLUTION,
     suite_mode: str = DEFAULT_SUITE_MODE,
     controller_variant: str = DEFAULT_CONTROLLER_VARIANT,
+    controller_config: str | Path | None = None,
     dry_run: bool = False,
     execute_motion: bool = False,
     allow_unvalidated_profile: bool = False,
@@ -905,7 +1004,13 @@ def run_matrix(
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
     suite_mode = parse_suite_mode(suite_mode)
-    controller_variant = parse_controller_variant(controller_variant)
+    controller_variant, resolved_controller, controller_config_provenance = (
+        _resolve_controller_selection(
+            controller_variant=controller_variant,
+            controller_config=controller_config,
+            suite_mode=suite_mode,
+        )
+    )
     cells = plan_cells(
         task_ids=task_ids,
         episodes_per_task=episodes_per_task,
@@ -915,6 +1020,13 @@ def run_matrix(
         suite_mode=suite_mode,
         controller_variant=controller_variant,
     )
+    if controller_config_provenance is not None:
+        # The config was already resolved once above.  Attach its immutable
+        # identity to each planned cell without reloading the file or mixing
+        # the resolved v9 label with the legacy selector contract.
+        for cell in cells:
+            cell["controller_config_path"] = controller_config_provenance["path"]
+            cell["controller_config_hash"] = controller_config_provenance["config_hash"]
     validate_motion_authorization(
         cells,
         execute_motion=execute_motion,
@@ -975,6 +1087,7 @@ def run_matrix(
         continue_on_motion_failure=continue_on_motion_failure,
         suite_mode=suite_mode,
         controller_variant=controller_variant,
+        controller_config=controller_config_provenance,
         init_state_preflight=init_state_preflight,
     )
     protocol["source_hashes"] = _source_file_hashes()
@@ -985,6 +1098,7 @@ def run_matrix(
         "episode_runner": "run_arrow_pick_place_eval.run_episode",
         "suite_mode": suite_mode,
         "controller_variant": controller_variant,
+        "controller_config": controller_config_provenance,
         "condition_label": f"{suite_mode}__{controller_variant}",
         "generated_unix": time.time(),
         "git": _git_provenance(),
@@ -992,6 +1106,11 @@ def run_matrix(
         "platform": platform.platform(),
         "dependency_versions": _dependency_versions(),
     }
+    resolved_runtime_provenance = (
+        resolved_controller.provenance()
+        if controller_config_provenance is not None and resolved_controller is not None
+        else None
+    )
     planned_records = [_planned_record(cell) for cell in cells]
     if not resume and any(path.exists() for path in (manifest_json_path, manifest_path, status_path, summary_path)):
         raise FileExistsError(
@@ -1162,7 +1281,7 @@ def run_matrix(
             init_state_diagnostics: Mapping[str, Any] | None = None
             settle_diagnostics: Mapping[str, Any] | None = None
             inputs: dict[str, Any] | None = None
-            early_runtime_diagnostics: dict[str, dict[str, Any]] = {}
+            early_runtime_diagnostics: dict[str, Any] = {}
             cell_exception: BaseException | None = None
             close_exception: BaseException | None = None
             close_succeeded = False
@@ -1192,6 +1311,12 @@ def run_matrix(
                 "provenance": provenance,
                 "contract_hash": contract_hash,
             })
+            if resolved_runtime_provenance is not None:
+                # Persist the exact validated runtime selection before env
+                # construction or motion, so failure records retain what was
+                # actually dispatched to both builder and episode runner.
+                running_record["controller_config"] = controller_config_provenance
+                running_record["controller_config_observed"] = resolved_runtime_provenance
             status_records[cell_index] = running_record
             write_status()
             def motion_started_callback() -> None:
@@ -1209,7 +1334,14 @@ def run_matrix(
                 env = _call_with_optional_keywords(
                     build_env,
                     (int(cell["task_id"]), int(cell["seed"]), int(resolution)),
-                    {"suite_mode": suite_mode},
+                    {
+                        "suite_mode": suite_mode,
+                        "controller_variant": (
+                            resolved_controller
+                            if resolved_controller is not None
+                            else controller_variant
+                        ),
+                    },
                 )
                 candidate_init_diagnostics = getattr(env, "_arrow_init_state_diagnostics", None)
                 if isinstance(candidate_init_diagnostics, Mapping):
@@ -1251,7 +1383,11 @@ def run_matrix(
                         "resolution": int(resolution),
                         "allow_unvalidated_profile": bool(allow_unvalidated_profile),
                         "suite_mode": suite_mode,
-                        "controller_variant": controller_variant,
+                        "controller_variant": (
+                            resolved_controller
+                            if resolved_controller is not None
+                            else controller_variant
+                        ),
                         **inputs,
                     }
                     accepted_runner_keywords = _accepted_optional_keywords(run_episode)
@@ -1296,6 +1432,10 @@ def run_matrix(
                         "phase_frames": audit.get("phase_frames", []),
                         "phases": audit.get("phases", []),
                         "evaluator_result": None if dry_run else audit.get("evaluator_success"),
+                        "grasp_search": audit.get("grasp_search", []),
+                        "micro_corrections": audit.get("micro_corrections", []),
+                        "controller_config": controller_config_provenance,
+                        "controller_config_observed": audit.get("controller_variant"),
                     })
                 except BaseException as exc:
                     cell_exception = exc
@@ -1424,8 +1564,31 @@ def run_matrix(
             if isinstance(cell_record.get("recovery"), list):
                 cell_record.setdefault("diagnostics", {})["recovery"] = cell_record["recovery"]
             _attach_early_runtime_diagnostics(cell_record, early_runtime_diagnostics)
+            # Promote the new list-valued audits to stable matrix fields even
+            # when the episode returned a final audit before cleanup, or
+            # raised after publishing only environment-side diagnostics.
+            for field in ("grasp_search", "micro_corrections"):
+                value = None
+                audit_value = cell_record.get("audit")
+                if isinstance(audit_value, Mapping) and isinstance(audit_value.get(field), list):
+                    value = audit_value[field]
+                elif isinstance(early_runtime_diagnostics.get(field), list):
+                    value = early_runtime_diagnostics[field]
+                if value is not None:
+                    cell_record[field] = value
+                    cell_record.setdefault("diagnostics", {})[field] = value
             cell_record["protocol"] = protocol
             cell_record["provenance"] = provenance
+            if controller_config_provenance is not None:
+                cell_record.setdefault("controller_config", controller_config_provenance)
+                cell_record.setdefault(
+                    "controller_config_observed", resolved_runtime_provenance
+                )
+                observed_audit = cell_record.get("audit")
+                if isinstance(observed_audit, Mapping):
+                    cell_record["controller_config_observed"] = observed_audit.get(
+                        "controller_variant", cell_record.get("controller_config_observed")
+                    )
             cell_record["contract_hash"] = contract_hash
             status_records[cell_index] = cell_record
             records.append(cell_record)
@@ -1466,6 +1629,7 @@ def run_matrix(
         "schema_version": MATRIX_SCHEMA_VERSION,
         "suite_mode": suite_mode,
         "controller_variant": controller_variant,
+        "controller_config": controller_config_provenance,
         "condition_label": f"{suite_mode}__{controller_variant}",
         "protocol": protocol,
         "provenance": provenance,
@@ -1549,6 +1713,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_CONTROLLER_VARIANT,
         help="stable controller implementation label recorded in outputs",
     )
+    parser.add_argument(
+        "--controller-config",
+        default=None,
+        help="expanded JSON controller config; mutually exclusive with a non-default variant",
+    )
     parser.add_argument("--output-root", type=Path, default=Path("arrow_pick_place_matrix_outputs"))
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="run the pipeline without motion")
@@ -1586,6 +1755,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         resolution=args.resolution,
         suite_mode=args.suite_mode,
         controller_variant=args.controller_variant,
+        controller_config=args.controller_config,
         dry_run=args.dry_run,
         execute_motion=args.execute_motion,
         allow_unvalidated_profile=args.allow_unvalidated_profile,
