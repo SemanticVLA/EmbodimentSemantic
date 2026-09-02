@@ -1955,6 +1955,30 @@ def build_libero_env(
         removals = list(TASK_REMOVE_CONFIG.get(int(task_id), []))
         bddl_file = make_filtered_bddl(canonical_bddl_file, removals)
     np.random.seed(seed)
+    # MuJoCo/robosuite owns a process-global offscreen rendering context.  Do
+    # not construct the canonical schema env after the live filtered env: its
+    # close() can tear down or reuse the live renderer, yielding black RGB and
+    # uninitialized depth only in the sealed condition.  Extract the canonical
+    # joint schema first, then close it before creating the env that will render.
+    canonical_source_schema = None
+    if suite_mode == "sealed_randomized":
+        canonical_schema_env = None
+        try:
+            from bddl_utils import extract_joint_schema
+
+            canonical_schema_env = OffScreenRenderEnv(
+                bddl_file_name=canonical_bddl_file,
+                camera_names=[CAMERA_NAME],
+                camera_heights=int(resolution),
+                camera_widths=int(resolution),
+                camera_depths=True,
+                controller=variant.controller,
+            )
+            canonical_schema_env.reset()
+            canonical_source_schema = extract_joint_schema(canonical_schema_env.sim.model)
+        finally:
+            if canonical_schema_env is not None:
+                _close_environment_quietly(canonical_schema_env)
     env = OffScreenRenderEnv(
         bddl_file_name=bddl_file,
         camera_names=[CAMERA_NAME],
@@ -2011,37 +2035,25 @@ def build_libero_env(
             selected_state = init_states[selected_index]
             projection = {"required": False, "projected": False, "source": "canonical_task_init_states"}
             if suite_mode == "sealed_randomized":
-                canonical_env = None
-                try:
-                    canonical_env = OffScreenRenderEnv(
-                        bddl_file_name=canonical_bddl_file,
-                        camera_names=[CAMERA_NAME],
-                        camera_heights=int(resolution),
-                        camera_widths=int(resolution),
-                        camera_depths=True,
-                        controller=variant.controller,
-                    )
-                    canonical_env.reset()
-                    from bddl_utils import extract_joint_schema, project_init_states_by_joint_name
+                from bddl_utils import extract_joint_schema, project_init_states_by_joint_name
 
-                    source_schema = extract_joint_schema(canonical_env.sim.model)
-                    target_schema = extract_joint_schema(env.sim.model)
-                    projected_states = project_init_states_by_joint_name(
-                        np.asarray(init_states), source_schema, target_schema
-                    )
-                    selected_state = projected_states[selected_index]
-                    projection = {
-                        "required": True,
-                        "projected": True,
-                        "source": "bddl_utils.project_init_states_by_joint_name",
-                        "canonical_nq": source_schema.nq,
-                        "filtered_nq": target_schema.nq,
-                        "canonical_nv": source_schema.nv,
-                        "filtered_nv": target_schema.nv,
-                    }
-                finally:
-                    if canonical_env is not None:
-                        _close_environment_quietly(canonical_env)
+                if canonical_source_schema is None:
+                    raise RuntimeError("canonical init-state schema was not prepared")
+                source_schema = canonical_source_schema
+                target_schema = extract_joint_schema(env.sim.model)
+                projected_states = project_init_states_by_joint_name(
+                    np.asarray(init_states), source_schema, target_schema
+                )
+                selected_state = projected_states[selected_index]
+                projection = {
+                    "required": True,
+                    "projected": True,
+                    "source": "bddl_utils.project_init_states_by_joint_name",
+                    "canonical_nq": source_schema.nq,
+                    "filtered_nq": target_schema.nq,
+                    "canonical_nv": source_schema.nv,
+                    "filtered_nv": target_schema.nv,
+                }
             env.set_init_state(selected_state)
             init_state_diagnostics.update({
                 "selected_index": int(selected_index),
