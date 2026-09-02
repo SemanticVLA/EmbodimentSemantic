@@ -90,7 +90,7 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
     text = SETUP.read_text(encoding="utf-8")
     for value in (
         PIN,
-        "7521c22e2921a0bd8e9285044c842ff6fa2042e0",
+        "779d9a110c708934b29bb4f21e8e776565fe30b6",
         "ae53057eaf36dab01aa2727fcc93a749fd995af5",
         "eb57dd2092d8dbe05312a29c3d0c22f3226efbfc",
         "torch==2.2.0",
@@ -104,6 +104,7 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
         "numpy_version",
         "build_toolchain",
         "existing runtime lock build_toolchain differs",
+        "existing runtime lock {key} differs",
         "NVCC_SHA256",
         "CC_SHA256",
         "CXX_SHA256",
@@ -117,6 +118,8 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
     assert "&& !/^dwconv[[:space:]]*@/" in text
     assert 'DWCONV_URL="git+https://github.com/octree-nn/dwconv.git"' in text
     assert 'OCNN_URL="git+https://github.com/octree-nn/ocnn-pytorch.git"' in text
+    assert "v2.2.6 predates O-CNN's v2.3 Triton kernels" in text
+    assert '(("ocnn_commit", ocnn_pin), ("dwconv_commit", dwconv_pin), ("graspnetAPI_commit", graspnetapi_pin))' in text
     assert '"ocnn @ ${OCNN_URL}@${OCNN_PIN}"' in text
     assert '"dwconv @ ${DWCONV_URL}@${DWCONV_PIN}"' in text
     assert "--no-build-isolation --no-deps" in text

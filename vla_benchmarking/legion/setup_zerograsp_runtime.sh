@@ -11,7 +11,9 @@ readonly ZERO_GRASP_CHECKPOINT_URL="https://drive.google.com/file/d/1xUmFdgT_Ozu
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly BOOTSTRAP="${SCRIPT_DIR}/bootstrap_zerograsp.sh"
 readonly OCNN_URL="git+https://github.com/octree-nn/ocnn-pytorch.git"
-readonly OCNN_PIN="7521c22e2921a0bd8e9285044c842ff6fa2042e0"
+# v2.2.6 predates O-CNN's v2.3 Triton kernels and is compatible with the
+# official ZeroGrasp Torch 2.2.0 / Triton 2.2.0 environment.
+readonly OCNN_PIN="779d9a110c708934b29bb4f21e8e776565fe30b6"
 readonly DWCONV_URL="git+https://github.com/octree-nn/dwconv.git"
 readonly DWCONV_PIN="ae53057eaf36dab01aa2727fcc93a749fd995af5"
 readonly GRASPNETAPI_PIN="eb57dd2092d8dbe05312a29c3d0c22f3226efbfc"
@@ -163,15 +165,19 @@ if [[ -f "$LOCK" ]]; then
   [[ -n "$CUDA_HOME_CANONICAL" && -n "$NVCC_CANONICAL" && -n "$CC_CANONICAL" && -n "$CXX_CANONICAL" ]] || die 'existing runtime lock verification requires the pinned CUDA and host compiler toolchain'
   [[ -n "$CUDA_MODULE_ID" && -n "$HOST_COMPILER_MODULE_ID" ]] || die 'existing runtime lock verification requires explicit compiler module identities'
   "$PYTHON" - "$LOCK" "$VENV" "$PYTHON" "$PYTHON_SHA256" "$CHECKPOINT_SHA" "$CONFIG_SHA" "$ZERO_GRASP_PIN" "$SUBMODULE_REVISION" "$PYTHON_VERSION" \
+    "$OCNN_PIN" "$DWCONV_PIN" "$GRASPNETAPI_PIN" \
     "$CUDA_MODULE_ID" "$HOST_COMPILER_MODULE_ID" "$CUDA_HOME_CANONICAL" "$NVCC_CANONICAL" "$NVCC_VERSION" "$NVCC_SHA256" \
     "$CC_CANONICAL" "$CC_VERSION" "$CC_SHA256" "$CXX_CANONICAL" "$CXX_VERSION" "$CXX_SHA256" "$CUDAHOSTCXX_CANONICAL" <<'PY'
 import json, pathlib, subprocess, sys
-path, venv, python, python_sha, checkpoint_sha, config_sha, revision, submodule_revision, python_version, cuda_module, host_module, cuda_home, nvcc, nvcc_version, nvcc_sha, cc, cc_version, cc_sha, cxx, cxx_version, cxx_sha, cuda_host_cxx = sys.argv[1:]
+path, venv, python, python_sha, checkpoint_sha, config_sha, revision, submodule_revision, python_version, ocnn_pin, dwconv_pin, graspnetapi_pin, cuda_module, host_module, cuda_home, nvcc, nvcc_version, nvcc_sha, cc, cc_version, cc_sha, cxx, cxx_version, cxx_sha, cuda_host_cxx = sys.argv[1:]
 try:
     data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
 except Exception as exc:
     raise SystemExit(f"invalid existing runtime lock: {exc}")
 for key, expected in (("venv", pathlib.Path(venv).resolve().as_posix()), ("python", pathlib.Path(python).resolve().as_posix()), ("python_executable_sha256", python_sha), ("checkpoint_sha256", checkpoint_sha), ("config_sha256", config_sha), ("official_revision", revision), ("octree_feature_extractor_revision", submodule_revision), ("python_version", python_version)):
+    if data.get(key) != expected:
+        raise SystemExit(f"existing runtime lock {key} differs")
+for key, expected in (("ocnn_commit", ocnn_pin), ("dwconv_commit", dwconv_pin), ("graspnetAPI_commit", graspnetapi_pin)):
     if data.get(key) != expected:
         raise SystemExit(f"existing runtime lock {key} differs")
 expected_toolchain = {
@@ -309,7 +315,7 @@ data = {
     },
     "gpu": gpu,
     "torch": {"version": "2.2.0", "torchvision": "0.17.0", "cuda": "12.1"},
-    "ocnn_commit": "7521c22e2921a0bd8e9285044c842ff6fa2042e0",
+    "ocnn_commit": "779d9a110c708934b29bb4f21e8e776565fe30b6",
     "dwconv_commit": "ae53057eaf36dab01aa2727fcc93a749fd995af5",
     "graspnetAPI_commit": "eb57dd2092d8dbe05312a29c3d0c22f3226efbfc",
     "checkpoint_url": "https://drive.google.com/file/d/1xUmFdgT_Ozu4zIPIsh_1SJMcegeQUWqQ/view?usp=sharing",

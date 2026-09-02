@@ -241,8 +241,10 @@ That job loads the pinned `nvhpc-nompi/25.1` CUDA compiler module,
 `gcc/11.5.0` host compiler, and `miniforge/24.3.0-0`; it explicitly pins
 `CC`, `CXX`, and `CUDAHOSTCXX` before creating a persistent Python 3.11 venv
 outside the checkout, installs the official CUDA 12.1 stack (Torch 2.2.0,
-torchvision 0.17.0, PyG wheels, xformers 0.0.24), the pinned current
-`ocnn`/`dwconv`/`graspnetAPI` refs, and the octree submodule. The upstream
+torchvision 0.17.0, PyG wheels, xformers 0.0.24), pinned
+`dwconv`/`graspnetAPI` refs, O-CNN `v2.2.6`, and the octree submodule. O-CNN is
+pinned before its `v2.3` Triton-kernel transition because that newer line is
+incompatible with ZeroGrasp's Torch 2.2.0 / Triton 2.2.0 runtime. The upstream
 requirements leave `ocnn` floating, so the setup fails closed unless the
 script's reviewed immutable ref is used. The upstream `dwconv` VCS requirement
 is likewise filtered and installed at its pinned ref after Torch with build
