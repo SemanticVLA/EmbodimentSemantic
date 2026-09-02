@@ -581,6 +581,53 @@ def test_settle_diagnostics_are_retained_for_environment_failures(matrix, tmp_pa
     }
 
 
+def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
+    matrix, tmp_path: Path
+):
+    class Env:
+        _arrow_capture_contract = {
+            "valid": True,
+            "camera_name": "agentview",
+            "rgb_shape": [256, 256, 3],
+        }
+        _arrow_depth_sanitization_policy = {
+            "status": "rejected",
+            "rejection_reason": "invalid metric depth at arrow endpoint",
+        }
+
+        def close(self):
+            pass
+
+    def episode_runner(**kwargs):
+        raise RuntimeError(
+            "refusing motion: normalized depth sanitization policy rejected capture"
+        )
+
+    summary = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[0],
+        episodes_per_task=1,
+        dry_run=False,
+        execute_motion=True,
+        allow_unvalidated_profile=True,
+        env_builder=lambda task_id, seed, resolution: Env(),
+        episode_runner=episode_runner,
+        arrow_input_builder=lambda env, task_id, resolution: {},
+    )
+    assert summary["failure_by_class"] == {"input_failure": 1}
+    record = json.loads(
+        (tmp_path / matrix.MANIFEST_JSONL_FILENAME).read_text(encoding="utf-8").splitlines()[0]
+    )
+    expected_capture = Env._arrow_capture_contract
+    expected_policy = Env._arrow_depth_sanitization_policy
+    assert record["capture_contract"] == expected_capture
+    assert record["depth_sanitization_policy"] == expected_policy
+    assert record["diagnostics"]["capture_contract"] == expected_capture
+    assert record["diagnostics"]["depth_sanitization_policy"] == expected_policy
+    assert record["audit"]["capture_contract"] == expected_capture
+    assert record["audit"]["depth_sanitization_policy"] == expected_policy
+
+
 def test_timeout_phase_is_included_in_phase_aggregates(matrix):
     records = [
         {

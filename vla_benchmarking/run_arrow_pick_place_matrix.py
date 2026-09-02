@@ -460,6 +460,8 @@ def _error_record(
         "error_traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         "audit_path": None,
         "audit": None,
+        "capture_contract": None,
+        "depth_sanitization_policy": None,
         "frames": [],
         "phase_frames": [],
         "phases": [],
@@ -469,6 +471,7 @@ def _error_record(
             "phase_frames": [],
             "phases": [],
             "capture_contract": None,
+            "depth_sanitization_policy": None,
             "endpoint_depths_m": None,
             "deprojected_visual_endpoint_world_points_m": None,
             "control_targets_world_m": None,
@@ -491,6 +494,7 @@ def _audit_diagnostics(audit: Mapping[str, Any]) -> dict[str, Any]:
         "phase_frames": audit.get("phase_frames", []),
         "phases": audit.get("phases", []),
         "capture_contract": audit.get("capture_contract"),
+        "depth_sanitization_policy": audit.get("depth_sanitization_policy"),
         "endpoint_depths_m": audit.get("endpoint_depths_m"),
         "deprojected_visual_endpoint_world_points_m": audit.get(
             "deprojected_visual_endpoint_world_points_m"
@@ -500,6 +504,49 @@ def _audit_diagnostics(audit: Mapping[str, Any]) -> dict[str, Any]:
         "recovery": audit.get("recovery", []),
         "evaluator_result": audit.get("evaluator_success"),
     }
+
+
+def _early_runtime_diagnostics(env: Any) -> dict[str, dict[str, Any]]:
+    """Copy diagnostics published before an episode can return an audit.
+
+    ``run_episode`` intentionally publishes these on the environment before
+    deprojection/motion.  An input-policy rejection can therefore retain the
+    exact capture evidence even though no final audit object was produced.
+    """
+    if env is None:
+        return {}
+    diagnostics: dict[str, dict[str, Any]] = {}
+    for attribute, field in (
+        ("_arrow_capture_contract", "capture_contract"),
+        ("_arrow_depth_sanitization_policy", "depth_sanitization_policy"),
+    ):
+        try:
+            value = getattr(env, attribute, None)
+        except Exception:
+            continue
+        if isinstance(value, Mapping):
+            diagnostics[field] = dict(value)
+    return diagnostics
+
+
+def _attach_early_runtime_diagnostics(
+    cell_record: dict[str, Any], observed: Mapping[str, Mapping[str, Any]]
+) -> None:
+    """Retain environment-published input evidence on failed cell records."""
+    if not observed:
+        return
+    audit = cell_record.get("audit")
+    if not isinstance(audit, Mapping):
+        # This is a deliberately partial audit: the runner failed before its
+        # normal final audit could be assembled.  Keeping the fields under
+        # ``audit`` makes downstream flattening consistent with success rows.
+        audit = {}
+        cell_record["audit"] = audit
+    for field, value in observed.items():
+        copied = dict(value)
+        cell_record[field] = copied
+        audit[field] = copied
+        cell_record.setdefault("diagnostics", {})[field] = copied
 
 
 def _partition_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1022,6 +1069,7 @@ def run_matrix(
             init_state_diagnostics: Mapping[str, Any] | None = None
             settle_diagnostics: Mapping[str, Any] | None = None
             inputs: dict[str, Any] | None = None
+            early_runtime_diagnostics: dict[str, dict[str, Any]] = {}
             cell_exception: BaseException | None = None
             close_exception: BaseException | None = None
             close_succeeded = False
@@ -1164,6 +1212,7 @@ def run_matrix(
             finally:
                 # Sample motion before close: real wrappers may clear action
                 # buffers or detach simulator state during cleanup.
+                early_runtime_diagnostics = _early_runtime_diagnostics(env)
                 motion_began = _motion_began(
                     env, cell_record.get("audit") if cell_record is not None else None
                 )
@@ -1281,6 +1330,7 @@ def run_matrix(
                 cell_record["diagnostics"]["phase_frames"] = cell_record["phase_frames"]
             if isinstance(cell_record.get("recovery"), list):
                 cell_record.setdefault("diagnostics", {})["recovery"] = cell_record["recovery"]
+            _attach_early_runtime_diagnostics(cell_record, early_runtime_diagnostics)
             cell_record["protocol"] = protocol
             cell_record["provenance"] = provenance
             cell_record["contract_hash"] = contract_hash
