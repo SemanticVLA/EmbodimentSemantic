@@ -247,6 +247,11 @@ class CapturedRGBD:
     observation: Mapping[str, Any] | None = None
     depth_conversion_mode: str = "unknown"
 
+    @property
+    def raw_depth(self) -> np.ndarray:
+        """Depth pixels exactly as produced by the RGB-D capture source."""
+        return self.normalized_depth
+
 
 def _require(function: Callable[..., Any] | None, name: str) -> Callable[..., Any]:
     if function is None:
@@ -332,16 +337,52 @@ def _raw_observation(env: Any) -> Mapping[str, Any] | None:
     return None
 
 
-def _render_pair(
+def _declared_depth_encoding(env: Any, *, source: str, camera_name: str) -> str:
+    """Resolve an explicit producer declaration; never infer units by magnitude."""
+    for owner in (env, getattr(env, "env", None)):
+        if owner is None:
+            continue
+        for name in ("_arrow_depth_encoding", "depth_encoding", "depth_units"):
+            declared = getattr(owner, name, None)
+            if declared is not None:
+                value = str(declared).lower()
+                if value in {"normalized", "metric"}:
+                    return value
+                raise ValueError(f"unsupported {camera_name} depth encoding {declared!r}")
+    # These are the only implicit producer contracts accepted by the direct
+    # runner.  Other fakes/wrappers must declare their units explicitly.
+    owners = (env, getattr(env, "env", None))
+    if source == "observation" and any(
+        owner is not None and (
+            owner.__class__.__module__.startswith("robosuite")
+            or owner.__class__.__name__ in {"OffScreenRenderEnv", "ControlEnv"}
+        )
+        for owner in owners
+    ):
+        return "normalized"
+    if source == "render" and any(
+        owner is not None and owner.__class__.__module__.startswith("robosuite")
+        for owner in owners
+    ):
+        return "metric"
+    raise ValueError(
+        f"depth producer for {camera_name} is unknown; declare depth_encoding="
+        "'normalized' or 'metric'"
+    )
+
+
+def _render_pair_with_encoding(
     env: Any, camera_name: str, width: int, height: int
-) -> tuple[Any, Any, Mapping[str, Any] | None]:
-    """Return RGB and normalized depth from one aligned render operation."""
+) -> tuple[Any, Any, Mapping[str, Any] | None, str]:
+    """Return one aligned RGB/depth pair plus explicit producer units."""
     render = getattr(env, "render", None)
     if render is not None:
         try:
             result = render(camera_name=camera_name, width=width, height=height, depth=True)
             if isinstance(result, tuple) and len(result) >= 2:
-                return result[0], result[1], None
+                return result[0], result[1], None, _declared_depth_encoding(
+                    env, source="render", camera_name=camera_name
+                )
         except (TypeError, NotImplementedError):
             pass
 
@@ -350,11 +391,23 @@ def _render_pair(
         rgb = observation.get(f"{camera_name}_image")
         depth = observation.get(f"{camera_name}_depth")
         if rgb is not None and depth is not None:
-            return rgb, depth, observation
+            return rgb, depth, observation, _declared_depth_encoding(
+                env, source="observation", camera_name=camera_name
+            )
     raise RuntimeError(
         f"could not capture aligned {camera_name} RGB+depth; "
         "construct LIBERO with camera_depths=True"
     )
+
+
+def _render_pair(
+    env: Any, camera_name: str, width: int, height: int
+) -> tuple[Any, Any, Mapping[str, Any] | None]:
+    """Backward-compatible three-value render seam; units are resolved internally."""
+    rgb, depth, observation, _encoding = _render_pair_with_encoding(
+        env, camera_name, width, height
+    )
+    return rgb, depth, observation
 
 
 def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int) -> CameraCalibration:
@@ -388,16 +441,21 @@ def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int
     )
 
 
-def normalized_depth_to_metric(sim: Any, normalized_depth: np.ndarray) -> np.ndarray:
-    """Convert normalized depth, accepting already-metric render outputs.
+def normalized_depth_to_metric(
+    sim: Any, depth: np.ndarray, *, encoding: str | None = None
+) -> np.ndarray:
+    """Convert depth under an explicit producer encoding contract.
 
-    Most robosuite paths expose depth normalized to ``[0, 1]`` and require
-    ``get_real_depth_map``.  Some sealed/randomized render paths return metric
-    metres directly (often values above one); applying the hook twice raises or
-    corrupts the geometry.  Positive finite values above one are therefore
-    preserved as metric depth, with alignment and positivity still checked.
+    ``encoding='normalized'`` delegates to robosuite's conversion hook;
+    ``encoding='metric'`` preserves metres exactly.  Unknown units fail closed
+    rather than being inferred from magnitude (metric depths can be below one,
+    and normalized frames can contain outliers).
     """
-    source = np.asarray(normalized_depth)
+    if encoding not in {"normalized", "metric"}:
+        raise ValueError(
+            "depth encoding is unknown; pass encoding='normalized' or encoding='metric'"
+        )
+    source = np.asarray(depth)
     if source.ndim == 3 and source.shape[-1] == 1:
         source = source[..., 0]
     if source.ndim != 2:
@@ -406,8 +464,7 @@ def normalized_depth_to_metric(sim: Any, normalized_depth: np.ndarray) -> np.nda
         raise ValueError("depth contains negative finite pixels")
     if not np.isfinite(source).any() or not np.isfinite(source[source > 0]).any():
         raise ValueError("depth contains no positive finite pixels")
-    already_metric = float(np.nanmax(source)) > 1.0
-    if already_metric:
+    if encoding == "metric":
         converted = source
     else:
         if camera_utils is None:
@@ -420,6 +477,8 @@ def normalized_depth_to_metric(sim: Any, normalized_depth: np.ndarray) -> np.nda
         raise ValueError(
             f"metric depth changed shape from {source.shape} to {metric.shape}"
         )
+    if np.any(np.isfinite(metric) & (metric < 0)):
+        raise ValueError("metric depth contains negative finite pixels")
     if not np.isfinite(metric).any() or not np.isfinite(metric[metric > 0]).any():
         raise ValueError("metric depth contains no positive finite pixels")
     return np.ascontiguousarray(metric)
@@ -434,7 +493,9 @@ def capture_agentview(
     """Capture exactly one aligned clean RGB + normalized/metric depth pair."""
     if resolution <= 0:
         raise ValueError("resolution must be positive")
-    rgb_raw, normalized_raw, observation = _render_pair(env, camera_name, resolution, resolution)
+    rgb_raw, normalized_raw, observation, depth_encoding = _render_pair_with_encoding(
+        env, camera_name, resolution, resolution
+    )
     rgb = _as_rgb(rgb_raw)
     normalized = _as_depth(normalized_raw, rgb.shape[:2])
     # ``render(depth=True)`` implementations may return only pixels.  A
@@ -447,8 +508,8 @@ def capture_agentview(
     if sim is None:
         raise RuntimeError("capture environment does not expose sim for calibration/depth conversion")
     calibration = build_camera_calibration(sim, camera_name, rgb.shape[1], rgb.shape[0])
-    metric = normalized_depth_to_metric(sim, normalized)
-    depth_mode = "already_metric_positive_out_of_range" if float(np.nanmax(normalized)) > 1.0 else "robosuite_get_real_depth_map"
+    metric = normalized_depth_to_metric(sim, normalized, encoding=depth_encoding)
+    depth_mode = depth_encoding
     return CapturedRGBD(
         rgb=rgb,
         normalized_depth=normalized,
@@ -978,15 +1039,28 @@ def _save_capture(capture: CapturedRGBD, arrow_rgb: np.ndarray, output_dir: Path
     output_dir.mkdir(parents=True, exist_ok=True)
     from PIL import Image
 
+    depth_mode = str(getattr(capture, "depth_conversion_mode", "unknown"))
+    if depth_mode == "normalized":
+        raw_depth_path = output_dir / "agentview_depth_normalized.npy"
+    elif depth_mode == "metric":
+        raw_depth_path = output_dir / "agentview_depth_metric_input_m.npy"
+    else:
+        raw_depth_path = output_dir / "agentview_depth_unknown_input.npy"
     paths = {
         "clean_rgb": output_dir / "clean_agentview.png",
         "arrow_rgb": output_dir / "one_arrow_agentview.png",
-        "normalized_depth": output_dir / "agentview_depth_normalized.npy",
+        "depth_input": raw_depth_path,
         "metric_depth": output_dir / "agentview_depth_metric_m.npy",
     }
+    # Keep the historical normalized_depth path only for genuinely normalized
+    # producer data; metric input is never mislabeled as normalized.
+    if depth_mode == "normalized":
+        paths["normalized_depth"] = raw_depth_path
+    elif depth_mode == "metric":
+        paths["metric_depth_input"] = raw_depth_path
     Image.fromarray(capture.rgb).save(paths["clean_rgb"])
     Image.fromarray(_as_rgb(arrow_rgb)).save(paths["arrow_rgb"])
-    np.save(paths["normalized_depth"], capture.normalized_depth)
+    np.save(paths["depth_input"], capture.raw_depth)
     np.save(paths["metric_depth"], capture.metric_depth)
     return {name: path.as_posix() for name, path in paths.items()}
 

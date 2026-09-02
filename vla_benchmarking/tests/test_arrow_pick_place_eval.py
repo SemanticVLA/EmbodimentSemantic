@@ -54,6 +54,7 @@ class _Sim:
 
 class _Env:
     sim = _Sim()
+    depth_encoding = "normalized"
 
     def __init__(self):
         self.render_calls = []
@@ -124,6 +125,7 @@ def test_metric_depth_conversion_delegates_to_robosuite_hook(runner, monkeypatch
         ("normalized_depth_to_metric", "metric_depth", "convert_depth_to_metric"),
         _Sim(),
         normalized,
+        encoding="normalized",
     )
     np.testing.assert_allclose(converted, [[0.5]])
     assert calls and calls[0][1] is normalized
@@ -139,21 +141,46 @@ def test_metric_depth_conversion_preserves_already_metric_render(runner, monkeyp
             raise AssertionError("metric render must not be converted twice")
 
     monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
-    source = np.asarray([[1.25, 2.0]], dtype=np.float32)
-    converted = runner.normalized_depth_to_metric(_Sim(), source)
+    source = np.asarray([[0.25, 0.75]], dtype=np.float32)
+    converted = runner.normalized_depth_to_metric(_Sim(), source, encoding="metric")
     np.testing.assert_array_equal(converted, source)
     assert calls == []
 
 
+def test_depth_encoding_unknown_fails_closed_and_outlier_does_not_select_units(
+    runner, monkeypatch
+):
+    with pytest.raises(ValueError, match="encoding is unknown"):
+        runner.normalized_depth_to_metric(_Sim(), np.asarray([[0.5]], dtype=np.float32))
+
+    calls = []
+
+    class _CameraUtils:
+        @staticmethod
+        def get_real_depth_map(sim, depth):
+            calls.append(np.asarray(depth).copy())
+            return np.asarray(depth, dtype=np.float32) * 2.0
+
+    monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
+    normalized_with_outlier = np.asarray([[0.99, 7.0]], dtype=np.float32)
+    converted = runner.normalized_depth_to_metric(
+        _Sim(), normalized_with_outlier, encoding="normalized"
+    )
+    np.testing.assert_allclose(converted, normalized_with_outlier * 2.0)
+    assert len(calls) == 1
+
+
 def test_metric_depth_conversion_rejects_negative_or_empty_depth(runner, monkeypatch):
     with pytest.raises(ValueError, match="negative finite"):
-        runner.normalized_depth_to_metric(_Sim(), np.asarray([[-1.0]], dtype=np.float32))
+        runner.normalized_depth_to_metric(_Sim(), np.asarray([[-1.0]], dtype=np.float32), encoding="metric")
     with pytest.raises(ValueError, match="no positive finite"):
-        runner.normalized_depth_to_metric(_Sim(), np.zeros((1, 1), dtype=np.float32))
+        runner.normalized_depth_to_metric(_Sim(), np.zeros((1, 1), dtype=np.float32), encoding="metric")
 
 
 def test_capture_audits_already_metric_depth_mode(runner, monkeypatch):
     class _MetricEnv(_Env):
+        depth_encoding = "metric"
+
         def render(self, camera_name, width, height, depth=False):
             self.render_calls.append((camera_name, width, height, depth))
             return (
@@ -176,7 +203,7 @@ def test_capture_audits_already_metric_depth_mode(runner, monkeypatch):
 
     monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
     capture = runner.capture_agentview(_MetricEnv(), resolution=8)
-    assert capture.depth_conversion_mode == "already_metric_positive_out_of_range"
+    assert capture.depth_conversion_mode == "metric"
     np.testing.assert_array_equal(capture.metric_depth, 2.5)
 
 
@@ -619,6 +646,8 @@ def test_phase_snapshot_callback_runs_once_per_executed_phase_and_not_dry_run(ru
 
 def test_phase_snapshot_falls_back_to_no_render_observation(runner, tmp_path: Path):
     class _ObservationOnlyEnv:
+        depth_encoding = "normalized"
+
         def _get_observations(self, force_update=True):
             return {
                 "agentview_image": np.full((8, 8, 3), 17, dtype=np.uint8),
