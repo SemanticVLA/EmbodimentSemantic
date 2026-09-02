@@ -364,6 +364,29 @@ def _default_arrow_inputs(env: Any, task_id: int, resolution: int) -> dict[str, 
         task_id=int(task_id),
     )
     context = generator.observe_visual_graph(context_env, camera=CAMERA_NAME)
+    # Keep input-generation provenance on the per-cell environment for
+    # diagnostics.  This data never crosses the controller boundary: only the
+    # rendered one-arrow image is passed to run_episode.
+    try:
+        setattr(env, "_arrow_input_context", {
+            "camera": CAMERA_NAME,
+            "subject": SCENE_GRAPH_SUBJECT_FILTER,
+            "goal_object": TASK_GOAL_OBJECT_CONFIG.get(
+                int(task_id), _episode_module.DEFAULT_GOAL_OBJECT
+            ),
+            "bboxes": {
+                str(name): [float(value) for value in bbox]
+                for name, bbox in context.get("bboxes", {}).items()
+            },
+            "relations": [
+                [str(part) for part in relation]
+                for relation in context.get("relations", [])
+            ],
+        })
+    except Exception:
+        # Provenance must never make the controller path fail; the renderer's
+        # normal input validation remains authoritative.
+        pass
     return {
         "bboxes": context["bboxes"],
         "goal_object": TASK_GOAL_OBJECT_CONFIG.get(int(task_id), _episode_module.DEFAULT_GOAL_OBJECT),
@@ -530,6 +553,10 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, dict[str, Any]]:
     for attribute, field in (
         ("_arrow_capture_contract", "capture_contract"),
         ("_arrow_depth_sanitization_policy", "depth_sanitization_policy"),
+        ("_arrow_input_context", "input_context"),
+        ("_arrow_input_arrow_audit", "input_arrow_audit"),
+        ("_arrow_endpoints_uv", "arrow_endpoints_uv"),
+        ("_arrow_decode_audit", "arrow_decode_audit"),
         ("_arrow_endpoint_depths_m", "endpoint_depths_m"),
         ("_arrow_endpoint_depth_statistics", "endpoint_depth_statistics"),
         (

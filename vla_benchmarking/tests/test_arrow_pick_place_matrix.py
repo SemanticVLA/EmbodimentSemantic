@@ -590,6 +590,30 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
             "camera_name": "agentview",
             "rgb_shape": [256, 256, 3],
         }
+        _arrow_input_context = {
+            "camera": "agentview",
+            "subject": "akita_black_bowl_1",
+            "goal_object": "plate_1",
+            "bboxes": {
+                "akita_black_bowl_1": [10.0, 20.0, 30.0, 40.0],
+                "plate_1": [50.0, 60.0, 70.0, 80.0],
+            },
+            "relations": [["akita_black_bowl_1", "goal", "plate_1"]],
+        }
+        _arrow_input_arrow_audit = {
+            "relation_count": 1,
+            "relation": ["akita_black_bowl_1", "goal", "plate_1"],
+            "input_generation_only": True,
+        }
+        _arrow_endpoints_uv = {
+            "source_tail": [20.0, 30.0],
+            "destination_head": [60.0, 70.0],
+        }
+        _arrow_decode_audit = {
+            "source": "decode_arrow",
+            "success": True,
+            "changed_pixel_count": 123,
+        }
         _arrow_depth_sanitization_policy = {
             "status": "rejected",
             "rejection_reason": "invalid metric depth at arrow endpoint",
@@ -648,6 +672,16 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
     )
     expected_capture = Env._arrow_capture_contract
     expected_policy = Env._arrow_depth_sanitization_policy
+    expected_early_visual = {
+        "input_context": Env._arrow_input_context,
+        "input_arrow_audit": Env._arrow_input_arrow_audit,
+        "arrow_endpoints_uv": Env._arrow_endpoints_uv,
+        "arrow_decode_audit": Env._arrow_decode_audit,
+    }
+    for field, expected in expected_early_visual.items():
+        assert record[field] == expected
+        assert record["diagnostics"][field] == expected
+        assert record["partial_audit"][field] == expected
     assert record["capture_contract"] == expected_capture
     assert record["depth_sanitization_policy"] == expected_policy
     assert record["diagnostics"]["capture_contract"] == expected_capture

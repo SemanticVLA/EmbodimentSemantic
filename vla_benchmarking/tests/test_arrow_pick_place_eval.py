@@ -606,6 +606,12 @@ def test_partial_stop_skips_later_phases_and_evaluator(runner, monkeypatch, tmp_
     assert audit["capture_contract"]["valid"] is True
     assert env._arrow_capture_contract == audit["capture_contract"]
     assert env._arrow_depth_sanitization_policy["status"] == "not_applicable"
+    assert env._arrow_endpoints_uv == {
+        "source_tail": [8.0, 8.0],
+        "destination_head": [24.0, 24.0],
+    }
+    assert env._arrow_decode_audit["source"] == "decode_arrow"
+    assert env._arrow_input_arrow_audit["controller_input"] == "caller_supplied_one_arrow"
     assert audit["deprojected_visual_endpoint_world_points_m"] == {
         "source_tail": [0.0, 0.0, 1.0],
         "destination_head": [0.0, 0.0, 1.0],

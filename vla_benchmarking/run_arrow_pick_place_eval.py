@@ -1521,6 +1521,15 @@ def run_episode(
         except Exception as exc:
             # Diagnostics must not change the established decoder contract.
             arrow_decode_audit.update({"success": None, "error": str(exc)})
+    # Publish visual-input diagnostics immediately after decoding.  These are
+    # provenance only: the controller still receives clean RGB, one-arrow RGB,
+    # aligned metric depth, and calibration, never bboxes or scene-graph data.
+    setattr(env, "_arrow_endpoints_uv", {
+        "source_tail": np.asarray(source_uv, dtype=np.float64).tolist(),
+        "destination_head": np.asarray(target_uv, dtype=np.float64).tolist(),
+    })
+    setattr(env, "_arrow_decode_audit", dict(arrow_decode_audit))
+    setattr(env, "_arrow_input_arrow_audit", dict(arrow_audit))
     depth_sanitization_policy = assess_depth_sanitization_for_motion(
         capture, (source_uv, target_uv), max_mask_fraction=max_mask_fraction_for_motion
     )
