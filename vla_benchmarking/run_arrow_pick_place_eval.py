@@ -79,6 +79,7 @@ CANDIDATE_V4_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_cand
 CANDIDATE_V5_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_visible_anchor_v5"
 CANDIDATE_V6_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_directional_approach_v6"
 CANDIDATE_V7_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_patient_control_v7"
+CANDIDATE_V8_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_grasp_retry_v8"
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -161,6 +162,8 @@ ARROW_ANCHOR_POLICIES = ("bbox_center", "visible_inset")
 CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M = 0.04
 CANDIDATE_V7_PHASE_TIMEOUT_STEPS = 160
 CANDIDATE_V7_STALL_WINDOW_STEPS = 0
+CANDIDATE_V8_GRIPPER_CONTACT_THRESHOLD = 0.0015
+CANDIDATE_V8_GRASP_RETRY_OFFSETS_M = (-0.012, 0.012)
 CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
     "x": WORKSPACE_BOUNDS_M["x"],
     "y": WORKSPACE_BOUNDS_M["y"],
@@ -196,6 +199,8 @@ class ControllerVariantConfig:
     osc_position_scale_m: float | None = None
     arrow_anchor_policy: str = "bbox_center"
     approach_lateral_offset_m: float | None = None
+    grasp_contact_threshold: float | None = None
+    grasp_retry_offsets_m: Sequence[float] | None = None
     max_mask_fraction_for_motion: float | None = None
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None
 
@@ -228,6 +233,7 @@ class ControllerVariantConfig:
                 CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
                 CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
+                CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
             }:
                 raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
         if self.waypoint_tolerance_m is not None and (
@@ -264,6 +270,22 @@ class ControllerVariantConfig:
             raise ValueError("approach_lateral_offset_m must be in (0, 0.10]")
         if self.approach_lateral_offset_m is not None and self.name != CANDIDATE_V6_CONTROLLER_VARIANT_NAME:
             raise ValueError("directional approach offset is reserved for the v6 candidate controller variant")
+        if self.grasp_contact_threshold is not None and (
+            not np.isfinite(float(self.grasp_contact_threshold))
+            or float(self.grasp_contact_threshold) <= 0.0
+            or float(self.grasp_contact_threshold) > 0.01
+        ):
+            raise ValueError("grasp_contact_threshold must be in (0, 0.01]")
+        if self.grasp_contact_threshold is not None and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
+            raise ValueError("grasp contact detection is reserved for the v8 candidate controller variant")
+        if self.grasp_retry_offsets_m is not None:
+            offsets = tuple(float(value) for value in self.grasp_retry_offsets_m)
+            if len(offsets) > 3 or any(
+                not np.isfinite(value) or abs(value) > 0.03 for value in offsets
+            ):
+                raise ValueError("grasp_retry_offsets_m must contain at most three offsets within +/-0.03 m")
+        if self.grasp_retry_offsets_m is not None and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
+            raise ValueError("grasp retries are reserved for the v8 candidate controller variant")
         if self.max_mask_fraction_for_motion is not None and (
             not np.isfinite(float(self.max_mask_fraction_for_motion))
             or not 0.0 <= float(self.max_mask_fraction_for_motion) <= MAX_MASK_FRACTION_FOR_MOTION
@@ -306,6 +328,16 @@ class ControllerVariantConfig:
                 None
                 if self.approach_lateral_offset_m is None
                 else float(self.approach_lateral_offset_m)
+            ),
+            "grasp_contact_threshold": (
+                None
+                if self.grasp_contact_threshold is None
+                else float(self.grasp_contact_threshold)
+            ),
+            "grasp_retry_offsets_m": (
+                None
+                if self.grasp_retry_offsets_m is None
+                else [float(value) for value in self.grasp_retry_offsets_m]
             ),
             "max_mask_fraction_for_motion": (
                 None if self.max_mask_fraction_for_motion is None
@@ -363,6 +395,7 @@ def _resolve_controller_variant(
         CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
     }:
         endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
         endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
@@ -411,6 +444,16 @@ def _resolve_controller_variant(
         approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
     if name == CANDIDATE_V7_CONTROLLER_VARIANT_NAME:
         stall_window_steps = CANDIDATE_V7_STALL_WINDOW_STEPS
+    grasp_contact_threshold = None
+    grasp_retry_offsets_m = None
+    if name == CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
+        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
+        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
+        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
+        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
+        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
+        grasp_contact_threshold = CANDIDATE_V8_GRIPPER_CONTACT_THRESHOLD
+        grasp_retry_offsets_m = CANDIDATE_V8_GRASP_RETRY_OFFSETS_M
     return ControllerVariantConfig(
         name=name,
         suite_mode=suite_mode,
@@ -427,6 +470,8 @@ def _resolve_controller_variant(
         osc_position_scale_m=osc_position_scale_m,
         arrow_anchor_policy=arrow_anchor_policy,
         approach_lateral_offset_m=approach_lateral_offset_m,
+        grasp_contact_threshold=grasp_contact_threshold,
+        grasp_retry_offsets_m=grasp_retry_offsets_m,
         max_mask_fraction_for_motion=max_mask_fraction_for_motion,
         workspace_bounds_m=workspace_bounds_m,
     )
@@ -1184,6 +1229,20 @@ def _proprioception(observation: Mapping[str, Any] | None) -> dict[str, np.ndarr
                 result[output] = np.asarray(observation[key], dtype=np.float64)
                 break
     return result
+
+
+def _gripper_contact_likely(
+    phase_audit: Sequence[Mapping[str, Any]], threshold: float
+) -> bool:
+    """Use gripper proprioception only to detect a likely empty close."""
+    close = next(
+        (record for record in reversed(phase_audit) if record.get("phase") == "close"),
+        None,
+    )
+    if close is None or "gripper_qpos" not in close:
+        return False
+    qpos = np.asarray(close["gripper_qpos"], dtype=np.float64).reshape(-1)
+    return bool(qpos.size and np.isfinite(qpos).all() and np.max(np.abs(qpos)) <= float(threshold))
 
 
 def _position(waypoint: Any) -> np.ndarray:
@@ -1996,6 +2055,75 @@ def run_episode(
                 if recovery_audit and recovery_audit[-1].get("approved"):
                     break
         raise exc
+    grasp_retry_audit: list[dict[str, Any]] = []
+    if (
+        not dry_run
+        and stop_after_phase == "retreat"
+        and variant.grasp_contact_threshold is not None
+        and variant.grasp_retry_offsets_m
+        and _gripper_contact_likely(phase_audit, variant.grasp_contact_threshold)
+    ):
+        for retry_index, z_offset in enumerate(variant.grasp_retry_offsets_m, start=1):
+            retry_record: dict[str, Any] = {
+                "attempt": int(retry_index),
+                "z_offset_m": float(z_offset),
+                "contact_before_retry": True,
+                "status": "pending",
+            }
+            retry_bowl_point = np.asarray(bowl_point, dtype=np.float64).copy()
+            retry_bowl_point[2] += float(z_offset)
+            try:
+                retry_waypoints = _require(build_bowl_waypoints, "build_bowl_waypoints")(
+                    retry_bowl_point,
+                    destination_point,
+                    initial_proprio.get("eef_quat"),
+                    {"lift_height_m": float(clearance_m)},
+                )
+                validate_workspace_points(
+                    {"retry_source_grasp_target": retry_bowl_point}, bounds=workspace_bounds
+                )
+                retry_observation = _raw_observation(env)
+                retry_phase_audit = _run_motion(
+                    env,
+                    retry_waypoints,
+                    retry_observation,
+                    phase_timeout_steps=phase_timeout_steps,
+                    gripper_dwell_steps=gripper_dwell_steps,
+                    stop_after_phase="retreat",
+                    dry_run=False,
+                    phase_frame_callback=None,
+                    motion_started_callback=motion_started_callback,
+                    stall_window_steps=variant.stall_window_steps,
+                    stall_delta_m=variant.stall_delta_m,
+                    phase_policies=phase_policies,
+                    osc_position_scale_m=variant.osc_position_scale_m,
+                )
+                for record in retry_phase_audit:
+                    record["grasp_retry_attempt"] = int(retry_index)
+                phase_audit.extend(retry_phase_audit)
+                setattr(env, "_arrow_phase_audit", phase_audit)
+                retry_record["phase_statuses"] = [
+                    {"phase": record.get("phase"), "status": record.get("status")}
+                    for record in retry_phase_audit
+                ]
+                retry_record["contact_after_retry"] = _gripper_contact_likely(
+                    retry_phase_audit, variant.grasp_contact_threshold
+                )
+                retry_record["status"] = (
+                    "contact_likely" if retry_record["contact_after_retry"] else "completed_no_contact"
+                )
+                grasp_retry_audit.append(retry_record)
+                if retry_record["contact_after_retry"]:
+                    retry_record["selected"] = True
+                    break
+            except Exception as retry_exc:
+                retry_record["status"] = "failed"
+                retry_record["error_type"] = type(retry_exc).__name__
+                retry_record["error"] = str(retry_exc)
+                grasp_retry_audit.append(retry_record)
+                # A failed retry can leave the simulator at a phase boundary;
+                # do not hide the original completed trajectory behind it.
+                break
     # Evaluator state is intentionally queried only after all motion phases.
     full_execution = stop_after_phase == "retreat"
     evaluator_error: dict[str, str] | None = None
@@ -2024,6 +2152,7 @@ def run_episode(
         "phase_policies": phase_policies,
         "suite_mode": suite_mode,
         "recovery": recovery_audit,
+        "grasp_retries": grasp_retry_audit,
         "settle_diagnostics": settle_diagnostics,
         "environment_audit": getattr(env, "_arrow_environment_audit", None),
         "capture_contract": capture_contract,
@@ -2368,6 +2497,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
             CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
+            CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
         ),
         default="default",
     )
@@ -2403,6 +2533,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
         CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
+        CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
     }
     candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
     candidate_v3 = args.controller_variant == CANDIDATE_V3_CONTROLLER_VARIANT_NAME
@@ -2410,6 +2541,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     candidate_v5 = args.controller_variant == CANDIDATE_V5_CONTROLLER_VARIANT_NAME
     candidate_v6 = args.controller_variant == CANDIDATE_V6_CONTROLLER_VARIANT_NAME
     candidate_v7 = args.controller_variant == CANDIDATE_V7_CONTROLLER_VARIANT_NAME
+    candidate_v8 = args.controller_variant == CANDIDATE_V8_CONTROLLER_VARIANT_NAME
     variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
     endpoint_depth_statistic = args.endpoint_depth_statistic or (
         CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
@@ -2433,18 +2565,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     max_mask_fraction_for_motion = (
         CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7 or candidate_v8
         else None
     )
     workspace_bounds_m = (
         CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7
+        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7 or candidate_v8
         else None
     )
     osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M if candidate_v4 else None
     arrow_anchor_policy = "visible_inset" if candidate_v5 else "bbox_center"
     approach_lateral_offset_m = (
         CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M if candidate_v6 else None
+    )
+    grasp_contact_threshold = (
+        CANDIDATE_V8_GRIPPER_CONTACT_THRESHOLD if candidate_v8 else None
+    )
+    grasp_retry_offsets_m = (
+        CANDIDATE_V8_GRASP_RETRY_OFFSETS_M if candidate_v8 else None
     )
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode
@@ -2504,6 +2642,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 osc_position_scale_m=osc_position_scale_m,
                 arrow_anchor_policy=arrow_anchor_policy,
                 approach_lateral_offset_m=approach_lateral_offset_m,
+                grasp_contact_threshold=grasp_contact_threshold,
+                grasp_retry_offsets_m=grasp_retry_offsets_m,
                 max_mask_fraction_for_motion=max_mask_fraction_for_motion,
                 workspace_bounds_m=workspace_bounds_m,
             ),

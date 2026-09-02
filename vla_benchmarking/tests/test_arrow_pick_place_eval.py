@@ -803,6 +803,13 @@ def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
     assert v7.approach_tolerance_m == pytest.approx(runner.CANDIDATE_APPROACH_TOLERANCE_M)
     assert v7.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash, v5.hash, v6.hash}
 
+    v8 = runner._resolve_controller_variant(
+        runner.CANDIDATE_V8_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
+    )
+    assert v8.grasp_contact_threshold == pytest.approx(0.0015)
+    assert tuple(v8.grasp_retry_offsets_m) == pytest.approx((-0.012, 0.012))
+    assert v8.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash, v5.hash, v6.hash, v7.hash}
+
 
 def test_osc_position_scale_candidate_changes_only_translational_scales(runner, monkeypatch):
     seen = {}
@@ -846,6 +853,16 @@ def test_directional_pregrasp_offset_uses_only_horizontal_arrow_direction(runner
     )
     assert adjusted[0].tolist() == pytest.approx([0.0, 0.04, 0.0])
     assert np.all(adjusted[1:] == 0.0)
+
+
+def test_gripper_contact_gate_uses_close_proprioception_only(runner):
+    assert runner._gripper_contact_likely(
+        [{"phase": "close", "gripper_qpos": [0.0004, -0.0007]}], 0.0015
+    )
+    assert not runner._gripper_contact_likely(
+        [{"phase": "close", "gripper_qpos": [0.004, -0.004]}], 0.0015
+    )
+    assert not runner._gripper_contact_likely([{"phase": "close"}], 0.0015)
 
 
 def test_endpoint_depth_statistic_selection_is_deterministic(runner):
