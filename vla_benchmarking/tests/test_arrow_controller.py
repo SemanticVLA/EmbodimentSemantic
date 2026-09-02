@@ -278,3 +278,20 @@ def test_rgbd_region_candidates_accept_clipped_object_and_reject_leakage():
             rgb, np.full_like(depth, 0.8), K, np.eye(4), (40, 40), (0, 0, 0.8),
             region_radius_m=0.15, max_region_fraction=0.01,
         )
+
+
+def test_rgbd_region_candidates_support_general_height_sweep():
+    yy, xx = np.mgrid[:60, :60]
+    region = (xx - 30) ** 2 + (yy - 30) ** 2 <= 10 ** 2
+    depth = np.full((60, 60), 2.0)
+    depth[region] = 0.9 + yy[region] * 0.001
+    rgb = np.zeros((60, 60, 3), dtype=np.uint8)
+    K = np.array([[100.0, 0, 30.0], [0, 100.0, 30.0], [0, 0, 1.0]])
+    targets, audit = derive_rgbd_region_grasp_candidates(
+        rgb, depth, K, np.eye(4), (30, 30), (0.1, 0, 1),
+        region_radius_m=0.12,
+        candidate_height_quantiles=(0.7, 0.55, 0.4),
+    )
+    assert targets.shape == (3, 3)
+    assert np.all(np.diff(targets[:, 2]) < 0.0)
+    assert audit["selected_height_quantiles"] == [0.7, 0.55, 0.4]

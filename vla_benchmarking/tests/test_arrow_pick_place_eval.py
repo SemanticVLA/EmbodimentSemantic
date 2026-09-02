@@ -1583,6 +1583,7 @@ def test_v9d_rgbd_region_config_is_dynamic_and_v9e_changes_only_micro_correction
     assert v9d.grasp_search.strategy == "rgbd_region"
     assert v9d.grasp_search.offsets_m == ()
     assert v9d.grasp_search.max_attempts == 3
+    assert v9d.grasp_search.region_candidate_height_quantiles == ()
     assert v9d.micro_correction.enabled is False
     assert v9e.micro_correction.enabled is True
     left = v9d.canonical()
@@ -1758,6 +1759,7 @@ def test_v9_policy_rejects_weakly_typed_limits(runner, field, value):
         {"region_radius_m": 0.5},
         {"region_height_quantile": 1.0},
         {"region_profile_quantiles": []},
+        {"region_candidate_height_quantiles": [0.7]},
     ],
 )
 def test_v9_dynamic_policy_rejects_invalid_geometry_contract(runner, kwargs):

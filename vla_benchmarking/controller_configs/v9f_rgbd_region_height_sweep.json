@@ -1,0 +1,7 @@
+{
+  "extends": "v9d_rgbd_region_grasp_search.json",
+  "name": "libero_spatial_akita_bowl_agentview_v9f_rgbd_region_height_sweep",
+  "grasp_search": {
+    "region_candidate_height_quantiles": [0.70, 0.55, 0.40]
+  }
+}

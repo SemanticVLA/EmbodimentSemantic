@@ -242,6 +242,7 @@ class GraspSearchPolicy:
     region_max_fraction: float = 0.15
     region_height_quantile: float = 0.70
     region_profile_quantiles: Sequence[float] = (0.80, 0.60, 0.40)
+    region_candidate_height_quantiles: Sequence[float] = ()
     region_seed_radius_px: int = 3
     max_attempts: int = 0
     phase_timeout_steps: int = 80
@@ -285,6 +286,10 @@ class GraspSearchPolicy:
             _finite_number(value, "grasp_search.region_profile_quantile")
             for value in self.region_profile_quantiles
         )
+        region_candidate_height_quantiles = tuple(
+            _finite_number(value, "grasp_search.region_candidate_height_quantile")
+            for value in self.region_candidate_height_quantiles
+        )
         region_seed_radius = _strict_int(
             self.region_seed_radius_px, "grasp_search.region_seed_radius_px"
         )
@@ -304,6 +309,14 @@ class GraspSearchPolicy:
             raise ValueError(
                 "grasp_search.region_profile_quantiles must contain one to eight values in (0, 1)"
             )
+        if region_candidate_height_quantiles and (
+            len(region_candidate_height_quantiles) != len(region_profile_quantiles)
+            or any(not 0.0 < value < 1.0 for value in region_candidate_height_quantiles)
+        ):
+            raise ValueError(
+                "grasp_search.region_candidate_height_quantiles must be empty or match "
+                "region_profile_quantiles with values in (0, 1)"
+            )
         if not 1 <= region_seed_radius <= 12:
             raise ValueError("grasp_search.region_seed_radius_px must be in [1, 12]")
         object.__setattr__(self, "empty_gripper_threshold", threshold)
@@ -320,6 +333,9 @@ class GraspSearchPolicy:
         object.__setattr__(self, "region_max_fraction", region_max_fraction)
         object.__setattr__(self, "region_height_quantile", region_height_quantile)
         object.__setattr__(self, "region_profile_quantiles", region_profile_quantiles)
+        object.__setattr__(
+            self, "region_candidate_height_quantiles", region_candidate_height_quantiles
+        )
         object.__setattr__(self, "region_seed_radius_px", region_seed_radius)
 
     @classmethod
@@ -348,6 +364,9 @@ class GraspSearchPolicy:
             "region_max_fraction": float(self.region_max_fraction),
             "region_height_quantile": float(self.region_height_quantile),
             "region_profile_quantiles": [float(value) for value in self.region_profile_quantiles],
+            "region_candidate_height_quantiles": [
+                float(value) for value in self.region_candidate_height_quantiles
+            ],
             "region_seed_radius_px": int(self.region_seed_radius_px),
             "max_attempts": int(self.max_attempts),
             "phase_timeout_steps": int(self.phase_timeout_steps),
@@ -2838,6 +2857,24 @@ def run_episode(
         phase_frame_paths.append(path.as_posix())
         return path
 
+    def grasp_search_frame_callback(
+        attempt_index: int, segment: str
+    ) -> Callable[[str, int], Path]:
+        """Keep retry diagnostics separate so repeated phase names never overwrite."""
+        def callback(phase: str, phase_index: int) -> Path:
+            path = _save_phase_snapshot(
+                env,
+                output_root / "grasp_search_attempts" / f"attempt_{attempt_index:02d}" / segment,
+                phase_index,
+                phase,
+                width=capture.rgb.shape[1],
+                height=capture.rgb.shape[0],
+            )
+            phase_frame_paths.append(path.as_posix())
+            return path
+
+        return callback
+
     recovery_audit: list[dict[str, Any]] = []
     grasp_search_audit: list[dict[str, Any]] = []
     micro_correction_audit: list[dict[str, Any]] = []
@@ -2930,6 +2967,9 @@ def run_episode(
                         max_region_fraction=search_policy.region_max_fraction,
                         height_quantile=search_policy.region_height_quantile,
                         profile_quantiles=search_policy.region_profile_quantiles,
+                        candidate_height_quantiles=(
+                            search_policy.region_candidate_height_quantiles or None
+                        ),
                         seed_radius_px=search_policy.region_seed_radius_px,
                     )
                 except Exception as candidate_exc:
@@ -2957,6 +2997,9 @@ def run_episode(
                     candidate_diagnostics.get("selected_profile_quantiles", [])
                 )
                 selected_pixels = list(candidate_diagnostics.get("selected_pixels_xy", []))
+                selected_height_quantiles = list(
+                    candidate_diagnostics.get("selected_height_quantiles", [])
+                )
                 for index, candidate_target in enumerate(candidate_targets):
                     search_candidates.append((
                         np.asarray(candidate_target, dtype=np.float64),
@@ -2969,6 +3012,10 @@ def run_episode(
                             "selected_pixel_xy": (
                                 selected_pixels[index]
                                 if index < len(selected_pixels) else None
+                            ),
+                            "height_quantile": (
+                                selected_height_quantiles[index]
+                                if index < len(selected_height_quantiles) else None
                             ),
                         },
                     ))
@@ -3044,7 +3091,9 @@ def run_episode(
                         phase_timeout_steps=search_policy.phase_timeout_steps,
                         gripper_dwell_steps=gripper_dwell_steps,
                         stop_after_phase="retreat", start_phase="open", dry_run=False,
-                        phase_frame_callback=None,
+                        phase_frame_callback=grasp_search_frame_callback(
+                            attempt_index, "reset"
+                        ),
                         motion_started_callback=motion_started_callback,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
@@ -3063,7 +3112,9 @@ def run_episode(
                         phase_timeout_steps=search_policy.phase_timeout_steps,
                         gripper_dwell_steps=gripper_dwell_steps,
                         stop_after_phase="lift", dry_run=False,
-                        phase_frame_callback=None,
+                        phase_frame_callback=grasp_search_frame_callback(
+                            attempt_index, "grasp"
+                        ),
                         motion_started_callback=motion_started_callback,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
@@ -3101,7 +3152,9 @@ def run_episode(
                         phase_timeout_steps=search_policy.phase_timeout_steps,
                         gripper_dwell_steps=gripper_dwell_steps,
                         stop_after_phase="retreat", start_phase="preplace", dry_run=False,
-                        phase_frame_callback=None,
+                        phase_frame_callback=grasp_search_frame_callback(
+                            attempt_index, "placement"
+                        ),
                         motion_started_callback=motion_started_callback,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,

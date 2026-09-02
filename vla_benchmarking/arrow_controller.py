@@ -917,6 +917,7 @@ def derive_rgbd_region_grasp_candidates(
     max_region_fraction: float = 0.15,
     height_quantile: float = 0.70,
     profile_quantiles: Sequence[float] = (0.80, 0.60, 0.40),
+    candidate_height_quantiles: Sequence[float] | None = None,
     seed_radius_px: int = 3,
 ) -> tuple[np.ndarray, dict[str, object]]:
     """Derive bounded EEF-position candidates from an arrow-seeded RGB-D region.
@@ -955,6 +956,11 @@ def derive_rgbd_region_grasp_candidates(
     fraction_limit = float(max_region_fraction)
     quantile_z = float(height_quantile)
     quantiles = tuple(float(value) for value in profile_quantiles)
+    height_quantiles = (
+        tuple(quantile_z for _ in quantiles)
+        if candidate_height_quantiles is None
+        else tuple(float(value) for value in candidate_height_quantiles)
+    )
     if not np.isfinite(radius_m) or not 0.01 <= radius_m <= 0.15:
         raise ValueError("region_radius_m must be finite and in [0.01, 0.15]")
     if not np.isfinite(tolerance_m) or not 0.001 <= tolerance_m <= 0.10:
@@ -969,6 +975,12 @@ def derive_rgbd_region_grasp_candidates(
         not np.isfinite(value) or not 0.0 < value < 1.0 for value in quantiles
     ):
         raise ValueError("profile_quantiles must contain one to eight values in (0, 1)")
+    if len(height_quantiles) != len(quantiles) or any(
+        not np.isfinite(value) or not 0.0 < value < 1.0 for value in height_quantiles
+    ):
+        raise ValueError(
+            "candidate_height_quantiles must match profile_quantiles and contain values in (0, 1)"
+        )
     if type(seed_radius_px) is not int or not 1 <= seed_radius_px <= 12:
         raise ValueError("seed_radius_px must be an integer in [1, 12]")
 
@@ -1058,16 +1070,16 @@ def derive_rgbd_region_grasp_candidates(
     along = centered_xy @ profile_direction
     across = centered_xy @ transverse
     desired_across = float(np.median(across))
-    target_z = float(np.quantile(world_points[:, 2], quantile_z))
-
     targets: list[np.ndarray] = []
     selected_pixels: list[list[int]] = []
     selected_quantiles: list[float] = []
+    selected_height_quantiles: list[float] = []
+    selected_heights_m: list[float] = []
     # Select actual observed XY samples instead of inventing points inside a
     # rectangular/PCA envelope that may lie outside a clipped bowl region.
     scale_along = max(float(np.ptp(along)), 1e-6)
     scale_across = max(float(np.ptp(across)), 1e-6)
-    for requested_quantile in quantiles:
+    for requested_quantile, requested_height_quantile in zip(quantiles, height_quantiles):
         desired_along = float(np.quantile(along, requested_quantile))
         distance = ((along - desired_along) / scale_along) ** 2
         distance += ((across - desired_across) / scale_across) ** 2
@@ -1080,6 +1092,7 @@ def derive_rgbd_region_grasp_candidates(
                 break
         if selected_index is None:
             continue
+        target_z = float(np.quantile(world_points[:, 2], requested_height_quantile))
         candidate = np.array(
             (world_points[selected_index, 0], world_points[selected_index, 1], target_z),
             dtype=np.float64,
@@ -1087,6 +1100,8 @@ def derive_rgbd_region_grasp_candidates(
         targets.append(candidate)
         selected_pixels.append([int(region_x[selected_index]), int(region_y[selected_index])])
         selected_quantiles.append(requested_quantile)
+        selected_height_quantiles.append(requested_height_quantile)
+        selected_heights_m.append(target_z)
     if not targets:
         raise ValueError("arrow-seeded RGB-D region produced no distinct grasp candidates")
 
@@ -1112,9 +1127,15 @@ def derive_rgbd_region_grasp_candidates(
         "world_center_xy_m": center_xy.tolist(),
         "profile_direction_xy": profile_direction.tolist(),
         "height_quantile": quantile_z,
-        "target_height_m": target_z,
+        "target_height_m": (
+            selected_heights_m[0]
+            if selected_heights_m and len(set(selected_height_quantiles)) == 1 else None
+        ),
         "requested_profile_quantiles": list(quantiles),
+        "requested_candidate_height_quantiles": list(height_quantiles),
         "selected_profile_quantiles": selected_quantiles,
+        "selected_height_quantiles": selected_height_quantiles,
+        "selected_heights_m": selected_heights_m,
         "selected_pixels_xy": selected_pixels,
         "targets_world_m": [target.tolist() for target in targets],
         "rgb_sha256": hashlib.sha256(np.ascontiguousarray(clean_rgb).tobytes()).hexdigest(),
