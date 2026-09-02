@@ -20,6 +20,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -149,11 +150,11 @@ CANDIDATE_ENDPOINT_DEPTH_STATISTIC = "lower_quantile"
 CANDIDATE_ENDPOINT_DEPTH_QUANTILE = 0.25
 CANDIDATE_APPROACH_TOLERANCE_M = 0.015
 CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION = 0.40
-CANDIDATE_V2_WORKSPACE_BOUNDS_M = {
+CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
     "x": WORKSPACE_BOUNDS_M["x"],
     "y": WORKSPACE_BOUNDS_M["y"],
     "z": (WORKSPACE_BOUNDS_M["z"][0], 1.8),
-}
+})
 MAX_APPROACH_TOLERANCE_M = 0.025
 MAX_MASK_FRACTION_FOR_MOTION = 0.50
 
