@@ -1284,6 +1284,8 @@ def run_episode(
         ):
             phase = str(env._arrow_phase_audit[-1]["phase"])
             for attempt in range(int(recovery_attempts)):
+                proposal: dict[str, Any] | None = None
+                approved = False
                 try:
                     # Endpoint pixels are retained from the original decode.
                     # Never decode the original overlay against this new clean
@@ -1301,6 +1303,7 @@ def run_episode(
                     proposal["attempt"] = attempt + 1
                     approved = bool(recovery_callback(phase, proposal)) if recovery_callback else False
                     proposal["approved"] = approved
+                    proposal["attempted_steps"] = 0
                     proposal["executed_steps"] = 0
                     # Every recovery action is explicitly opt-in.  A proposal
                     # or callback is not permission by itself; only a truthy
@@ -1320,6 +1323,7 @@ def run_episode(
                                 setattr(env, "_arrow_motion_began", True)
                                 if motion_started_callback is not None:
                                     motion_started_callback()
+                                proposal["attempted_steps"] += 1
                                 observation, _done, _info = _step_once(env, action)
                                 recovery_proprio = _proprioception(observation)
                                 if "eef_pos" not in recovery_proprio or "eef_quat" not in recovery_proprio:
@@ -1327,14 +1331,17 @@ def run_episode(
                                 proposal["executed_steps"] += 1
                     recovery_audit.append(proposal)
                 except Exception as recovery_exc:
-                    recovery_audit.append({
-                        "phase": phase,
-                        "attempt": attempt + 1,
-                        "approved": False,
-                        "executed_steps": 0,
-                        "error_type": type(recovery_exc).__name__,
-                        "error": str(recovery_exc),
-                    })
+                    # Preserve the proposal (including approval and any
+                    # completed steps) when an approved action fails.  Do not
+                    # replace it with a misleading zero-step error record.
+                    if proposal is None:
+                        proposal = {"phase": phase, "attempt": attempt + 1}
+                    proposal.setdefault("approved", approved)
+                    proposal.setdefault("attempted_steps", 0)
+                    proposal.setdefault("executed_steps", 0)
+                    proposal["error_type"] = type(recovery_exc).__name__
+                    proposal["error"] = str(recovery_exc)
+                    recovery_audit.append(proposal)
                 finally:
                     # Make the diagnostic durable even when recapture, callback,
                     # action construction, or an action step fails.
@@ -1501,12 +1508,17 @@ def build_libero_env(
     suite = benchmark.get_benchmark_dict()[BENCHMARK_NAME]()
     canonical_bddl_file = suite.get_task_bddl_file_path(int(task_id))
     removals: list[str] = []
+    requested_layout_swaps: list[tuple[str, str]] = []
     bddl_file = canonical_bddl_file
     if suite_mode == "sealed_randomized":
-        from config import TASK_REMOVE_CONFIG
+        from config import TASK_REMOVE_CONFIG, TASK_SWAP_CONFIG
         from bddl_utils import make_filtered_bddl
 
         removals = list(TASK_REMOVE_CONFIG.get(int(task_id), []))
+        requested_layout_swaps = [
+            (str(source), str(target))
+            for source, target in TASK_SWAP_CONFIG.get(int(task_id), [])
+        ]
         bddl_file = make_filtered_bddl(canonical_bddl_file, removals)
     np.random.seed(seed)
     env = OffScreenRenderEnv(
@@ -1535,8 +1547,10 @@ def build_libero_env(
         # is deliberately explicit rather than implying a prompt treatment.
         "scene_randomization": "sealed_randomized" if suite_mode == "sealed_randomized" else "vanilla",
         "randomization_dimensions": {
-            "scene_layout": suite_mode == "sealed_randomized",
-            "object_removal": suite_mode == "sealed_randomized",
+            # Filled from the task-specific applied changes below, rather than
+            # treating every sealed task as if it had both transformations.
+            "scene_layout": bool(requested_layout_swaps),
+            "object_removal": bool(removals),
             "prompt_variant": False,
         },
         "prompt_provenance": "not_applicable_direct_runner",
@@ -1633,6 +1647,9 @@ def build_libero_env(
             "skipped_swaps": swaps.get("skipped", []),
             "swap_source": swaps.get("source"),
         })
+        environment_audit["randomization_dimensions"]["scene_layout"] = bool(
+            swaps.get("applied", [])
+        )
     setattr(env, "_arrow_init_state_diagnostics", init_state_diagnostics)
     try:
         from radomize_scenes import sim_state_sha256

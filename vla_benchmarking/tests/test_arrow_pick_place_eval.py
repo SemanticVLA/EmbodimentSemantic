@@ -433,8 +433,12 @@ def test_controller_variant_provenance_is_canonical_and_suite_scoped(runner):
         runner.ControllerVariantConfig(suite_mode="unknown")
 
 
-def test_sealed_environment_audit_declares_scene_only_and_prompt_not_applicable(
-    runner, monkeypatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("task_id", "scene_layout"),
+    ((0, False), (2, True)),
+)
+def test_sealed_environment_audit_declares_task_specific_scene_only_and_prompt_not_applicable(
+    runner, monkeypatch, tmp_path: Path, task_id: int, scene_layout: bool
 ):
     _patch_episode_controller(runner, monkeypatch)
     env = _MotionEnv()
@@ -442,7 +446,7 @@ def test_sealed_environment_audit_declares_scene_only_and_prompt_not_applicable(
         "suite_mode": "sealed_randomized",
         "scene_randomization": "sealed_randomized",
         "randomization_dimensions": {
-            "scene_layout": True,
+            "scene_layout": scene_layout,
             "object_removal": True,
             "prompt_variant": False,
         },
@@ -450,8 +454,8 @@ def test_sealed_environment_audit_declares_scene_only_and_prompt_not_applicable(
     }
     audit = runner.run_episode(
         env=env,
-        task_id=0,
-        seed=1000,
+        task_id=task_id,
+        seed=1000 + task_id,
         resolution=256,
         output_dir=tmp_path,
         arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
@@ -923,3 +927,52 @@ def test_recovery_action_is_reachable_only_with_explicit_approval(runner, monkey
         )
     assert len(env.actions) == 2
     assert all(float(action[-1]) == -1.0 for action in env.actions)
+
+
+def test_partial_recovery_failure_preserves_steps_already_sent(runner, monkeypatch, tmp_path: Path):
+    _patch_episode_controller(runner, monkeypatch)
+
+    class _RecoveryFailEnv(_MotionEnv):
+        def step(self, action):
+            if len(self.actions) >= 1:
+                raise RuntimeError("recovery transport failure")
+            return super().step(action)
+
+    env = _RecoveryFailEnv()
+
+    def timeout_motion(motion_env, *args, **kwargs):
+        motion_env._arrow_phase_audit = [{"phase": "close", "status": "timeout"}]
+        raise TimeoutError("close phase timed out")
+
+    monkeypatch.setattr(runner, "_run_motion", timeout_motion)
+    monkeypatch.setattr(
+        runner,
+        "recover_grasp_or_release",
+        lambda *args, **kwargs: {
+            "phase": kwargs["phase"],
+            "eef_pos_m": [0.0, 0.0, 0.0],
+            "eef_quat": [0.0, 0.0, 0.0, 1.0],
+        },
+    )
+    with pytest.raises(TimeoutError, match="close phase timed out"):
+        runner.run_episode(
+            env=env,
+            task_id=0,
+            seed=1000,
+            resolution=256,
+            output_dir=tmp_path,
+            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+            capture=_episode_capture(runner),
+            dry_run=False,
+            stop_after_phase="retreat",
+            recovery_attempts=1,
+            recovery_steps=2,
+            recovery_callback=lambda phase, proposal: True,
+        )
+    recovery = json.loads(
+        (tmp_path / "arrow_pick_place_recovery_audit.json").read_text(encoding="utf-8")
+    )
+    assert recovery[0]["approved"] is True
+    assert recovery[0]["attempted_steps"] == 2
+    assert recovery[0]["executed_steps"] == 1
+    assert recovery[0]["error_type"] == "RuntimeError"
