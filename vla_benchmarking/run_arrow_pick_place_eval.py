@@ -245,6 +245,7 @@ class CapturedRGBD:
     metric_depth: np.ndarray
     calibration: CameraCalibration
     observation: Mapping[str, Any] | None = None
+    depth_conversion_mode: str = "unknown"
 
 
 def _require(function: Callable[..., Any] | None, name: str) -> Callable[..., Any]:
@@ -388,18 +389,38 @@ def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int
 
 
 def normalized_depth_to_metric(sim: Any, normalized_depth: np.ndarray) -> np.ndarray:
-    """Convert MuJoCo's normalized depth using robosuite, preserving alignment."""
-    if camera_utils is None:
-        raise RuntimeError("robosuite camera_utils.get_real_depth_map is required")
-    converted = camera_utils.get_real_depth_map(sim, normalized_depth)
+    """Convert normalized depth, accepting already-metric render outputs.
+
+    Most robosuite paths expose depth normalized to ``[0, 1]`` and require
+    ``get_real_depth_map``.  Some sealed/randomized render paths return metric
+    metres directly (often values above one); applying the hook twice raises or
+    corrupts the geometry.  Positive finite values above one are therefore
+    preserved as metric depth, with alignment and positivity still checked.
+    """
+    source = np.asarray(normalized_depth)
+    if source.ndim == 3 and source.shape[-1] == 1:
+        source = source[..., 0]
+    if source.ndim != 2:
+        raise ValueError(f"depth must be HxW, got {source.shape}")
+    if np.any(np.isfinite(source) & (source < 0)):
+        raise ValueError("depth contains negative finite pixels")
+    if not np.isfinite(source).any() or not np.isfinite(source[source > 0]).any():
+        raise ValueError("depth contains no positive finite pixels")
+    already_metric = float(np.nanmax(source)) > 1.0
+    if already_metric:
+        converted = source
+    else:
+        if camera_utils is None:
+            raise RuntimeError("robosuite camera_utils.get_real_depth_map is required")
+        converted = camera_utils.get_real_depth_map(sim, source)
     metric = np.asarray(converted, dtype=np.float32)
     if metric.ndim == 3 and metric.shape[-1] == 1:
         metric = metric[..., 0]
-    if metric.shape != normalized_depth.shape:
+    if metric.shape != source.shape:
         raise ValueError(
-            f"metric depth changed shape from {normalized_depth.shape} to {metric.shape}"
+            f"metric depth changed shape from {source.shape} to {metric.shape}"
         )
-    if not np.isfinite(metric).any() or np.nanmax(metric) <= 0:
+    if not np.isfinite(metric).any() or not np.isfinite(metric[metric > 0]).any():
         raise ValueError("metric depth contains no positive finite pixels")
     return np.ascontiguousarray(metric)
 
@@ -427,12 +448,14 @@ def capture_agentview(
         raise RuntimeError("capture environment does not expose sim for calibration/depth conversion")
     calibration = build_camera_calibration(sim, camera_name, rgb.shape[1], rgb.shape[0])
     metric = normalized_depth_to_metric(sim, normalized)
+    depth_mode = "already_metric_positive_out_of_range" if float(np.nanmax(normalized)) > 1.0 else "robosuite_get_real_depth_map"
     return CapturedRGBD(
         rgb=rgb,
         normalized_depth=normalized,
         metric_depth=metric,
         calibration=calibration,
         observation=observation,
+        depth_conversion_mode=depth_mode,
     )
 
 
@@ -607,6 +630,7 @@ def validate_capture_contract(
     return {
         "valid": True,
         "camera_name": str(calibration.camera_name),
+        "depth_conversion_mode": str(getattr(capture, "depth_conversion_mode", "unknown")),
         "requested_resolution": int(resolution),
         "rgb_shape": [height, width, 3],
         "normalized_depth_shape": list(normalized_shape),
@@ -1478,6 +1502,20 @@ def _apply_direct_swaps(inner_env: Any, task_id: int) -> dict[str, Any]:
         return {"requested": requested, "applied": applied, "skipped": skipped, "source": "radomize_scenes.swap_objects"}
 
 
+def _randomization_dimensions(
+    suite_mode: str,
+    removals: Sequence[str],
+    swaps: Mapping[str, Any] | None = None,
+) -> dict[str, bool]:
+    """Report task-specific transformations that were actually applied."""
+    applied_swaps = list((swaps or {}).get("applied", []))
+    return {
+        "scene_layout": bool(suite_mode == "sealed_randomized" and applied_swaps),
+        "object_removal": bool(suite_mode == "sealed_randomized" and removals),
+        "prompt_variant": False,
+    }
+
+
 def build_libero_env(
     task_id: int,
     seed: int,
@@ -1508,17 +1546,12 @@ def build_libero_env(
     suite = benchmark.get_benchmark_dict()[BENCHMARK_NAME]()
     canonical_bddl_file = suite.get_task_bddl_file_path(int(task_id))
     removals: list[str] = []
-    requested_layout_swaps: list[tuple[str, str]] = []
     bddl_file = canonical_bddl_file
     if suite_mode == "sealed_randomized":
-        from config import TASK_REMOVE_CONFIG, TASK_SWAP_CONFIG
+        from config import TASK_REMOVE_CONFIG
         from bddl_utils import make_filtered_bddl
 
         removals = list(TASK_REMOVE_CONFIG.get(int(task_id), []))
-        requested_layout_swaps = [
-            (str(source), str(target))
-            for source, target in TASK_SWAP_CONFIG.get(int(task_id), [])
-        ]
         bddl_file = make_filtered_bddl(canonical_bddl_file, removals)
     np.random.seed(seed)
     env = OffScreenRenderEnv(
@@ -1532,10 +1565,10 @@ def build_libero_env(
     # Match render_visual_arrow_pair.py's seed/init-state setup while avoiding
     # LeRobot's terminal autoreset.  The direct wrapper owns the same init-state
     # files and lets us preserve the terminal observation through retreat.
-    seed_fn = getattr(env, "seed", None)
-    if seed_fn is not None:
-        seed_fn(int(seed))
     try:
+        seed_fn = getattr(env, "seed", None)
+        if seed_fn is not None:
+            seed_fn(int(seed))
         env.reset()
     except BaseException:
         _close_environment_quietly(env)
@@ -1546,13 +1579,7 @@ def build_libero_env(
         # direct runner does not consume language prompts, so prompt provenance
         # is deliberately explicit rather than implying a prompt treatment.
         "scene_randomization": "sealed_randomized" if suite_mode == "sealed_randomized" else "vanilla",
-        "randomization_dimensions": {
-            # Filled from the task-specific applied changes below, rather than
-            # treating every sealed task as if it had both transformations.
-            "scene_layout": bool(requested_layout_swaps),
-            "object_removal": bool(removals),
-            "prompt_variant": False,
-        },
+        "randomization_dimensions": _randomization_dimensions(suite_mode, removals),
         "prompt_provenance": "not_applicable_direct_runner",
         "canonical_bddl_file": str(canonical_bddl_file),
         "applied_bddl_file": str(bddl_file),
@@ -1647,8 +1674,8 @@ def build_libero_env(
             "skipped_swaps": swaps.get("skipped", []),
             "swap_source": swaps.get("source"),
         })
-        environment_audit["randomization_dimensions"]["scene_layout"] = bool(
-            swaps.get("applied", [])
+        environment_audit["randomization_dimensions"] = _randomization_dimensions(
+            suite_mode, removals, swaps
         )
     setattr(env, "_arrow_init_state_diagnostics", init_state_diagnostics)
     try:

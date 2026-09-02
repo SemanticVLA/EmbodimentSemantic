@@ -129,6 +129,57 @@ def test_metric_depth_conversion_delegates_to_robosuite_hook(runner, monkeypatch
     assert calls and calls[0][1] is normalized
 
 
+def test_metric_depth_conversion_preserves_already_metric_render(runner, monkeypatch):
+    calls = []
+
+    class _CameraUtils:
+        @staticmethod
+        def get_real_depth_map(sim, depth):
+            calls.append(depth)
+            raise AssertionError("metric render must not be converted twice")
+
+    monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
+    source = np.asarray([[1.25, 2.0]], dtype=np.float32)
+    converted = runner.normalized_depth_to_metric(_Sim(), source)
+    np.testing.assert_array_equal(converted, source)
+    assert calls == []
+
+
+def test_metric_depth_conversion_rejects_negative_or_empty_depth(runner, monkeypatch):
+    with pytest.raises(ValueError, match="negative finite"):
+        runner.normalized_depth_to_metric(_Sim(), np.asarray([[-1.0]], dtype=np.float32))
+    with pytest.raises(ValueError, match="no positive finite"):
+        runner.normalized_depth_to_metric(_Sim(), np.zeros((1, 1), dtype=np.float32))
+
+
+def test_capture_audits_already_metric_depth_mode(runner, monkeypatch):
+    class _MetricEnv(_Env):
+        def render(self, camera_name, width, height, depth=False):
+            self.render_calls.append((camera_name, width, height, depth))
+            return (
+                np.zeros((height, width, 3), dtype=np.uint8),
+                np.full((height, width), 2.5, dtype=np.float32),
+            ) if depth else np.zeros((height, width, 3), dtype=np.uint8)
+
+    class _CameraUtils:
+        @staticmethod
+        def get_camera_intrinsic_matrix(sim, camera_name, camera_height, camera_width):
+            return np.asarray([[10.0, 0.0, camera_width / 2], [0.0, 10.0, camera_height / 2], [0.0, 0.0, 1.0]])
+
+        @staticmethod
+        def get_camera_extrinsic_matrix(sim, camera_name):
+            return np.eye(4)
+
+        @staticmethod
+        def get_real_depth_map(sim, depth):
+            raise AssertionError("already-metric depth must bypass normalized conversion")
+
+    monkeypatch.setattr(runner, "camera_utils", _CameraUtils, raising=False)
+    capture = runner.capture_agentview(_MetricEnv(), resolution=8)
+    assert capture.depth_conversion_mode == "already_metric_positive_out_of_range"
+    np.testing.assert_array_equal(capture.metric_depth, 2.5)
+
+
 def test_camera_calibration_converts_projection_v_up_to_image_v_down(runner):
     class _CameraUtils:
         @staticmethod
@@ -431,6 +482,21 @@ def test_controller_variant_provenance_is_canonical_and_suite_scoped(runner):
     assert vanilla.config_hash != sealed.config_hash
     with pytest.raises(ValueError, match="suite_mode"):
         runner.ControllerVariantConfig(suite_mode="unknown")
+
+
+def test_randomization_dimensions_are_task_actual_not_suite_wide(runner):
+    swapped = runner._randomization_dimensions(
+        "sealed_randomized", ["plate_1"], {"applied": ["bowl_1", "cookies_1"]}
+    )
+    removal_only = runner._randomization_dimensions(
+        "sealed_randomized", ["plate_1"], {"applied": []}
+    )
+    vanilla = runner._randomization_dimensions(
+        "vanilla", ["plate_1"], {"applied": ["bowl_1", "cookies_1"]}
+    )
+    assert swapped == {"scene_layout": True, "object_removal": True, "prompt_variant": False}
+    assert removal_only == {"scene_layout": False, "object_removal": True, "prompt_variant": False}
+    assert vanilla == {"scene_layout": False, "object_removal": False, "prompt_variant": False}
 
 
 @pytest.mark.parametrize(
