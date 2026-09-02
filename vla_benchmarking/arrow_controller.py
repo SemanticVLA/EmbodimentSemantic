@@ -20,6 +20,7 @@ an explicit observation/calibration argument.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
@@ -902,6 +903,226 @@ def arrow_world_xy_basis(
     return forward, lateral
 
 
+def derive_rgbd_region_grasp_candidates(
+    clean_rgb: np.ndarray,
+    depth_m: np.ndarray,
+    K: ArrayLike,
+    T_world_camera: ArrayLike,
+    source_pixel_xy: ArrayLike,
+    profile_target_world: ArrayLike,
+    *,
+    region_radius_m: float = 0.075,
+    depth_tolerance_m: float = 0.025,
+    min_region_pixels: int = 48,
+    max_region_fraction: float = 0.15,
+    height_quantile: float = 0.70,
+    profile_quantiles: Sequence[float] = (0.80, 0.60, 0.40),
+    seed_radius_px: int = 3,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Derive bounded EEF-position candidates from an arrow-seeded RGB-D region.
+
+    The arrow supplies only ``source_pixel_xy``.  A metric-depth connected
+    component is grown around that pixel inside a physically sized image
+    neighbourhood.  Candidate XY locations are real observed region samples,
+    ordered from the side favoured by the existing camera-profile target
+    toward the region centre; candidate Z is an observed surface quantile.
+
+    RGB is deliberately not a hard segmentation gate: the Akita bowl is
+    textured and can be partially clipped by the camera.  It is validated and
+    retained in the audit hash, while metric depth and camera calibration
+    determine all executable geometry.  No bbox, object pose, simulator state,
+    task identifier, or evaluator result is accepted by this function.
+    """
+    _validate_images(clean_rgb, clean_rgb)
+    depth = np.asarray(depth_m, dtype=np.float64)
+    if depth.ndim != 2:
+        raise ValueError(f"depth_m must have 2 dimensions, got shape {depth.shape}")
+    if depth.shape != clean_rgb.shape[:2]:
+        raise ValueError("clean_rgb and depth_m must have identical image dimensions")
+    intrinsics = _validate_intrinsics(K)
+    transform = _validate_transform(T_world_camera)
+    source = _pixel(source_pixel_xy, name="source_pixel_xy")
+    profile = _as_finite_array(profile_target_world, name="profile_target_world").reshape(-1)
+    if profile.size != 3:
+        raise ValueError("profile_target_world must contain exactly three values")
+    h, w = depth.shape
+    u, v = np.rint(source).astype(int)
+    if not (0 <= u < w and 0 <= v < h):
+        raise ValueError("source_pixel_xy is outside the RGB-D image")
+
+    radius_m = float(region_radius_m)
+    tolerance_m = float(depth_tolerance_m)
+    fraction_limit = float(max_region_fraction)
+    quantile_z = float(height_quantile)
+    quantiles = tuple(float(value) for value in profile_quantiles)
+    if not np.isfinite(radius_m) or not 0.01 <= radius_m <= 0.15:
+        raise ValueError("region_radius_m must be finite and in [0.01, 0.15]")
+    if not np.isfinite(tolerance_m) or not 0.001 <= tolerance_m <= 0.10:
+        raise ValueError("depth_tolerance_m must be finite and in [0.001, 0.10]")
+    if type(min_region_pixels) is not int or min_region_pixels < 4:
+        raise ValueError("min_region_pixels must be an integer >= 4")
+    if not np.isfinite(fraction_limit) or not 0.0 < fraction_limit <= 0.5:
+        raise ValueError("max_region_fraction must be in (0, 0.5]")
+    if not np.isfinite(quantile_z) or not 0.0 < quantile_z < 1.0:
+        raise ValueError("height_quantile must be in (0, 1)")
+    if not quantiles or len(quantiles) > 8 or any(
+        not np.isfinite(value) or not 0.0 < value < 1.0 for value in quantiles
+    ):
+        raise ValueError("profile_quantiles must contain one to eight values in (0, 1)")
+    if type(seed_radius_px) is not int or not 1 <= seed_radius_px <= 12:
+        raise ValueError("seed_radius_px must be an integer in [1, 12]")
+
+    y0, y1 = max(0, v - seed_radius_px), min(h, v + seed_radius_px + 1)
+    x0, x1 = max(0, u - seed_radius_px), min(w, u + seed_radius_px + 1)
+    local = depth[y0:y1, x0:x1]
+    local_valid = np.isfinite(local) & (local > 0.0)
+    if not local_valid.any():
+        raise ValueError("source seed has no valid metric-depth samples")
+    seed_depth_m = float(np.median(local[local_valid]))
+    focal_px = max(abs(float(intrinsics[0, 0])), abs(float(intrinsics[1, 1])))
+    radius_px = int(np.ceil(focal_px * radius_m / seed_depth_m))
+    radius_px = max(seed_radius_px + 1, min(radius_px, max(h, w)))
+
+    yy, xx = np.mgrid[:h, :w]
+    radial = (xx - u) ** 2 + (yy - v) ** 2 <= radius_px ** 2
+    valid_depth = np.isfinite(depth) & (depth > 0.0)
+    eligible = radial & valid_depth & (np.abs(depth - seed_depth_m) <= tolerance_m)
+    seed_locations: list[tuple[int, int, int]] = []
+    for seed_y in range(y0, y1):
+        for seed_x in range(x0, x1):
+            if eligible[seed_y, seed_x]:
+                distance_sq = (seed_x - u) ** 2 + (seed_y - v) ** 2
+                seed_locations.append((distance_sq, seed_y, seed_x))
+    if not seed_locations:
+        raise ValueError("source seed has no sample inside the configured depth band")
+    _, seed_y, seed_x = min(seed_locations)
+
+    region = np.zeros((h, w), dtype=bool)
+    stack = [(seed_x, seed_y)]
+    while stack:
+        x, y = stack.pop()
+        if region[y, x] or not eligible[y, x]:
+            continue
+        region[y, x] = True
+        for dx, dy in (
+            (-1, -1), (0, -1), (1, -1),
+            (-1, 0),             (1, 0),
+            (-1, 1),  (0, 1),  (1, 1),
+        ):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < w and 0 <= ny < h and not region[ny, nx]:
+                stack.append((nx, ny))
+
+    area = int(region.sum())
+    fraction = float(area / (h * w))
+    if area < min_region_pixels:
+        raise ValueError(
+            f"arrow-seeded RGB-D region is too small: {area} < {min_region_pixels} pixels"
+        )
+    if fraction > fraction_limit:
+        raise ValueError(
+            "arrow-seeded RGB-D region exceeds max_region_fraction: "
+            f"{fraction:.6f} > {fraction_limit:.6f}"
+        )
+
+    region_y, region_x = np.nonzero(region)
+    region_depth = depth[region_y, region_x]
+    camera_points = np.column_stack(
+        (
+            (region_x - intrinsics[0, 2]) * region_depth / intrinsics[0, 0],
+            (region_y - intrinsics[1, 2]) * region_depth / intrinsics[1, 1],
+            region_depth,
+            np.ones(area, dtype=np.float64),
+        )
+    )
+    world_points = (transform @ camera_points.T).T[:, :3]
+    if not np.all(np.isfinite(world_points)):
+        raise ValueError("arrow-seeded region deprojection produced non-finite world points")
+
+    center_xy = np.median(world_points[:, :2], axis=0)
+    profile_direction = profile[:2] - center_xy
+    direction_norm = float(np.linalg.norm(profile_direction))
+    if direction_norm <= 1e-6:
+        centered = world_points[:, :2] - center_xy
+        covariance = centered.T @ centered / max(1, area)
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+        profile_direction = eigenvectors[:, int(np.argmax(eigenvalues))]
+        if profile_direction[0] < 0.0 or (
+            abs(profile_direction[0]) <= 1e-12 and profile_direction[1] < 0.0
+        ):
+            profile_direction = -profile_direction
+    else:
+        profile_direction = profile_direction / direction_norm
+    transverse = np.array((-profile_direction[1], profile_direction[0]), dtype=np.float64)
+    centered_xy = world_points[:, :2] - center_xy
+    along = centered_xy @ profile_direction
+    across = centered_xy @ transverse
+    desired_across = float(np.median(across))
+    target_z = float(np.quantile(world_points[:, 2], quantile_z))
+
+    targets: list[np.ndarray] = []
+    selected_pixels: list[list[int]] = []
+    selected_quantiles: list[float] = []
+    # Select actual observed XY samples instead of inventing points inside a
+    # rectangular/PCA envelope that may lie outside a clipped bowl region.
+    scale_along = max(float(np.ptp(along)), 1e-6)
+    scale_across = max(float(np.ptp(across)), 1e-6)
+    for requested_quantile in quantiles:
+        desired_along = float(np.quantile(along, requested_quantile))
+        distance = ((along - desired_along) / scale_along) ** 2
+        distance += ((across - desired_across) / scale_across) ** 2
+        order = np.argsort(distance, kind="stable")
+        selected_index = None
+        for index in order:
+            candidate_xy = world_points[int(index), :2]
+            if all(np.linalg.norm(candidate_xy - prior[:2]) >= 0.003 for prior in targets):
+                selected_index = int(index)
+                break
+        if selected_index is None:
+            continue
+        candidate = np.array(
+            (world_points[selected_index, 0], world_points[selected_index, 1], target_z),
+            dtype=np.float64,
+        )
+        targets.append(candidate)
+        selected_pixels.append([int(region_x[selected_index]), int(region_y[selected_index])])
+        selected_quantiles.append(requested_quantile)
+    if not targets:
+        raise ValueError("arrow-seeded RGB-D region produced no distinct grasp candidates")
+
+    mask_hash = hashlib.sha256(np.ascontiguousarray(region.astype(np.uint8)).tobytes()).hexdigest()
+    diagnostics: dict[str, object] = {
+        "method": "arrow_seeded_metric_depth_component_v1",
+        "source_pixel_xy": [float(source[0]), float(source[1])],
+        "seed_pixel_xy": [int(seed_x), int(seed_y)],
+        "seed_depth_m": seed_depth_m,
+        "region_radius_m": radius_m,
+        "region_radius_px": radius_px,
+        "depth_tolerance_m": tolerance_m,
+        "region_area_px": area,
+        "region_fraction": fraction,
+        "region_mask_sha256": mask_hash,
+        "touches_image_border": bool(
+            np.any(region[0]) or np.any(region[-1]) or np.any(region[:, 0]) or np.any(region[:, -1])
+        ),
+        "world_bounds_m": {
+            "minimum": np.min(world_points, axis=0).tolist(),
+            "maximum": np.max(world_points, axis=0).tolist(),
+        },
+        "world_center_xy_m": center_xy.tolist(),
+        "profile_direction_xy": profile_direction.tolist(),
+        "height_quantile": quantile_z,
+        "target_height_m": target_z,
+        "requested_profile_quantiles": list(quantiles),
+        "selected_profile_quantiles": selected_quantiles,
+        "selected_pixels_xy": selected_pixels,
+        "targets_world_m": [target.tolist() for target in targets],
+        "rgb_sha256": hashlib.sha256(np.ascontiguousarray(clean_rgb).tobytes()).hexdigest(),
+        "depth_sha256": hashlib.sha256(np.ascontiguousarray(depth).tobytes()).hexdigest(),
+    }
+    return np.vstack(targets), diagnostics
+
+
 def _rotation_matrix(rotation: ArrayLike) -> np.ndarray:
     arr = _as_finite_array(rotation, name="rotation")
     if arr.shape == (3, 3):
@@ -1055,6 +1276,7 @@ __all__ = [
     "refine_rgbd",
     "build_bowl_waypoints",
     "arrow_world_xy_basis",
+    "derive_rgbd_region_grasp_candidates",
     "normalized_osc_action",
     "compute_endpoint_change_evidence",
     "endpoint_change_evidence",

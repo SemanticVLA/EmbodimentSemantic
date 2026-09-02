@@ -46,6 +46,7 @@ try:
         refine_rgbd_endpoint,
         normalized_osc_action,
         arrow_world_xy_basis,
+        derive_rgbd_region_grasp_candidates,
     )
 except (ImportError, ValueError):  # pragma: no cover - direct script fallback
     try:
@@ -57,11 +58,13 @@ except (ImportError, ValueError):  # pragma: no cover - direct script fallback
             refine_rgbd_endpoint,
             normalized_osc_action,
             arrow_world_xy_basis,
+            derive_rgbd_region_grasp_candidates,
         )
     except ImportError:  # pragma: no cover - a clear error is raised on use
         build_bowl_waypoints = decode_arrow = decode_arrow_diagnostics = None
         deproject_endpoint = refine_rgbd_endpoint = normalized_osc_action = None
         arrow_world_xy_basis = None
+        derive_rgbd_region_grasp_candidates = None
 
 try:
     from .controller_configs import (
@@ -230,8 +233,16 @@ class GraspSearchPolicy:
     """
 
     enabled: bool = False
+    strategy: str = "fixed_offsets"
     empty_gripper_threshold: float = 0.0015
     offsets_m: Sequence[Sequence[float]] = ()
+    region_radius_m: float = 0.075
+    region_depth_tolerance_m: float = 0.025
+    region_min_pixels: int = 48
+    region_max_fraction: float = 0.15
+    region_height_quantile: float = 0.70
+    region_profile_quantiles: Sequence[float] = (0.80, 0.60, 0.40)
+    region_seed_radius_px: int = 3
     max_attempts: int = 0
     phase_timeout_steps: int = 80
     max_actions: int = 900
@@ -241,6 +252,9 @@ class GraspSearchPolicy:
 
     def __post_init__(self) -> None:
         enabled = _strict_bool(self.enabled, "grasp_search.enabled")
+        strategy = str(self.strategy)
+        if strategy not in {"fixed_offsets", "rgbd_region"}:
+            raise ValueError("grasp_search.strategy must be fixed_offsets or rgbd_region")
         threshold = _finite_number(self.empty_gripper_threshold, "grasp_search.empty_gripper_threshold")
         if threshold <= 0.0 or threshold > 0.01:
             raise ValueError("grasp_search.empty_gripper_threshold must be in (0, 0.01]")
@@ -256,13 +270,57 @@ class GraspSearchPolicy:
         allowed = {"empty_gripper_likely", "close_stall", "close_timeout", "lift_stall", "lift_timeout"}
         if not set(triggers) <= allowed:
             raise ValueError(f"grasp_search.trigger_on must contain only {sorted(allowed)}")
+        region_radius = _finite_number(self.region_radius_m, "grasp_search.region_radius_m")
+        region_depth_tolerance = _finite_number(
+            self.region_depth_tolerance_m, "grasp_search.region_depth_tolerance_m"
+        )
+        region_min_pixels = _strict_int(self.region_min_pixels, "grasp_search.region_min_pixels")
+        region_max_fraction = _finite_number(
+            self.region_max_fraction, "grasp_search.region_max_fraction"
+        )
+        region_height_quantile = _finite_number(
+            self.region_height_quantile, "grasp_search.region_height_quantile"
+        )
+        region_profile_quantiles = tuple(
+            _finite_number(value, "grasp_search.region_profile_quantile")
+            for value in self.region_profile_quantiles
+        )
+        region_seed_radius = _strict_int(
+            self.region_seed_radius_px, "grasp_search.region_seed_radius_px"
+        )
+        if not 0.01 <= region_radius <= 0.15:
+            raise ValueError("grasp_search.region_radius_m must be in [0.01, 0.15]")
+        if not 0.001 <= region_depth_tolerance <= 0.10:
+            raise ValueError("grasp_search.region_depth_tolerance_m must be in [0.001, 0.10]")
+        if region_min_pixels < 4:
+            raise ValueError("grasp_search.region_min_pixels must be >= 4")
+        if not 0.0 < region_max_fraction <= 0.5:
+            raise ValueError("grasp_search.region_max_fraction must be in (0, 0.5]")
+        if not 0.0 < region_height_quantile < 1.0:
+            raise ValueError("grasp_search.region_height_quantile must be in (0, 1)")
+        if not region_profile_quantiles or len(region_profile_quantiles) > 8 or any(
+            not 0.0 < value < 1.0 for value in region_profile_quantiles
+        ):
+            raise ValueError(
+                "grasp_search.region_profile_quantiles must contain one to eight values in (0, 1)"
+            )
+        if not 1 <= region_seed_radius <= 12:
+            raise ValueError("grasp_search.region_seed_radius_px must be in [1, 12]")
         object.__setattr__(self, "empty_gripper_threshold", threshold)
         object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "strategy", strategy)
         object.__setattr__(self, "offsets_m", offsets)
         object.__setattr__(self, "max_attempts", max_attempts)
         object.__setattr__(self, "phase_timeout_steps", phase_steps)
         object.__setattr__(self, "max_actions", max_actions)
         object.__setattr__(self, "trigger_on", triggers)
+        object.__setattr__(self, "region_radius_m", region_radius)
+        object.__setattr__(self, "region_depth_tolerance_m", region_depth_tolerance)
+        object.__setattr__(self, "region_min_pixels", region_min_pixels)
+        object.__setattr__(self, "region_max_fraction", region_max_fraction)
+        object.__setattr__(self, "region_height_quantile", region_height_quantile)
+        object.__setattr__(self, "region_profile_quantiles", region_profile_quantiles)
+        object.__setattr__(self, "region_seed_radius_px", region_seed_radius)
 
     @classmethod
     def from_value(cls, value: Mapping[str, Any] | "GraspSearchPolicy" | None) -> "GraspSearchPolicy | None":
@@ -281,8 +339,16 @@ class GraspSearchPolicy:
     def canonical(self) -> dict[str, Any]:
         result = {
             "enabled": bool(self.enabled),
+            "strategy": self.strategy,
             "empty_gripper_threshold": float(self.empty_gripper_threshold),
             "offsets_m": [[float(v) for v in row] for row in self.offsets_m],
+            "region_radius_m": float(self.region_radius_m),
+            "region_depth_tolerance_m": float(self.region_depth_tolerance_m),
+            "region_min_pixels": int(self.region_min_pixels),
+            "region_max_fraction": float(self.region_max_fraction),
+            "region_height_quantile": float(self.region_height_quantile),
+            "region_profile_quantiles": [float(value) for value in self.region_profile_quantiles],
+            "region_seed_radius_px": int(self.region_seed_radius_px),
             "max_attempts": int(self.max_attempts),
             "phase_timeout_steps": int(self.phase_timeout_steps),
             "max_actions": int(self.max_actions),
@@ -2837,35 +2903,114 @@ def run_episode(
             and search_policy.enabled
             and trigger in search_policy.trigger_on
             and search_policy.max_attempts > 0
-            and search_policy.offsets_m
+            and (
+                search_policy.strategy == "rgbd_region"
+                or bool(search_policy.offsets_m)
+            )
         )
+        search_completed = False
         if can_search:
-            basis_fn = _require(arrow_world_xy_basis, "arrow_world_xy_basis")
-            forward, lateral = basis_fn(source_visual_point, destination_visual_point)
+            search_candidates: list[tuple[np.ndarray, dict[str, Any]]] = []
+            if search_policy.strategy == "rgbd_region":
+                candidate_fn = _require(
+                    derive_rgbd_region_grasp_candidates,
+                    "derive_rgbd_region_grasp_candidates",
+                )
+                try:
+                    candidate_targets, candidate_diagnostics = candidate_fn(
+                        np.asarray(capture.rgb, dtype=np.uint8),
+                        np.asarray(capture.metric_depth, dtype=np.float64),
+                        K,
+                        T_world_camera,
+                        source_uv,
+                        bowl_point,
+                        region_radius_m=search_policy.region_radius_m,
+                        depth_tolerance_m=search_policy.region_depth_tolerance_m,
+                        min_region_pixels=search_policy.region_min_pixels,
+                        max_region_fraction=search_policy.region_max_fraction,
+                        height_quantile=search_policy.region_height_quantile,
+                        profile_quantiles=search_policy.region_profile_quantiles,
+                        seed_radius_px=search_policy.region_seed_radius_px,
+                    )
+                except Exception as candidate_exc:
+                    grasp_search_audit.append({
+                        "stage": "candidate_generation",
+                        "strategy": search_policy.strategy,
+                        "status": "failed",
+                        "trigger": trigger,
+                        "error_type": type(candidate_exc).__name__,
+                        "error": str(candidate_exc),
+                        "selected": False,
+                    })
+                    raise exc
+                candidate_diagnostics = dict(candidate_diagnostics)
+                grasp_search_audit.append({
+                    "stage": "candidate_generation",
+                    "strategy": search_policy.strategy,
+                    "status": "generated",
+                    "trigger": trigger,
+                    "candidate_count": int(len(candidate_targets)),
+                    "diagnostics": candidate_diagnostics,
+                    "selected": False,
+                })
+                selected_quantiles = list(
+                    candidate_diagnostics.get("selected_profile_quantiles", [])
+                )
+                selected_pixels = list(candidate_diagnostics.get("selected_pixels_xy", []))
+                for index, candidate_target in enumerate(candidate_targets):
+                    search_candidates.append((
+                        np.asarray(candidate_target, dtype=np.float64),
+                        {
+                            "offset_frame": "arrow_seeded_rgbd_region_world",
+                            "profile_quantile": (
+                                selected_quantiles[index]
+                                if index < len(selected_quantiles) else None
+                            ),
+                            "selected_pixel_xy": (
+                                selected_pixels[index]
+                                if index < len(selected_pixels) else None
+                            ),
+                        },
+                    ))
+            else:
+                basis_fn = _require(arrow_world_xy_basis, "arrow_world_xy_basis")
+                forward, lateral = basis_fn(source_visual_point, destination_visual_point)
+                for offset_value in search_policy.offsets_m:
+                    offset_array = np.asarray(offset_value, dtype=np.float64)
+                    target = (
+                        np.asarray(bowl_point, dtype=np.float64)
+                        + forward * offset_array[0]
+                        + lateral * offset_array[1]
+                        + np.array((0.0, 0.0, offset_array[2]), dtype=np.float64)
+                    )
+                    search_candidates.append((target, {
+                        "offset_frame": "arrow_world_xy_forward_lateral_vertical",
+                        "configured_offset_m": offset_array.tolist(),
+                    }))
             search_actions = 0
             selected_waypoints = None
-            for attempt_index, offset in enumerate(
-                search_policy.offsets_m[: search_policy.max_attempts], start=1
+            for attempt_index, (retry_bowl_point, candidate_metadata) in enumerate(
+                search_candidates[: search_policy.max_attempts], start=1
             ):
                 if search_actions >= search_policy.max_actions:
                     break
-                offset = np.asarray(offset, dtype=np.float64)
-                retry_bowl_point = (
-                    np.asarray(bowl_point, dtype=np.float64)
-                    + forward * offset[0]
-                    + lateral * offset[1]
-                    + np.array((0.0, 0.0, offset[2]), dtype=np.float64)
-                )
+                retry_bowl_point = np.asarray(retry_bowl_point, dtype=np.float64)
+                effective_offset = retry_bowl_point - np.asarray(bowl_point, dtype=np.float64)
                 attempt_record: dict[str, Any] = {
                     "attempt": int(attempt_index),
                     "trigger": trigger,
-                    "offset_frame": "arrow_world_xy_forward_lateral_vertical",
-                    "offset_m": offset.tolist(),
+                    "strategy": search_policy.strategy,
+                    "offset_frame": candidate_metadata["offset_frame"],
+                    "offset_m": effective_offset.tolist(),
                     "target_m": retry_bowl_point.tolist(),
                     "status": "pending",
                     "selected": False,
                     "actions_before": int(search_actions),
                 }
+                attempt_record.update({
+                    key: value for key, value in candidate_metadata.items()
+                    if key != "offset_frame" and value is not None
+                })
                 base_phase_audit = list(phase_audit)
                 placement_started = False
                 try:
@@ -2999,6 +3144,7 @@ def run_episode(
                     grasp_search_audit.append(attempt_record)
                     raise
             if selected_waypoints is not None:
+                search_completed = True
                 waypoints = selected_waypoints
                 setattr(env, "_arrow_waypoints_world_m", {
                     f"waypoint_{idx}": _position(value)[:3].tolist()
@@ -3012,7 +3158,8 @@ def run_episode(
                 })
                 raise exc
         if (
-            isinstance(exc, TimeoutError)
+            not search_completed
+            and isinstance(exc, TimeoutError)
             and not can_search
             and not dry_run
             and recovery_attempts > 0
@@ -3089,7 +3236,8 @@ def run_episode(
                     _persist_recovery_audit(output_root, recovery_audit)
                 if recovery_audit and recovery_audit[-1].get("approved"):
                     break
-        raise exc
+        if not search_completed:
+            raise exc
     grasp_retry_audit: list[dict[str, Any]] = []
     # Publish retry evidence on the environment as soon as the motion phase
     # begins.  The matrix runner samples environment diagnostics even when a

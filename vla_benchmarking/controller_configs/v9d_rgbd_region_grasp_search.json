@@ -1,0 +1,19 @@
+{
+  "extends": "v9_patient_base.json",
+  "name": "libero_spatial_akita_bowl_agentview_v9d_rgbd_region_grasp_search",
+  "grasp_search": {
+    "enabled": true,
+    "strategy": "rgbd_region",
+    "offsets_m": [],
+    "region_radius_m": 0.075,
+    "region_depth_tolerance_m": 0.025,
+    "region_min_pixels": 48,
+    "region_max_fraction": 0.15,
+    "region_height_quantile": 0.70,
+    "region_profile_quantiles": [0.80, 0.60, 0.40],
+    "region_seed_radius_px": 3,
+    "max_attempts": 3,
+    "phase_timeout_steps": 160,
+    "max_actions": 1200
+  }
+}

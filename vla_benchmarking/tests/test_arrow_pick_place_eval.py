@@ -1572,6 +1572,124 @@ def test_external_v9_config_inheritance_and_hash_are_stable(runner, tmp_path: Pa
     assert variant.canonical()["grasp_search"]["offsets_m"] == [[0.0, 0.0, -0.01]]
 
 
+def test_v9d_rgbd_region_config_is_dynamic_and_v9e_changes_only_micro_correction(runner):
+    config_root = Path(runner.__file__).parent / "controller_configs"
+    v9d_expanded = runner.load_controller_config(config_root / "v9d_rgbd_region_grasp_search.json")
+    v9e_expanded = runner.load_controller_config(
+        config_root / "v9e_rgbd_region_with_micro_correction.json"
+    )
+    v9d = runner.controller_variant_from_config(v9d_expanded)
+    v9e = runner.controller_variant_from_config(v9e_expanded)
+    assert v9d.grasp_search.strategy == "rgbd_region"
+    assert v9d.grasp_search.offsets_m == ()
+    assert v9d.grasp_search.max_attempts == 3
+    assert v9d.micro_correction.enabled is False
+    assert v9e.micro_correction.enabled is True
+    left = v9d.canonical()
+    right = v9e.canonical()
+    left.pop("name")
+    right.pop("name")
+    left.pop("micro_correction")
+    right.pop("micro_correction")
+    assert left == right
+
+
+def test_rgbd_region_retry_uses_only_capture_geometry_and_proprioception(
+    runner, monkeypatch, tmp_path: Path
+):
+    _patch_episode_controller(runner, monkeypatch)
+    generated_target = np.asarray((0.04, 0.03, 1.02), dtype=np.float64)
+    candidate_calls = []
+
+    def fake_candidates(clean_rgb, depth_m, K, T_world_camera, source_uv, profile_target, **kwargs):
+        candidate_calls.append({
+            "rgb": np.asarray(clean_rgb).copy(),
+            "depth": np.asarray(depth_m).copy(),
+            "K": np.asarray(K).copy(),
+            "T": np.asarray(T_world_camera).copy(),
+            "source_uv": tuple(source_uv),
+            "profile_target": np.asarray(profile_target).copy(),
+            "kwargs": dict(kwargs),
+        })
+        return generated_target.reshape(1, 3), {
+            "method": "test_rgbd_region",
+            "selected_profile_quantiles": [0.8],
+            "selected_pixels_xy": [[9, 8]],
+        }
+
+    monkeypatch.setattr(runner, "derive_rgbd_region_grasp_candidates", fake_candidates)
+    monkeypatch.setattr(runner, "_raw_observation", lambda env: _motion_proprio())
+    waypoint_sources = []
+
+    def fake_waypoints(source, destination, *args, **kwargs):
+        waypoint_sources.append(np.asarray(source, dtype=np.float64).copy())
+        return np.tile(np.asarray(source, dtype=np.float64), (6, 1))
+
+    monkeypatch.setattr(runner, "build_bowl_waypoints", fake_waypoints)
+    motion_calls = []
+
+    def fake_motion(env, waypoints, observation, **kwargs):
+        motion_calls.append((np.asarray(waypoints).copy(), dict(kwargs)))
+        if len(motion_calls) == 1:
+            env._arrow_phase_audit = [
+                {"phase": "close", "status": "dwell", "steps": 20, "gripper_qpos": [0.0, 0.0]}
+            ]
+            raise runner._GraspSearchRequested("empty_gripper_likely")
+        if kwargs.get("start_phase") == "open":
+            return [
+                {"phase": "open", "status": "dwell", "steps": 2},
+                {"phase": "retreat", "status": "reached", "steps": 2},
+            ]
+        if kwargs.get("stop_after_phase") == "lift":
+            return [
+                {"phase": "close", "status": "dwell", "steps": 2, "gripper_qpos": [0.003, -0.003]},
+                {"phase": "lift", "status": "reached", "steps": 2},
+            ]
+        return [
+            {"phase": "preplace", "status": "reached", "steps": 2},
+            {"phase": "descend_place", "status": "reached", "steps": 2},
+            {"phase": "open", "status": "dwell", "steps": 2},
+            {"phase": "retreat", "status": "reached", "steps": 2},
+        ]
+
+    monkeypatch.setattr(runner, "_run_motion", fake_motion)
+    variant = runner.ControllerVariantConfig(
+        name="test_rgbd_region",
+        phase_timeout_steps=160,
+        grasp_search=runner.GraspSearchPolicy(
+            enabled=True,
+            strategy="rgbd_region",
+            offsets_m=(),
+            max_attempts=1,
+            phase_timeout_steps=160,
+            max_actions=100,
+        ),
+    )
+    capture = _episode_capture(runner)
+    audit = runner.run_episode(
+        env=_MotionEnv(),
+        task_id=0,
+        seed=1000,
+        resolution=256,
+        output_dir=tmp_path,
+        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+        capture=capture,
+        dry_run=False,
+        stop_after_phase="retreat",
+        controller_variant=variant,
+        evaluator=lambda env: True,
+    )
+    assert len(candidate_calls) == 1
+    np.testing.assert_array_equal(candidate_calls[0]["rgb"], capture.rgb)
+    np.testing.assert_array_equal(candidate_calls[0]["depth"], capture.metric_depth)
+    assert candidate_calls[0]["source_uv"] == (8.0, 8.0)
+    assert np.allclose(waypoint_sources[-1], generated_target)
+    assert audit["evaluator_success"] is True
+    assert audit["grasp_search"][0]["stage"] == "candidate_generation"
+    assert audit["grasp_search"][1]["status"] == "selected"
+    assert audit["grasp_search"][1]["selected_pixel_xy"] == [9, 8]
+
+
 def test_external_v9_config_cycle_rejected_before_motion(runner, tmp_path: Path):
     left = tmp_path / "left.json"
     right = tmp_path / "right.json"
@@ -1630,6 +1748,21 @@ def test_micro_correction_event_records_trigger_and_post_residual(runner, monkey
 def test_v9_policy_rejects_weakly_typed_limits(runner, field, value):
     with pytest.raises(ValueError):
         runner.GraspSearchPolicy(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"strategy": "object_pose"},
+        {"region_min_pixels": 1.5},
+        {"region_radius_m": 0.5},
+        {"region_height_quantile": 1.0},
+        {"region_profile_quantiles": []},
+    ],
+)
+def test_v9_dynamic_policy_rejects_invalid_geometry_contract(runner, kwargs):
+    with pytest.raises(ValueError):
+        runner.GraspSearchPolicy(**kwargs)
 
 
 @pytest.mark.parametrize("field,value", [("enabled", 1), ("max_actions", 2.5), ("max_rounds", False)])

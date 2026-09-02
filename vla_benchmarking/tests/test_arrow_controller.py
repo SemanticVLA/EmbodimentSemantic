@@ -20,6 +20,7 @@ from arrow_controller import (  # noqa: E402
     decode_arrow,
     decode_arrow_diagnostics,
     deproject_endpoint,
+    derive_rgbd_region_grasp_candidates,
     estimate_endpoint_depth,
     normalized_osc_action,
     refine_rgbd_endpoint,
@@ -230,3 +231,50 @@ def test_arrow_world_xy_basis_is_derived_from_deprojected_endpoints():
     assert lateral == pytest.approx((-1.0, 0.0, 0.0))
     with pytest.raises(ValueError, match="degenerate"):
         arrow_world_xy_basis((0, 0, 0), (0, 0, 1))
+
+
+def test_rgbd_region_candidates_follow_observed_geometry_not_rgb_texture():
+    height = width = 100
+    yy, xx = np.mgrid[:height, :width]
+    region = (xx - 50) ** 2 + (yy - 50) ** 2 <= 12 ** 2
+    depth = np.full((height, width), 2.0, dtype=np.float64)
+    depth[region] = 1.0 + (yy[region] - 50) * 0.0005
+    # Deliberately high-frequency texture: RGB cannot be a hard region gate.
+    rgb = np.zeros((height, width, 3), dtype=np.uint8)
+    rgb[..., 0] = (xx * 17 + yy * 31) % 256
+    rgb[..., 1] = (xx * 43 + yy * 7) % 256
+    rgb[..., 2] = (xx * 3 + yy * 59) % 256
+    K = np.array([[100.0, 0, 50.0], [0, 100.0, 50.0], [0, 0, 1.0]])
+    targets, audit = derive_rgbd_region_grasp_candidates(
+        rgb, depth, K, np.eye(4), (50, 50), (0.10, 0.0, 1.2),
+        region_radius_m=0.15,
+        profile_quantiles=(0.8, 0.6, 0.4),
+    )
+    assert targets.shape == (3, 3)
+    assert np.all(np.diff(targets[:, 0]) < 0.0)
+    assert np.all(np.abs(targets[:, 1]) <= 0.01)
+    assert np.allclose(targets[:, 2], np.quantile(depth[region], 0.70))
+    assert audit["region_area_px"] == int(region.sum())
+    assert audit["method"] == "arrow_seeded_metric_depth_component_v1"
+    assert audit["targets_world_m"] == targets.tolist()
+
+
+def test_rgbd_region_candidates_accept_clipped_object_and_reject_leakage():
+    height = width = 80
+    yy, xx = np.mgrid[:height, :width]
+    clipped = (xx - 1) ** 2 + (yy - 40) ** 2 <= 14 ** 2
+    depth = np.full((height, width), np.nan, dtype=np.float64)
+    depth[clipped] = 0.8
+    rgb = np.full((height, width, 3), 127, dtype=np.uint8)
+    K = np.array([[100.0, 0, 40.0], [0, -100.0, 40.0], [0, 0, 1.0]])
+    targets, audit = derive_rgbd_region_grasp_candidates(
+        rgb, depth, K, np.eye(4), (1, 40), (0.0, 0.0, 0.8),
+        region_radius_m=0.12,
+    )
+    assert targets.shape[0] >= 1
+    assert audit["touches_image_border"] is True
+    with pytest.raises(ValueError, match="exceeds max_region_fraction"):
+        derive_rgbd_region_grasp_candidates(
+            rgb, np.full_like(depth, 0.8), K, np.eye(4), (40, 40), (0, 0, 0.8),
+            region_radius_m=0.15, max_region_fraction=0.01,
+        )

@@ -1,0 +1,7 @@
+{
+  "extends": "v9d_rgbd_region_grasp_search.json",
+  "name": "libero_spatial_akita_bowl_agentview_v9e_rgbd_region_with_micro_correction",
+  "micro_correction": {
+    "enabled": true
+  }
+}
