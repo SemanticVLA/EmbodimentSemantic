@@ -26,7 +26,22 @@ if [[ "$SETUP_MODE" == "execute" ]]; then
 fi
 
 module purge
+module load nvhpc-nompi/25.1
+module load gcc/11.5.0
 module load miniforge/24.3.0-0
+CUDA_HOME="$(realpath -e -- "${NVHPC:?NVHPC module root is missing}/Linux_x86_64/25.1/cuda")" \
+  || die 'cannot resolve CUDA toolkit from nvhpc-nompi/25.1'
+export CUDA_HOME
+export CUDACXX="$CUDA_HOME/bin/nvcc"
+[[ -x "$CUDACXX" ]] || die "CUDA compiler is missing after loading nvhpc-nompi/25.1: $CUDACXX"
+CC="$(realpath -e -- "$(command -v gcc)")" || die 'cannot resolve GCC after loading gcc/11.5.0'
+CXX="$(realpath -e -- "$(command -v g++)")" || die 'cannot resolve G++ after loading gcc/11.5.0'
+CUDAHOSTCXX="$CXX"
+export CC CXX CUDAHOSTCXX
+[[ "$($CC -dumpfullversion -dumpversion)" == "11.5.0" ]] || die "unexpected GCC version: $($CC -dumpfullversion -dumpversion)"
+[[ "$($CXX -dumpfullversion -dumpversion)" == "11.5.0" ]] || die "unexpected G++ version: $($CXX -dumpfullversion -dumpversion)"
+export ZERO_GRASP_CUDA_MODULE_ID="nvhpc-nompi/25.1"
+export ZERO_GRASP_HOST_COMPILER_MODULE_ID="gcc/11.5.0"
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 SUBMITTED_SCRIPT="$(realpath -e -- "${BASH_SOURCE[0]}")" || die 'cannot resolve submitted Slurm script'

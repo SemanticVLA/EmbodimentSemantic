@@ -237,14 +237,19 @@ export ZERO_GRASP_SETUP_MODE=acquire
 sbatch vla_benchmarking/legion/setup_zerograsp_runtime.sbatch
 ```
 
-That job loads `miniforge/24.3.0-0`, creates a persistent Python 3.11 venv
+That job loads the pinned `nvhpc-nompi/25.1` CUDA compiler module,
+`gcc/11.5.0` host compiler, and `miniforge/24.3.0-0`; it explicitly pins
+`CC`, `CXX`, and `CUDAHOSTCXX` before creating a persistent Python 3.11 venv
 outside the checkout, installs the official CUDA 12.1 stack (Torch 2.2.0,
 torchvision 0.17.0, PyG wheels, xformers 0.0.24), the pinned current
 `ocnn`/`dwconv`/`graspnetAPI` refs, and the octree submodule. The upstream
 requirements leave `ocnn` floating, so the setup fails closed unless the
 script's reviewed immutable ref is used. The upstream `dwconv` VCS requirement
 is likewise filtered and installed at its pinned ref after Torch with build
-isolation disabled, because its build imports Torch. It installs `gdown==5.2.0` only on
+isolation disabled, because its build imports Torch and compiles a CUDA
+extension. The runtime lock records and verifies the compiler module names and
+the resolved paths, versions, and executable hashes for `nvcc`, `gcc`, and
+`g++`. It installs `gdown==5.2.0` only on
 the compute node and fetches the official Drive file id
 `1xUmFdgT_Ozu4zIPIsh_1SJMcegeQUWqQ` only when the checkpoint path is absent;
 existing checkpoint files are never overwritten. Acquisition exits before any

@@ -115,6 +115,40 @@ PYTHON_SHA256="$(sha256sum -- "$PYTHON" | awk '{print tolower($1)}')" || die 'ca
 [[ "$PYTHON_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'ZeroGrasp Python executable SHA-256 is invalid'
 PYTHON_VERSION="$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" || die 'cannot query Python version'
 [[ "$PYTHON_VERSION" == "3.11" ]] || die "official runtime requires Python 3.11 (found $PYTHON_VERSION)"
+CUDA_HOME_CANONICAL=""
+NVCC_CANONICAL=""
+NVCC_VERSION=""
+NVCC_SHA256=""
+CC_CANONICAL=""
+CC_VERSION=""
+CC_SHA256=""
+CXX_CANONICAL=""
+CXX_VERSION=""
+CXX_SHA256=""
+CUDAHOSTCXX_CANONICAL=""
+CUDA_MODULE_ID="${ZERO_GRASP_CUDA_MODULE_ID:-}"
+HOST_COMPILER_MODULE_ID="${ZERO_GRASP_HOST_COMPILER_MODULE_ID:-}"
+if [[ -n "${CUDA_HOME:-}" ]]; then
+  [[ "$CUDA_HOME" = /* ]] || die 'CUDA_HOME must be absolute when supplied'
+  CUDA_HOME_CANONICAL="$(realpath -e -- "$CUDA_HOME")" || die 'cannot canonicalize CUDA_HOME'
+  [[ -x "$CUDA_HOME_CANONICAL/bin/nvcc" ]] || die "CUDA_HOME does not contain executable bin/nvcc: $CUDA_HOME_CANONICAL"
+  NVCC_CANONICAL="$(realpath -e -- "$CUDA_HOME_CANONICAL/bin/nvcc")" || die 'cannot canonicalize nvcc'
+  NVCC_VERSION="$($NVCC_CANONICAL --version | sed -n 's/^.*release \([^,]*\),.*$/\1/p' | tail -n 1)"
+  [[ -n "$NVCC_VERSION" ]] || die 'cannot determine nvcc release'
+  NVCC_SHA256="$(sha256sum -- "$NVCC_CANONICAL" | awk '{print tolower($1)}')" || die 'cannot hash nvcc'
+fi
+if [[ -n "${CC:-}" || -n "${CXX:-}" || -n "${CUDAHOSTCXX:-}" ]]; then
+  [[ -n "${CC:-}" && -n "${CXX:-}" && -n "${CUDAHOSTCXX:-}" ]] || die 'CC, CXX, and CUDAHOSTCXX must be supplied together'
+  CC_CANONICAL="$(realpath -e -- "$CC")" || die 'cannot canonicalize CC'
+  CXX_CANONICAL="$(realpath -e -- "$CXX")" || die 'cannot canonicalize CXX'
+  CUDAHOSTCXX_CANONICAL="$(realpath -e -- "$CUDAHOSTCXX")" || die 'cannot canonicalize CUDAHOSTCXX'
+  [[ -x "$CC_CANONICAL" && -x "$CXX_CANONICAL" && -x "$CUDAHOSTCXX_CANONICAL" ]] || die 'host compiler paths must be executable'
+  [[ "$CUDAHOSTCXX_CANONICAL" == "$CXX_CANONICAL" ]] || die 'CUDAHOSTCXX must resolve to the pinned CXX compiler'
+  CC_VERSION="$($CC_CANONICAL -dumpfullversion -dumpversion)" || die 'cannot determine CC version'
+  CXX_VERSION="$($CXX_CANONICAL -dumpfullversion -dumpversion)" || die 'cannot determine CXX version'
+  CC_SHA256="$(sha256sum -- "$CC_CANONICAL" | awk '{print tolower($1)}')" || die 'cannot hash CC'
+  CXX_SHA256="$(sha256sum -- "$CXX_CANONICAL" | awk '{print tolower($1)}')" || die 'cannot hash CXX'
+fi
 
 SUBMODULE="$ROOT/submodules/octree_feature_extractor"
 [[ -d "$SUBMODULE" ]] || die 'octree_feature_extractor submodule is missing'
@@ -126,9 +160,13 @@ fi
 SUBMODULE_REVISION="$(git -C "$SUBMODULE" rev-parse HEAD 2>/dev/null)" || die 'cannot read octree submodule revision'
 [[ "$SUBMODULE_REVISION" =~ ^[0-9a-f]{40}$ ]] || die 'octree submodule revision is not a full commit hash'
 if [[ -f "$LOCK" ]]; then
-  "$PYTHON" - "$LOCK" "$VENV" "$PYTHON" "$PYTHON_SHA256" "$CHECKPOINT_SHA" "$CONFIG_SHA" "$ZERO_GRASP_PIN" "$SUBMODULE_REVISION" "$PYTHON_VERSION" <<'PY'
+  [[ -n "$CUDA_HOME_CANONICAL" && -n "$NVCC_CANONICAL" && -n "$CC_CANONICAL" && -n "$CXX_CANONICAL" ]] || die 'existing runtime lock verification requires the pinned CUDA and host compiler toolchain'
+  [[ -n "$CUDA_MODULE_ID" && -n "$HOST_COMPILER_MODULE_ID" ]] || die 'existing runtime lock verification requires explicit compiler module identities'
+  "$PYTHON" - "$LOCK" "$VENV" "$PYTHON" "$PYTHON_SHA256" "$CHECKPOINT_SHA" "$CONFIG_SHA" "$ZERO_GRASP_PIN" "$SUBMODULE_REVISION" "$PYTHON_VERSION" \
+    "$CUDA_MODULE_ID" "$HOST_COMPILER_MODULE_ID" "$CUDA_HOME_CANONICAL" "$NVCC_CANONICAL" "$NVCC_VERSION" "$NVCC_SHA256" \
+    "$CC_CANONICAL" "$CC_VERSION" "$CC_SHA256" "$CXX_CANONICAL" "$CXX_VERSION" "$CXX_SHA256" "$CUDAHOSTCXX_CANONICAL" <<'PY'
 import json, pathlib, subprocess, sys
-path, venv, python, python_sha, checkpoint_sha, config_sha, revision, submodule_revision, python_version = sys.argv[1:]
+path, venv, python, python_sha, checkpoint_sha, config_sha, revision, submodule_revision, python_version, cuda_module, host_module, cuda_home, nvcc, nvcc_version, nvcc_sha, cc, cc_version, cc_sha, cxx, cxx_version, cxx_sha, cuda_host_cxx = sys.argv[1:]
 try:
     data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
 except Exception as exc:
@@ -136,6 +174,17 @@ except Exception as exc:
 for key, expected in (("venv", pathlib.Path(venv).resolve().as_posix()), ("python", pathlib.Path(python).resolve().as_posix()), ("python_executable_sha256", python_sha), ("checkpoint_sha256", checkpoint_sha), ("config_sha256", config_sha), ("official_revision", revision), ("octree_feature_extractor_revision", submodule_revision), ("python_version", python_version)):
     if data.get(key) != expected:
         raise SystemExit(f"existing runtime lock {key} differs")
+expected_toolchain = {
+    "cuda_module": cuda_module,
+    "host_compiler_module": host_module,
+    "cuda_home": pathlib.Path(cuda_home).resolve().as_posix(),
+    "nvcc": {"path": pathlib.Path(nvcc).resolve().as_posix(), "release": nvcc_version, "sha256": nvcc_sha},
+    "cc": {"path": pathlib.Path(cc).resolve().as_posix(), "version": cc_version, "sha256": cc_sha},
+    "cxx": {"path": pathlib.Path(cxx).resolve().as_posix(), "version": cxx_version, "sha256": cxx_sha},
+    "cuda_host_cxx": pathlib.Path(cuda_host_cxx).resolve().as_posix(),
+}
+if data.get("build_toolchain") != expected_toolchain:
+    raise SystemExit("existing runtime lock build_toolchain differs")
 expected_freeze = sorted(data.get("pip_freeze", []))
 actual_freeze = sorted(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True).splitlines())
 if not expected_freeze or expected_freeze != actual_freeze:
@@ -160,6 +209,8 @@ PY
   VERIFY_ONLY=1
 fi
 if ((INSTALL)); then
+  [[ -n "$CUDA_HOME_CANONICAL" && -n "$NVCC_CANONICAL" && -n "$CC_CANONICAL" && -n "$CXX_CANONICAL" ]] || die 'CUDA_HOME with a complete CUDA toolkit and pinned host compilers is required for compiled ZeroGrasp dependencies'
+  [[ -n "$CUDA_MODULE_ID" && -n "$HOST_COMPILER_MODULE_ID" ]] || die 'explicit CUDA and host compiler module identities are required for installation provenance'
   REQ_TMP="$(mktemp)"
   CONSTRAINT_TMP="$(mktemp)"
   cleanup() { rm -f -- "$REQ_TMP" "$CONSTRAINT_TMP"; }
@@ -212,9 +263,11 @@ fi
 if ((VERIFY_ONLY)); then
   [[ -f "$LOCK" ]] || die "runtime lock is missing: $LOCK"
 else
-  "$PYTHON" - "$LOCK" "$ROOT" "$VENV" "$PYTHON" "$PYTHON_SHA256" "$SUBMODULE_REVISION" "$CHECKPOINT" "$CHECKPOINT_SHA" "$CONFIG" "$CONFIG_SHA" "$PYTHON_VERSION" <<'PY'
+  "$PYTHON" - "$LOCK" "$ROOT" "$VENV" "$PYTHON" "$PYTHON_SHA256" "$SUBMODULE_REVISION" "$CHECKPOINT" "$CHECKPOINT_SHA" "$CONFIG" "$CONFIG_SHA" "$PYTHON_VERSION" \
+    "$CUDA_MODULE_ID" "$HOST_COMPILER_MODULE_ID" "$CUDA_HOME_CANONICAL" "$NVCC_CANONICAL" "$NVCC_VERSION" "$NVCC_SHA256" \
+    "$CC_CANONICAL" "$CC_VERSION" "$CC_SHA256" "$CXX_CANONICAL" "$CXX_VERSION" "$CXX_SHA256" "$CUDAHOSTCXX_CANONICAL" <<'PY'
 import json, pathlib, subprocess, sys
-lock, root, venv, python, python_sha, submodule_revision, checkpoint, checkpoint_sha, config, config_sha, python_version = sys.argv[1:]
+lock, root, venv, python, python_sha, submodule_revision, checkpoint, checkpoint_sha, config, config_sha, python_version, cuda_module, host_module, cuda_home, nvcc, nvcc_version, nvcc_sha, cc, cc_version, cc_sha, cxx, cxx_version, cxx_sha, cuda_host_cxx = sys.argv[1:]
 packages = subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True).splitlines()
 gpu = {"cuda_available": False, "name": None, "torch_cuda": None}
 try:
@@ -235,6 +288,15 @@ data = {
     "python_executable_sha256": python_sha,
     "python_version": python_version,
     "numpy_version": "1.26.4",
+    "build_toolchain": {
+        "cuda_module": cuda_module,
+        "host_compiler_module": host_module,
+        "cuda_home": pathlib.Path(cuda_home).resolve().as_posix(),
+        "nvcc": {"path": pathlib.Path(nvcc).resolve().as_posix(), "release": nvcc_version, "sha256": nvcc_sha},
+        "cc": {"path": pathlib.Path(cc).resolve().as_posix(), "version": cc_version, "sha256": cc_sha},
+        "cxx": {"path": pathlib.Path(cxx).resolve().as_posix(), "version": cxx_version, "sha256": cxx_sha},
+        "cuda_host_cxx": pathlib.Path(cuda_host_cxx).resolve().as_posix(),
+    },
     "gpu": gpu,
     "torch": {"version": "2.2.0", "torchvision": "0.17.0", "cuda": "12.1"},
     "ocnn_commit": "7521c22e2921a0bd8e9285044c842ff6fa2042e0",
@@ -262,6 +324,12 @@ printf 'zero_grasp_checkpoint_sha256=%s\n' "$CHECKPOINT_SHA"
 printf 'zero_grasp_config=%s\n' "$CONFIG"
 printf 'zero_grasp_config_sha256=%s\n' "$CONFIG_SHA"
 printf 'zero_grasp_numpy_version=%s\n' "$NUMPY_VERSION"
+printf 'zero_grasp_build_cuda_home=%s\n' "$CUDA_HOME_CANONICAL"
+printf 'zero_grasp_build_nvcc_release=%s\n' "$NVCC_VERSION"
+printf 'zero_grasp_build_cc=%s\n' "$CC_CANONICAL"
+printf 'zero_grasp_build_cc_version=%s\n' "$CC_VERSION"
+printf 'zero_grasp_build_cxx=%s\n' "$CXX_CANONICAL"
+printf 'zero_grasp_build_cxx_version=%s\n' "$CXX_VERSION"
 printf 'zero_grasp_env_lock=%s\n' "$LOCK"
 [[ -f "$LOCK" ]] && printf 'zero_grasp_env_lock_sha256=%s\n' "$(sha256sum "$LOCK" | awk '{print tolower($1)}')"
 printf 'zero_grasp_checkpoint_downloaded=false\n'

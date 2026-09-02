@@ -101,6 +101,11 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
         "Python 3.11",
         "numpy==1.26.4",
         "numpy_version",
+        "build_toolchain",
+        "existing runtime lock build_toolchain differs",
+        "NVCC_SHA256",
+        "CC_SHA256",
+        "CXX_SHA256",
         "checkpoint_size_bytes",
         "pip_freeze",
         "--no-deps",
@@ -114,10 +119,13 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
     assert '"ocnn @ ${OCNN_URL}@${OCNN_PIN}"' in text
     assert '"dwconv @ ${DWCONV_URL}@${DWCONV_PIN}"' in text
     assert "--no-build-isolation --no-deps" in text
+    assert "CUDA_HOME with a complete CUDA toolkit and pinned host compilers is required" in text
     assert text.index('torch==2.2.0 torchvision==0.17.0') < text.index('"dwconv @ ${DWCONV_URL}@${DWCONV_PIN}"') < text.index('torch-scatter')
     assert "checkpoint URL is provenance only" in text
     assert "--install" in text and "--smoke" in text and "--verify-only" in text
-    assert text.index("if [[ -f \"$LOCK\" ]]; then") < text.index("if ((INSTALL)); then\n  REQ_TMP")
+    assert text.index("if [[ -f \"$LOCK\" ]]; then") < text.index(
+        "if ((INSTALL)); then\n  [[ -n \"$CUDA_HOME_CANONICAL\" &&"
+    )
     assert "INSTALL=0" in text and "VERIFY_ONLY=1" in text
     assert "zerograsp_setup_mode=acquire" in SETUP_JOB.read_text(encoding="utf-8")
     assert "zerograsp_model_load=false" in SETUP_JOB.read_text(encoding="utf-8")
@@ -126,7 +134,14 @@ def test_runtime_setup_matches_official_pinned_compute_contract():
 def test_runtime_setup_job_is_compute_only_and_downloads_only_official_id():
     text = SETUP_JOB.read_text(encoding="utf-8")
     assert "SLURM_JOB_ID" in text
+    assert "module load nvhpc-nompi/25.1" in text
+    assert "module load gcc/11.5.0" in text
     assert "module load miniforge/24.3.0-0" in text
+    assert 'export CUDA_HOME' in text
+    assert 'export CUDACXX="$CUDA_HOME/bin/nvcc"' in text
+    assert 'export CC CXX CUDAHOSTCXX' in text
+    assert 'ZERO_GRASP_CUDA_MODULE_ID="nvhpc-nompi/25.1"' in text
+    assert 'ZERO_GRASP_HOST_COMPILER_MODULE_ID="gcc/11.5.0"' in text
     assert "--gres=gpu:1" in text
     assert "gdown==5.2.0" in text
     assert "1xUmFdgT_Ozu4zIPIsh_1SJMcegeQUWqQ" in text
