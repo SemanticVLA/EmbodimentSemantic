@@ -297,7 +297,7 @@ def _p4_trace_errors(record: Mapping[str, Any], artifact: Path) -> list[str]:
         return [f"motion trace missing or unreadable for cell {cell}"]
     if not trace:
         return [f"motion trace empty for cell {cell}"]
-    by_phase: dict[str, list[int]] = defaultdict(list)
+    by_phase: dict[tuple[str, str], list[int]] = defaultdict(list)
     for item in trace:
         if not isinstance(item, Mapping):
             return [f"motion trace contains invalid entry for cell {cell}"]
@@ -308,12 +308,13 @@ def _p4_trace_errors(record: Mapping[str, Any], artifact: Path) -> list[str]:
             return [f"motion trace step missing for cell {cell}"]
         if step < 1:
             return [f"motion trace step invalid for cell {cell}"]
-        by_phase[phase].append(step)
+        segment = str(item.get("segment", "initial"))
+        by_phase[(phase, segment)].append(step)
     errors: list[str] = []
-    for phase, steps in by_phase.items():
+    for (phase, segment), steps in by_phase.items():
         ordered = sorted(set(steps))
         if len(ordered) != len(steps) or ordered != list(range(1, ordered[-1] + 1)):
-            errors.append(f"motion trace has missing or gapped steps for cell {cell} phase {phase}")
+            errors.append(f"motion trace has missing or gapped steps for cell {cell} phase {phase} segment {segment}")
     if _evidence_value(record, "motion_trace_truncated") is True:
         errors.append(f"motion trace truncated for cell {cell}")
     maximum = _evidence_value(record, "motion_trace_max_steps")

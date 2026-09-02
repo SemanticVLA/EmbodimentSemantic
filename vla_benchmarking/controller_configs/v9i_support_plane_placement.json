@@ -5,6 +5,7 @@
     "enabled": true,
     "patch_radius_px": 3,
     "min_valid_fraction": 0.5,
-    "max_residual_m": 0.01
+    "max_residual_m": 0.01,
+    "release_clearance_m": 0.015
   }
 }

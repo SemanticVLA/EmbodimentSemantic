@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import inspect
 import json
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -501,9 +502,10 @@ def _optional_rgbd_policy(value: Mapping[str, Any] | None, name: str, allowed: s
         radius = int(result.get("patch_radius_px", 3))
         fraction = float(result.get("min_valid_fraction", 0.5))
         residual = float(result.get("max_residual_m", 0.01))
-        if radius < 1 or radius > 8 or not 0.0 < fraction <= 1.0 or not np.isfinite(residual) or residual <= 0.0 or residual > 0.05:
+        release_clearance = float(result.get("release_clearance_m", 0.015))
+        if radius < 1 or radius > 8 or not 0.0 < fraction <= 1.0 or not np.isfinite(residual) or residual <= 0.0 or residual > 0.05 or not np.isfinite(release_clearance) or not 0.003 <= release_clearance <= 0.08:
             raise ValueError(f"{name} depth support settings are invalid")
-        result.update({"patch_radius_px": radius, "min_valid_fraction": fraction, "max_residual_m": residual})
+        result.update({"patch_radius_px": radius, "min_valid_fraction": fraction, "max_residual_m": residual, "release_clearance_m": release_clearance})
     return result
 
 
@@ -554,7 +556,7 @@ class ControllerVariantConfig:
             self.source_approach, "source_approach", {"enabled", "offsets_arrow_frame_m", "patch_radius_px", "min_valid_fraction"}
         ))
         object.__setattr__(self, "destination_placement", _optional_rgbd_policy(
-            self.destination_placement, "destination_placement", {"enabled", "patch_radius_px", "min_valid_fraction", "max_residual_m"}
+            self.destination_placement, "destination_placement", {"enabled", "patch_radius_px", "min_valid_fraction", "max_residual_m", "release_clearance_m"}
         ))
         if self.grasp_provider not in (None, "classical", "zerograsp"):
             raise ValueError("grasp_provider must be classical or zerograsp")
@@ -2119,6 +2121,8 @@ def _run_motion(
     eef_orientation_transform: np.ndarray | None = None,
     motion_trace_max_steps: int = DEFAULT_MOTION_TRACE_MAX_STEPS,
     motion_trace_path: str | Path | None = None,
+    motion_trace_state: list[dict[str, Any]] | None = None,
+    motion_trace_segment: str = "initial",
     failure_snapshot_callback: Callable[[str, int, Mapping[str, Any]], str | Path | None] | None = None,
     motion_frame_callback: Callable[[str, int], str | Path | None] | None = None,
     post_lift_retention_gate: Callable[[Mapping[str, Any], Mapping[str, np.ndarray]], Any] | None = None,
@@ -2151,7 +2155,7 @@ def _run_motion(
     if held_rotation is None:
         raise ValueError("initial observation lacks EEF orientation proprioception")
     phase_audit: list[dict[str, Any]] = []
-    motion_trace: list[dict[str, Any]] = []
+    motion_trace: list[dict[str, Any]] = motion_trace_state if motion_trace_state is not None else []
     trace_path = Path(motion_trace_path).expanduser().resolve() if motion_trace_path is not None else None
     trace_truncated = False
 
@@ -2160,15 +2164,16 @@ def _run_motion(
             return
         try:
             trace_path.parent.mkdir(parents=True, exist_ok=True)
-            trace_path.write_text(
-                json.dumps({
+            payload = json.dumps({
                     "schema_version": "arrow_motion_trace.v1",
                     "max_steps": int(motion_trace_max_steps),
                     "truncated": bool(trace_truncated),
                     "steps": motion_trace,
-                }, indent=2),
-                encoding="utf-8",
-            )
+                }, indent=2)
+            temporary = trace_path.with_name(f".{trace_path.name}.{os.getpid()}.partial")
+            temporary.write_text(payload, encoding="utf-8")
+            os.replace(temporary, trace_path)
+            setattr(env, "_arrow_motion_trace_sha256", hashlib.sha256(trace_path.read_bytes()).hexdigest())
             setattr(env, "_arrow_motion_trace_persist_error", None)
         except Exception as exc:  # diagnostic persistence cannot alter control
             setattr(env, "_arrow_motion_trace_persist_error", str(exc))
@@ -2176,7 +2181,9 @@ def _run_motion(
     def append_motion_trace(entry: Mapping[str, Any]) -> None:
         nonlocal trace_truncated
         if len(motion_trace) < motion_trace_max_steps:
-            motion_trace.append(dict(entry))
+            item = dict(entry)
+            item["segment"] = str(motion_trace_segment)
+            motion_trace.append(item)
         else:
             trace_truncated = True
         setattr(env, "_arrow_motion_trace", motion_trace)
@@ -3077,11 +3084,15 @@ def run_episode(
                 min_valid_fraction=float(destination_policy["min_valid_fraction"]),
                 max_residual_m=float(destination_policy["max_residual_m"]),
             )
-            destination_point = release_point_on_support_plane(
+            support_point = release_point_on_support_plane(
                 support_plane,
                 np.asarray(destination_visual_point[:2], dtype=np.float64),
                 workspace_bounds_m=workspace_bounds,
             )
+            # The fitted surface is a support reference, not a collision target:
+            # retain an explicit tool clearance along its observed normal.
+            destination_point = support_point + support_plane.normal_world_unit * float(destination_policy["release_clearance_m"])
+            validate_workspace_points({"support_plane_release_target": destination_point}, bounds=workspace_bounds)
             support_plane_audit = {
                 "enabled": True,
                 "valid": True,
@@ -3092,6 +3103,8 @@ def run_episode(
                 "residual_max_m": float(support_plane.residual_max_m),
                 "valid_point_count": int(support_plane.valid_point_count),
                 "release_point_world_m": destination_point.tolist(),
+                "support_point_world_m": support_point.tolist(),
+                "release_clearance_m": float(destination_policy["release_clearance_m"]),
                 "source": "metric_rgbd_destination_neighborhood",
             }
         except (TypeError, ValueError, RuntimeError) as exc:
@@ -3632,6 +3645,11 @@ def run_episode(
                         osc_position_scale_m=variant.osc_position_scale_m,
                         micro_correction=None,
                         action_budget=search_policy.max_actions - search_actions,
+                        motion_trace_path=output_root / "motion_trace.json",
+                        motion_trace_state=getattr(env, "_arrow_motion_trace", None),
+                        motion_trace_segment=f"attempt_{attempt_index}_reset",
+                        failure_snapshot_callback=failure_snapshot_callback,
+                        motion_frame_callback=canary_motion_frame_callback if canary_video_root is not None else None,
                     )
                     search_actions += sum(int(item.get("steps", 0)) for item in reset_audit)
                     for item in reset_audit:
@@ -3654,6 +3672,12 @@ def run_episode(
                         micro_correction=variant.micro_correction,
                         micro_action_budget=micro_action_budget,
                         action_budget=search_policy.max_actions - search_actions,
+                        motion_trace_path=output_root / "motion_trace.json",
+                        motion_trace_state=getattr(env, "_arrow_motion_trace", None),
+                        motion_trace_segment=f"attempt_{attempt_index}_grasp",
+                        failure_snapshot_callback=failure_snapshot_callback,
+                        motion_frame_callback=canary_motion_frame_callback if canary_video_root is not None else None,
+                        post_lift_retention_gate=effective_retention_gate,
                     )
                     search_actions += sum(int(item.get("steps", 0)) for item in retry_audit)
                     for item in retry_audit:
@@ -3694,6 +3718,11 @@ def run_episode(
                         micro_correction=variant.micro_correction,
                         micro_action_budget=micro_action_budget,
                         action_budget=search_policy.max_actions - search_actions,
+                        motion_trace_path=output_root / "motion_trace.json",
+                        motion_trace_state=getattr(env, "_arrow_motion_trace", None),
+                        motion_trace_segment=f"attempt_{attempt_index}_placement",
+                        failure_snapshot_callback=failure_snapshot_callback,
+                        motion_frame_callback=canary_motion_frame_callback if canary_video_root is not None else None,
                     )
                     search_actions += sum(int(item.get("steps", 0)) for item in placement_audit)
                     attempt_record["actions_after"] = int(search_actions)
@@ -3869,6 +3898,12 @@ def run_episode(
                     stall_delta_m=variant.stall_delta_m,
                     phase_policies=phase_policies,
                     osc_position_scale_m=variant.osc_position_scale_m,
+                    motion_trace_path=output_root / "motion_trace.json",
+                    motion_trace_state=getattr(env, "_arrow_motion_trace", None),
+                    motion_trace_segment=f"grasp_retry_{retry_index}",
+                    failure_snapshot_callback=failure_snapshot_callback,
+                    motion_frame_callback=canary_motion_frame_callback if canary_video_root is not None else None,
+                    post_lift_retention_gate=effective_retention_gate,
                 )
                 for record in retry_phase_audit:
                     record["grasp_retry_attempt"] = int(retry_index)
