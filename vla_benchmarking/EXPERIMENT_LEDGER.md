@@ -328,6 +328,10 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
   Evaluation `1912721` is still **RUNNING**, currently in the
   `graph_trained_graph_context` cell. Six task video artifacts (tasks 0–5) are
   present so far; final success metrics are not available yet.
+- At the fresh `2026-09-02T02:52:11Z` audit, the evaluator still had no
+  complete `eval_info.json` or `randomization_audit.jsonl` rows. Therefore no
+  per-task success count is reported yet; the existing task 0–5 artifacts are
+  partial debug/video outputs, not evaluation results.
 - Trained on: graph-text `target_natural_v1` with no visual arrows, using the
   sealed `graph_treatment`/`arrow_graph_treatment` pair.
 - Planned contract: 15 epochs, 29,190 steps, checkpoint `029190`, batch 32,
@@ -335,9 +339,10 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
   graph-removed text with no visual arrows, 10 episodes per task for tasks 0–9.
 - The failed-attempt state file above is historical. The current verified setup
   state is `/home/hjaber/EmbodimentSemantic_runtime/graph_pilot/legion_graph_treatment_lora_full_s1000_v1_20260901T091457Z/state.env`.
-- The setup smoke checkpoint `000002` is diagnostic only; no full-training
-  checkpoint or score exists yet. The old failed chain's jobs `1911247` and
-  `1911248` remain dependency-blocked and are not current training progress.
+- The setup smoke checkpoint `000002` is diagnostic only. The full-training
+  final checkpoint is `029190`; no evaluation score exists yet. The old failed
+  chain's jobs `1911247` and `1911248` remain dependency-blocked and are not
+  current training progress.
 
 The previous setup job `1911381` was cancelled before completion because it was
 still targeting the stale derived snapshot. It produced no training/evaluation
