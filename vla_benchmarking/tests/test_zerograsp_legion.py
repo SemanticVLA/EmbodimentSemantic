@@ -100,6 +100,25 @@ def test_dual_matrix_motion_mode_is_explicit_and_defaults_to_execution():
     assert "motion_mode=$MATRIX_EXECUTION_MODE" in text
 
 
+def test_dual_matrix_preserves_expected_hashes_before_observed_digest_reuse():
+    text = DUAL_MATRIX.read_text(encoding="utf-8")
+    pairs = (
+        ("ZERO_GRASP_PYTHON", "ZERO_GRASP_PYTHON_EXPECTED_INPUT"),
+        ("ZERO_GRASP_CHECKPOINT", "ZERO_GRASP_CHECKPOINT_EXPECTED_INPUT"),
+        ("ZERO_GRASP_CONFIG", "ZERO_GRASP_CONFIG_EXPECTED_INPUT"),
+        ("ZERO_GRASP_ENV_LOCK", "ZERO_GRASP_ENV_LOCK_EXPECTED_INPUT"),
+    )
+    for observed, preserved in pairs:
+        capture = f'{preserved}="${{{observed}_SHA256:-}}"'
+        reset = f'{observed}_SHA256=""'
+        assert capture in text
+        assert text.index(capture) < text.index(reset)
+    assert 'ZERO_GRASP_CHECKPOINT_EXPECTED="$ZERO_GRASP_CHECKPOINT_EXPECTED_INPUT"' in text
+    assert 'ZERO_GRASP_CONFIG_EXPECTED="$ZERO_GRASP_CONFIG_EXPECTED_INPUT"' in text
+    assert 'ZERO_GRASP_ENV_LOCK_EXPECTED="$ZERO_GRASP_ENV_LOCK_EXPECTED_INPUT"' in text
+    assert '"$ZERO_GRASP_PYTHON_SHA256" == "$ZERO_GRASP_PYTHON_EXPECTED_INPUT"' in text
+
+
 def test_runtime_setup_matches_official_pinned_compute_contract():
     text = SETUP.read_text(encoding="utf-8")
     assert "export PYTHONDONTWRITEBYTECODE=1" in text
