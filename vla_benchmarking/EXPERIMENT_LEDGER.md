@@ -318,16 +318,16 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
   coercing the dummy action to a NumPy `float32` array before `LiberoEnv.step`.
   The setup archive is verified with tree hash
   `bad36313db6f05d60c3424edf7787bb8a63afe819fe28df66bb31f79906f4380`.
-- After explicit launch confirmation, training job `1912720` is **RUNNING** and
-  paired evaluation job `1912721` is **PENDING (Dependency)** on
-  `afterok:1912720`. The verified setup state and sealed templates were reused;
-  no second setup or dataset regeneration was performed.
-- Fresh Legion audit: `2026-09-02T01:07:35Z`. Training is on `compute-4-11`;
-  the latest log line (`01:02:50Z`) displays approximately step `28K` / epoch
-  `14.19` (about 94.6% of 29,190 steps), with loss `0.472`. Fourteen saved
-  checkpoints are present through `027244` (`00:53:21Z`). The trainer's live
-  display rounds the step to `28K`, so this audit does not claim a falsely
-  precise current step. Evaluation `1912721` remains dependency-pending.
+- After explicit launch confirmation, training job `1912720` completed and its
+  paired evaluation job `1912721` started on `compute-4-11`. The verified setup
+  state and sealed templates were reused; no second setup or dataset
+  regeneration was performed.
+- Fresh Legion audit: `2026-09-02T02:47:32Z`. Training reached step `29,190`
+  / epoch `15`, saved all 15 checkpoints through final `029190`, passed the
+  adapter reload smoke, and finished at `01:50:19Z`; its archive is verified.
+  Evaluation `1912721` is still **RUNNING**, currently in the
+  `graph_trained_graph_context` cell. Six task video artifacts (tasks 0–5) are
+  present so far; final success metrics are not available yet.
 - Trained on: graph-text `target_natural_v1` with no visual arrows, using the
   sealed `graph_treatment`/`arrow_graph_treatment` pair.
 - Planned contract: 15 epochs, 29,190 steps, checkpoint `029190`, batch 32,
@@ -346,8 +346,8 @@ submission; its partial setup evidence remains archived. The follow-up setup
 fix was identified; it produced no training/evaluation submission and must not
 be reused. Failed setup `1911386` is likewise retired after exposing the stale
 historical-pair sentinel. Setup `1911474` is the latest attempt and is terminally
-failed; setup `1912529` is the later verified setup, with training `1912720`
-running and evaluation `1912721` dependency-pending.
+failed; setup `1912529` is the later verified setup. Training `1912720` is
+complete and evaluation `1912721` is the active dependent evaluation.
 
 ## Completed action-visual training — `legion_action_visual_lora_no_arrow_s1000_v7_20260831T101333Z`
 
