@@ -474,6 +474,7 @@ def rank_grasps(candidates: Sequence[GraspCandidate], T_world_camera: Any, confi
                 # configured clearance rather than a task-specific offset.
                 margin = max(float(cfg.swept_path_clearance_m), float(candidate.depth_m or 0.0), float(candidate.width_m or 0.0))
                 if np.any(position < source_points.min(axis=0) - margin) or np.any(position > source_points.max(axis=0) + margin):
+                    rejected.append({"index": index, "reason": "source_envelope"})
                     continue
         # The official grasp convention is parameterized explicitly (default
         # +X); no unspoken gripper-axis assumption is made in the adapter.
@@ -595,6 +596,14 @@ def deproject_pixel(observation: ZeroGraspObservation, pixel: Sequence[float]) -
     return (observation.T_world_camera @ np.r_[point_camera, 1.0])[:3]
 
 
+class ZeroGraspSelectionError(ValueError):
+    """Selection failure that retains deterministic filter evidence."""
+
+    def __init__(self, message: str, audit: Mapping[str, Any]):
+        super().__init__(message)
+        self.audit = dict(audit)
+
+
 def select_grasp_result(result: ZeroGraspInferenceResult, observation: ZeroGraspObservation, config: ZeroGraspConfig | None = None) -> dict[str, Any]:
     cfg = validate_config(config)
     masks = build_arrow_seeded_masks(observation, cfg)
@@ -602,7 +611,7 @@ def select_grasp_result(result: ZeroGraspInferenceResult, observation: ZeroGrasp
     selection_audit["mask_diagnostics"] = serialize_audit(masks.diagnostics)
     ranked = rank_grasps(result.candidates, observation.T_world_camera, cfg, eef_position_world_m=observation.eef_position_world_m, observation=observation, source_mask=masks.source_mask, reconstruction=result.reconstruction, audit=selection_audit)
     if not ranked:
-        raise ValueError("no valid ZeroGrasp candidate remains after deterministic filters")
+        raise ZeroGraspSelectionError("no valid ZeroGrasp candidate remains after deterministic filters", selection_audit)
     candidate, T_W_G, clearance = ranked[0]
     T_W_pregrasp_G = make_pregrasp(T_W_G, cfg.pregrasp_distance_m, cfg.approach_axis_local)
     out = {"candidate": candidate, "clearance_m": clearance, "eef_pose_ready": False, "selection_audit": selection_audit}
@@ -840,7 +849,7 @@ class ZeroGraspProcessAdapter:
             if reply.get("type") != "result":
                 raise RuntimeError(f"unexpected ZeroGrasp response type: {reply.get('type')}")
             result = parse_inference_result(reply, prepared.request_hash)
-            self.last_audit.update({"output_hash": result.output_hash, "status": "ok"})
+            self.last_audit.update({"output_hash": result.output_hash, "worker_diagnostics": serialize_audit(result.diagnostics), "candidate_count": len(result.candidates), "status": "ok"})
             return result
         except Exception as exc:
             self.last_audit.update({"status": "failed", "error": str(exc)})
@@ -849,7 +858,11 @@ class ZeroGraspProcessAdapter:
             raise
 
     def select(self, result: ZeroGraspInferenceResult, observation: ZeroGraspObservation) -> dict[str, Any]:
-        selected = select_grasp_result(result, _check_observation(observation), self.config)
+        try:
+            selected = select_grasp_result(result, _check_observation(observation), self.config)
+        except ZeroGraspSelectionError as exc:
+            self.last_audit.update({"status": "failed", "error": str(exc), "selection_audit": serialize_audit(exc.audit)})
+            raise
         self.last_audit.update(serialize_audit(selected))
         return selected
 

@@ -21,6 +21,7 @@ from zerograsp_adapter import (  # noqa: E402
     reconstruction_assisted_placement,
     transform_T_W_E,
     select_grasp_result,
+    ZeroGraspSelectionError,
     ZeroGraspProcessAdapter,
 )
 from zerograsp_contracts import (  # noqa: E402
@@ -232,6 +233,18 @@ def test_process_adapter_calibration_gate_precedes_worker_start_or_prepare():
     adapter = ZeroGraspProcessAdapter(["definitely-not-a-worker"], ZeroGraspConfig())
     with pytest.raises(RuntimeError, match="verified EEF calibration"):
         adapter.infer(_observation(100.0))
+
+
+def test_process_adapter_retains_filter_audit_when_all_candidates_reject():
+    obs = _observation(100.0)
+    candidate = GraspCandidate(np.eye(4), score=1.0, width_m=0.04, depth_m=0.02, collision_free=False, **_CANDIDATE_TAGS)
+    result = ZeroGraspInferenceResult((candidate,), None, "request", "output", {"backend": "fixture"})
+    adapter = ZeroGraspProcessAdapter(["fixture-worker"], ZeroGraspConfig())
+    adapter.last_audit = {"candidate_count": 1, "worker_diagnostics": result.diagnostics}
+    with pytest.raises(ZeroGraspSelectionError, match="no valid ZeroGrasp candidate"):
+        adapter.select(result, obs)
+    assert adapter.last_audit["status"] == "failed"
+    assert adapter.last_audit["selection_audit"]["candidate_rejections"] == [{"index": 0, "reason": "collision"}]
 
 
 def test_swept_path_uses_calibrated_eef_endpoint_and_unverified_fails_closed(monkeypatch):
