@@ -642,6 +642,9 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
             "waypoint_0": [0.1, 0.2, 0.4],
             "waypoint_1": [0.1, 0.2, 0.3],
         }
+        _arrow_grasp_retry_audit = [
+            {"attempt": 1, "status": "completed_no_contact", "z_offset_m": -0.012}
+        ]
         _arrow_phase_audit = [
             {"phase": "preplace", "status": "reached", "steps": 4},
             {"phase": "descend_place", "status": "timeout", "steps": 80},
@@ -701,6 +704,10 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
         assert record[field] == expected
         assert record["diagnostics"][field] == expected
         assert record["partial_audit"][field] == expected
+    expected_grasp_retries = Env._arrow_grasp_retry_audit
+    assert record["grasp_retries"] == expected_grasp_retries
+    assert record["diagnostics"]["grasp_retries"] == expected_grasp_retries
+    assert record["partial_audit"]["grasp_retries"] == expected_grasp_retries
     assert summary["phase_aggregates"]["descend_place"] == {
         "count": 1,
         "statuses": {"timeout": 1},

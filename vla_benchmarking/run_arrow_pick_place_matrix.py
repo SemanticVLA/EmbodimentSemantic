@@ -492,6 +492,7 @@ def _error_record(
         "control_targets_world_m": None,
         "workspace_validation": None,
         "waypoints_world_m": None,
+        "grasp_retries": None,
         "frames": [],
         "phase_frames": [],
         "phases": [],
@@ -508,6 +509,7 @@ def _error_record(
             "control_targets_world_m": None,
             "workspace_validation": None,
             "waypoints_world_m": None,
+            "grasp_retries": None,
             "recovery": [],
             "evaluator_result": None,
             "settle_diagnostics": None,
@@ -535,12 +537,13 @@ def _audit_diagnostics(audit: Mapping[str, Any]) -> dict[str, Any]:
         "control_targets_world_m": audit.get("control_targets_world_m"),
         "workspace_validation": audit.get("workspace_validation"),
         "waypoints_world_m": audit.get("waypoints_world_m"),
+        "grasp_retries": audit.get("grasp_retries", []),
         "recovery": audit.get("recovery", []),
         "evaluator_result": audit.get("evaluator_success"),
     }
 
 
-def _early_runtime_diagnostics(env: Any) -> dict[str, dict[str, Any]]:
+def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
     """Copy diagnostics published before an episode can return an audit.
 
     ``run_episode`` intentionally publishes these on the environment before
@@ -549,7 +552,7 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, dict[str, Any]]:
     """
     if env is None:
         return {}
-    diagnostics: dict[str, dict[str, Any]] = {}
+    diagnostics: dict[str, Any] = {}
     for attribute, field in (
         ("_arrow_capture_contract", "capture_contract"),
         ("_arrow_depth_sanitization_policy", "depth_sanitization_policy"),
@@ -566,6 +569,7 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, dict[str, Any]]:
         ("_arrow_control_targets_world_m", "control_targets_world_m"),
         ("_arrow_workspace_validation", "workspace_validation"),
         ("_arrow_waypoints_world_m", "waypoints_world_m"),
+        ("_arrow_grasp_retry_audit", "grasp_retries"),
     ):
         try:
             value = getattr(env, attribute, None)
@@ -573,11 +577,15 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, dict[str, Any]]:
             continue
         if isinstance(value, Mapping):
             diagnostics[field] = dict(value)
+        elif isinstance(value, list):
+            diagnostics[field] = [
+                dict(item) if isinstance(item, Mapping) else item for item in value
+            ]
     return diagnostics
 
 
 def _attach_early_runtime_diagnostics(
-    cell_record: dict[str, Any], observed: Mapping[str, Mapping[str, Any]]
+    cell_record: dict[str, Any], observed: Mapping[str, Any]
 ) -> None:
     """Retain environment-published input evidence on failed cell records."""
     if not observed:
@@ -595,7 +603,14 @@ def _attach_early_runtime_diagnostics(
             destination = {}
             cell_record["partial_audit"] = destination
     for field, value in observed.items():
-        copied = dict(value)
+        if isinstance(value, Mapping):
+            copied: Any = dict(value)
+        elif isinstance(value, list):
+            copied = [
+                dict(item) if isinstance(item, Mapping) else item for item in value
+            ]
+        else:
+            copied = value
         cell_record[field] = copied
         destination[field] = copied
         cell_record.setdefault("diagnostics", {})[field] = copied

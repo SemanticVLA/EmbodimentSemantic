@@ -2056,6 +2056,10 @@ def run_episode(
                     break
         raise exc
     grasp_retry_audit: list[dict[str, Any]] = []
+    # Publish retry evidence on the environment as soon as the motion phase
+    # begins.  The matrix runner samples environment diagnostics even when a
+    # controller timeout prevents construction of the final audit object.
+    setattr(env, "_arrow_grasp_retry_audit", grasp_retry_audit)
     if (
         not dry_run
         and stop_after_phase == "retreat"
