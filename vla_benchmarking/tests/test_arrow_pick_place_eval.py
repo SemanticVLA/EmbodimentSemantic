@@ -1187,6 +1187,33 @@ def test_large_clearance_rejects_waypoint_before_first_step(runner, monkeypatch,
     assert env.actions == []
 
 
+def test_visual_endpoint_diagnostics_are_published_before_workspace_failure(
+    runner, monkeypatch, tmp_path: Path
+):
+    _patch_episode_controller(runner, monkeypatch, point=(2.0, 0.0, 1.0))
+    env = _MotionEnv()
+    with pytest.raises(ValueError, match="workspace validation failed"):
+        runner.run_episode(
+            env=env,
+            task_id=0,
+            seed=1000,
+            resolution=256,
+            output_dir=tmp_path,
+            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
+            capture=_episode_capture(runner),
+            dry_run=False,
+            stop_after_phase="pregrasp",
+        )
+    assert "source_tail" in env._arrow_endpoint_depths_m
+    assert env._arrow_endpoint_depth_statistics["source_tail"]["statistic"] == "median"
+    assert env._arrow_deprojected_visual_endpoint_world_points_m["source_tail"] == [2.0, 0.0, 1.0]
+    assert env._arrow_control_targets_world_m["source_grasp"] == pytest.approx(
+        [2.0146, 0.0432, 1.0244]
+    )
+    assert env._arrow_workspace_validation["status"] == "pending"
+    assert "waypoint_0" in env._arrow_workspace_validation["points"]
+
+
 def test_run_motion_preserves_gripper_timeout_and_marks_motion(runner, monkeypatch):
     class _GripperTimeoutEnv(_MotionEnv):
         def step(self, action):

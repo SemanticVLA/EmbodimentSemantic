@@ -1540,6 +1540,14 @@ def run_episode(
         statistic=endpoint_depth_statistic,
         quantile=endpoint_depth_quantile,
     )
+    setattr(env, "_arrow_endpoint_depths_m", {
+        "source_tail": float(source_depth),
+        "destination_head": float(target_depth),
+    })
+    setattr(env, "_arrow_endpoint_depth_statistics", {
+        "source_tail": dict(source_depth_audit),
+        "destination_head": dict(target_depth_audit),
+    })
     calibration = asdict(capture.calibration)
     K = capture.calibration.intrinsic
     T_world_camera = capture.calibration.world_from_camera
@@ -1566,10 +1574,18 @@ def run_episode(
     )
     bowl_point = source_visual_point + source_offset
     destination_point = destination_visual_point + destination_offset
+    setattr(env, "_arrow_deprojected_visual_endpoint_world_points_m", {
+        "source_tail": source_visual_point.tolist(),
+        "destination_head": destination_visual_point.tolist(),
+    })
+    setattr(env, "_arrow_control_targets_world_m", {
+        "source_grasp": bowl_point.tolist(),
+        "destination_release": destination_point.tolist(),
+    })
     if not np.isfinite(source_visual_point).all() or not np.isfinite(destination_visual_point).all():
         raise ValueError("deproject_endpoint returned non-finite visual endpoint")
     workspace_validation = {
-        "status": "not_run_dry_run" if dry_run else "passed",
+        "status": "not_run_dry_run" if dry_run else "pending",
         "kind": "coarse_finite_volume_only",
         "bounds_m": {axis: list(limits) for axis, limits in WORKSPACE_BOUNDS_M.items()},
         "points": {
@@ -1577,6 +1593,7 @@ def run_episode(
             "destination_release_target": destination_point.tolist(),
         },
     }
+    setattr(env, "_arrow_workspace_validation", dict(workspace_validation))
     initial_proprio = _proprioception(capture.observation)
     if not np.isfinite(clearance_m) or clearance_m <= 0:
         raise ValueError("clearance_m must be finite and positive")
@@ -1601,6 +1618,10 @@ def run_episode(
     workspace_validation["points"].update(
         {name: np.asarray(point, dtype=np.float64).tolist() for name, point in waypoint_points.items()}
     )
+    workspace_validation["bounds_m"] = {
+        axis: list(limits) for axis, limits in workspace_bounds.items()
+    }
+    setattr(env, "_arrow_workspace_validation", dict(workspace_validation))
     if not dry_run:
         validate_workspace_points(
             {
@@ -1611,9 +1632,11 @@ def run_episode(
             bounds=workspace_bounds,
         )
         workspace_validation["status"] = "passed"
-    workspace_validation["bounds_m"] = {
-        axis: list(limits) for axis, limits in workspace_bounds.items()
-    }
+    setattr(env, "_arrow_workspace_validation", dict(workspace_validation))
+    setattr(env, "_arrow_waypoints_world_m", {
+        name: np.asarray(point, dtype=np.float64).tolist()
+        for name, point in waypoint_points.items()
+    })
 
     phase_policies = {name: dict(policy) for name, policy in PHASE_POLICIES.items()}
     if variant.approach_tolerance_m is not None:
