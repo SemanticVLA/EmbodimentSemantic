@@ -29,7 +29,7 @@ module purge
 module load miniforge/24.3.0-0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SUBMITTED_SCRIPT="$(realpath -e -- "${BASH_SOURCE[0]}")" || die 'cannot resolve submitted Slurm script'
 ZERO_GRASP_ROOT="${ZERO_GRASP_ROOT:?ZERO_GRASP_ROOT is required}"
 [[ "$ZERO_GRASP_ROOT" = /* && "$ZERO_GRASP_ROOT" != / ]] || die 'ZERO_GRASP_ROOT must be a non-root absolute path'
 RUNTIME_ROOT="${ZERO_GRASP_RUNTIME_ROOT:-${SCRATCH_FLASH:?SCRATCH_FLASH is required}/ZeroGrasp_runtime}"
@@ -42,6 +42,7 @@ archive_on_exit() {
   {
     printf 'evaluation_commit=%s\n' "${EVAL_COMMIT:-}"
     printf 'expected_evaluation_commit=%s\n' "${EXPECTED_EVAL_COMMIT:-}"
+    printf 'submitted_script=%s\nsubmitted_script_sha256=%s\n' "${SUBMITTED_SCRIPT:-}" "${SUBMITTED_SCRIPT_SHA256:-}"
     printf 'setup_script=%s\nsetup_script_sha256=%s\n' "${SETUP_SCRIPT:-}" "${SETUP_SCRIPT_SHA256:-}"
     printf 'worker_script=%s\nworker_script_sha256=%s\n' "${WORKER_SCRIPT:-}" "${WORKER_SCRIPT_SHA256:-}"
     printf 'setup_mode=%s\n' "${SETUP_MODE:-}"
@@ -51,15 +52,14 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 REPO_ROOT="$(realpath -e -- "$REPO_ROOT")" || die 'cannot resolve REPO_ROOT'
-SCRIPT_DIR="$(realpath -e -- "$SCRIPT_DIR")" || die 'cannot resolve setup script directory'
-[[ "$SCRIPT_DIR" == "$REPO_ROOT/vla_benchmarking/legion" ]] || die 'setup script is not from the expected evaluation checkout'
+SCRIPT_DIR="$(realpath -e -- "$REPO_ROOT/vla_benchmarking/legion")" || die 'cannot resolve setup script directory'
 EVAL_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" || die 'cannot read evaluation checkout commit'
 [[ "$EVAL_COMMIT" == "$EXPECTED_EVAL_COMMIT" ]] || die "evaluation checkout differs: $EVAL_COMMIT"
 [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] || die 'evaluation checkout is dirty'
 SETUP_SCRIPT="$REPO_ROOT/vla_benchmarking/legion/setup_zerograsp_runtime.sbatch"
-WORKER_SCRIPT="$REPO_ROOT/vla_benchmarking/zerograsp_worker.py"
 SETUP_SCRIPT_SHA256="$(sha256sum -- "$SETUP_SCRIPT" | awk '{print $1}')" || die 'cannot hash setup script'
-WORKER_SCRIPT_SHA256="$(sha256sum -- "$WORKER_SCRIPT" | awk '{print $1}')" || die 'cannot hash worker script'
+SUBMITTED_SCRIPT_SHA256="$(sha256sum -- "$SUBMITTED_SCRIPT" | awk '{print $1}')" || die 'cannot hash submitted Slurm script'
+[[ "$SUBMITTED_SCRIPT_SHA256" == "$SETUP_SCRIPT_SHA256" ]] || die 'submitted Slurm script differs from the expected evaluation checkout'
 # Clone/pin the source before resolving any files beneath it. This makes a
 # first run with an absent checkout follow the same order as later reruns.
 bash "$SCRIPT_DIR/bootstrap_zerograsp.sh" --root "$ZERO_GRASP_ROOT" || die 'ZeroGrasp checkout bootstrap failed'
@@ -163,6 +163,10 @@ PY
 fi
 
 [[ -f "$ACQUISITION_MANIFEST" ]] || die 'execute mode requires a prior checkpoint acquisition manifest'
+
+WORKER_SCRIPT="$REPO_ROOT/vla_benchmarking/zerograsp_worker.py"
+[[ -f "$WORKER_SCRIPT" ]] || die "worker adapter is missing: $WORKER_SCRIPT"
+WORKER_SCRIPT_SHA256="$(sha256sum -- "$WORKER_SCRIPT" | awk '{print $1}')" || die 'cannot hash worker script'
 
 bash "$SCRIPT_DIR/setup_zerograsp_runtime.sh" \
   --root "$ZERO_GRASP_ROOT" --venv "$VENV" \
