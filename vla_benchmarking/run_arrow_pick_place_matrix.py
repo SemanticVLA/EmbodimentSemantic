@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -456,6 +457,7 @@ def _error_record(
         "failure_class": _failure_class(stage, exc),
         "error_type": type(exc).__name__,
         "error": str(exc),
+        "error_traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         "audit_path": None,
         "audit": None,
         "frames": [],
@@ -585,8 +587,9 @@ def _planned_record(cell: Mapping[str, Any]) -> dict[str, Any]:
         "status": "planned",
         "stage": "planning",
         "failure_class": None,
-        "error_type": None,
-        "error": None,
+                "error_type": None,
+                "error": None,
+                "error_traceback": None,
         "audit_path": None,
         "audit": None,
         "diagnostics": None,
@@ -1355,6 +1358,7 @@ def run_matrix(
                 "failure_class": _record_failure_class(record),
                 "error_type": record.get("error_type"),
                 "error": record.get("error"),
+                "error_traceback": record.get("error_traceback"),
                 "motion_began": bool(record.get("motion_began")),
                 "evaluator_result": record.get("evaluator_result"),
             }
