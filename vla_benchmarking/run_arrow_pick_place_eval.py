@@ -1311,6 +1311,7 @@ def run_episode(
     # actual pixels and calibration must agree with the requested agentview
     # contract before profile validation or any possible motion.
     capture_contract = validate_capture_contract(capture, resolution=resolution)
+    setattr(env, "_arrow_capture_contract", dict(capture_contract))
     profile = _profile_conditions(task_id, seed, capture_contract["rgb_shape"][1])
     # Task/seed come from the seeded LIBERO episode setup; camera and
     # resolution are taken from the validated capture, never inferred solely
@@ -1367,6 +1368,7 @@ def run_episode(
     depth_sanitization_policy = assess_depth_sanitization_for_motion(
         capture, (source_uv, target_uv)
     )
+    setattr(env, "_arrow_depth_sanitization_policy", dict(depth_sanitization_policy))
     if not dry_run and depth_sanitization_policy["status"] == "rejected":
         raise RuntimeError(
             "refusing motion: normalized depth sanitization policy rejected capture "

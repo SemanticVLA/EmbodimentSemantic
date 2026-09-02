@@ -604,6 +604,8 @@ def test_partial_stop_skips_later_phases_and_evaluator(runner, monkeypatch, tmp_
         "camera_name": "agentview",
     }
     assert audit["capture_contract"]["valid"] is True
+    assert env._arrow_capture_contract == audit["capture_contract"]
+    assert env._arrow_depth_sanitization_policy["status"] == "not_applicable"
     assert audit["deprojected_visual_endpoint_world_points_m"] == {
         "source_tail": [0.0, 0.0, 1.0],
         "destination_head": [0.0, 0.0, 1.0],
