@@ -6,7 +6,12 @@ import sys
 from types import SimpleNamespace
 
 from zerograsp_contracts import encode_array
-from zerograsp_worker import _decode_request, _normalise_output, _set_seed
+from zerograsp_worker import (
+    _decode_request,
+    _install_official_ofe_single_scene_compat,
+    _normalise_output,
+    _set_seed,
+)
 
 
 def _raw_output(**overrides):
@@ -111,3 +116,60 @@ def test_set_seed_resets_torch_cpu_and_cuda_rngs(monkeypatch):
     assert calls == [("cpu", 73), ("cuda", 73)]
     assert status["torch"] and status["cuda"] and status["cudnn_deterministic"]
     assert fake_cudnn.deterministic is True and fake_cudnn.benchmark is False
+
+
+def test_official_ofe_compat_supplies_single_scene_object_boundaries():
+    calls = []
+
+    class Scalar:
+        def __init__(self, value):
+            self.value = value
+
+        def item(self):
+            return self.value
+
+    class BatchIds:
+        def __init__(self, values):
+            self.values = values
+
+        def numel(self):
+            return len(self.values)
+
+        def min(self):
+            return Scalar(min(self.values))
+
+        def max(self):
+            return Scalar(max(self.values))
+
+        def new_zeros(self, shape):
+            return [0] * shape[0]
+
+        def new_full(self, shape, value):
+            return [value] * shape[0]
+
+    class OFE:
+        def forward(self, pts, mask, depth_map, K, batch_id, batch_start_id, batch_end_id, grid_size):
+            calls.append((batch_start_id, batch_end_id))
+            return "features"
+
+    model = SimpleNamespace(ofe=OFE())
+    assert _install_official_ofe_single_scene_compat(model) == "single_scene_boundaries_v1"
+    result = model.ofe.forward(
+        None,
+        np.zeros((3, 2, 2)),
+        np.zeros((3, 2, 2)),
+        None,
+        BatchIds([0, 1, 2]),
+        10.0,
+    )
+    assert result == "features"
+    assert calls == [([0, 0, 0], [3, 3, 3])]
+
+
+def test_official_ofe_compat_rejects_unexpected_signature():
+    class OFE:
+        def forward(self, pts, mask):
+            return None
+
+    with pytest.raises(RuntimeError, match="unsupported official OFE"):
+        _install_official_ofe_single_scene_compat(SimpleNamespace(ofe=OFE()))

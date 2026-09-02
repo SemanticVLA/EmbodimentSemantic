@@ -17,6 +17,7 @@ import argparse
 import contextlib
 import io
 import importlib
+import inspect
 import json
 import os
 import random
@@ -44,6 +45,66 @@ except ImportError:  # direct invocation from a checkout
 
 
 PROTOCOL = "zerograsp-jsonl-v1"
+
+
+def _install_official_ofe_single_scene_compat(model: Any) -> str:
+    """Bridge the released model call to its pinned OFE submodule API.
+
+    ZeroGrasp main at the supported revision calls ``ofe`` with the historical
+    six-argument signature, while its pinned octree_feature_extractor submodule
+    requires per-object scene boundaries.  Every worker request intentionally
+    contains exactly one RGB-D scene, so all object masks belong to the single
+    boundary ``[0, object_count)``.  Fail closed for any other signature or
+    inconsistent tensor layout instead of guessing across scenes.
+    """
+    ofe = getattr(model, "ofe", None)
+    if ofe is None:
+        return "not_required"
+    original_forward = ofe.forward
+    parameters = tuple(inspect.signature(original_forward).parameters)
+    legacy = ("pts", "mask", "depth_map", "K", "batch_id", "grid_size")
+    pinned = (
+        "pts",
+        "mask",
+        "depth_map",
+        "K",
+        "batch_id",
+        "batch_start_id",
+        "batch_end_id",
+        "grid_size",
+    )
+    if parameters == legacy:
+        return "legacy_native"
+    if parameters != pinned:
+        raise RuntimeError(f"unsupported official OFE forward signature: {parameters}")
+
+    def single_scene_forward(pts, mask, depth_map, K, batch_id, grid_size):
+        if getattr(mask, "ndim", None) != 3 or getattr(depth_map, "ndim", None) != 3:
+            raise RuntimeError("official OFE compatibility requires batched HxW mask and depth tensors")
+        object_count = int(mask.shape[0])
+        if object_count <= 0 or int(depth_map.shape[0]) != object_count:
+            raise RuntimeError("official OFE compatibility received inconsistent object batches")
+        if int(batch_id.numel()) <= 0:
+            raise RuntimeError("official OFE compatibility received no octree batch ids")
+        min_batch = int(batch_id.min().item())
+        max_batch = int(batch_id.max().item())
+        if min_batch < 0 or max_batch >= object_count:
+            raise RuntimeError("official OFE compatibility received out-of-range octree batch ids")
+        batch_start_id = batch_id.new_zeros((object_count,))
+        batch_end_id = batch_id.new_full((object_count,), object_count)
+        return original_forward(
+            pts,
+            mask,
+            depth_map,
+            K,
+            batch_id,
+            batch_start_id,
+            batch_end_id,
+            grid_size,
+        )
+
+    ofe.forward = single_scene_forward
+    return "single_scene_boundaries_v1"
 
 
 def camera_yaml_payload(K: Any) -> dict[str, list[float]]:
@@ -149,6 +210,7 @@ def _load_official_backend(*, repo: str, checkpoint: str, config: str) -> Callab
     with contextlib.redirect_stdout(io.StringIO()):
         model = BaseTrainer.load_from_checkpoint(checkpoint, config=model_config, strict=False)
     model = model.to(device).eval()
+    ofe_compatibility = _install_official_ofe_single_scene_compat(model.model)
 
     def predict(request: Mapping[str, Any]) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="zerograsp-request-") as work:
@@ -228,7 +290,7 @@ def _load_official_backend(*, repo: str, checkpoint: str, config: str) -> Callab
                     scores_out.append(float(row[0])); widths_out.append(float(row[1])); heights_out.append(float(row[2])); depths_out.append(float(row[3]))
                 bounds_min = np.min(masked_pcd, axis=0) / 1000.0
                 bounds_max = np.max(masked_pcd, axis=0) / 1000.0
-                return {"grasps": matrices, "scores": scores_out, "width_m": widths_out, "height_m": heights_out, "depth_m": depths_out, "collision_free": collision_free, "translation_reference": [GRASPNET_TRANSLATION_REFERENCE] * len(matrices), "translation_frame": [GRASPNET_CAMERA_FRAME] * len(matrices), "rotation_frame": [GRASPNET_CAMERA_FRAME] * len(matrices), "reconstruction": {"dimensions_m": (bounds_max - bounds_min).tolist(), "centroid_camera_m": (np.mean(masked_pcd, axis=0) / 1000.0).tolist(), "bounds_camera_m": np.r_[bounds_min, bounds_max].tolist(), "confidence": 1.0, "source_frame": "camera"}, "diagnostics": {"backend": "official_demo_path", "collision_filter": bool(any(collision_free))}}
+                return {"grasps": matrices, "scores": scores_out, "width_m": widths_out, "height_m": heights_out, "depth_m": depths_out, "collision_free": collision_free, "translation_reference": [GRASPNET_TRANSLATION_REFERENCE] * len(matrices), "translation_frame": [GRASPNET_CAMERA_FRAME] * len(matrices), "rotation_frame": [GRASPNET_CAMERA_FRAME] * len(matrices), "reconstruction": {"dimensions_m": (bounds_max - bounds_min).tolist(), "centroid_camera_m": (np.mean(masked_pcd, axis=0) / 1000.0).tolist(), "bounds_camera_m": np.r_[bounds_min, bounds_max].tolist(), "confidence": 1.0, "source_frame": "camera"}, "diagnostics": {"backend": "official_demo_path", "collision_filter": bool(any(collision_free)), "ofe_compatibility": ofe_compatibility}}
     return predict
 
 
