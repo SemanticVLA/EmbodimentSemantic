@@ -460,6 +460,7 @@ def _error_record(
         "error_traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         "audit_path": None,
         "audit": None,
+        "partial_audit": None,
         "capture_contract": None,
         "depth_sanitization_policy": None,
         "frames": [],
@@ -536,16 +537,21 @@ def _attach_early_runtime_diagnostics(
     if not observed:
         return
     audit = cell_record.get("audit")
-    if not isinstance(audit, Mapping):
-        # This is a deliberately partial audit: the runner failed before its
-        # normal final audit could be assembled.  Keeping the fields under
-        # ``audit`` makes downstream flattening consistent with success rows.
-        audit = {}
-        cell_record["audit"] = audit
+    if isinstance(audit, dict):
+        destination = audit
+    else:
+        # Do not make an early-failure record look like a complete audit.  The
+        # normal audit readers can therefore continue to treat ``audit`` as
+        # final evidence, while ``partial_audit`` explicitly marks evidence
+        # published before the episode returned.
+        destination = cell_record.get("partial_audit")
+        if not isinstance(destination, dict):
+            destination = {}
+            cell_record["partial_audit"] = destination
     for field, value in observed.items():
         copied = dict(value)
         cell_record[field] = copied
-        audit[field] = copied
+        destination[field] = copied
         cell_record.setdefault("diagnostics", {})[field] = copied
 
 
@@ -674,11 +680,18 @@ def _phase_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for record in records:
         audit = record.get("audit")
+        if not isinstance(audit, Mapping):
+            partial_audit = record.get("partial_audit")
+            audit = partial_audit if isinstance(partial_audit, Mapping) else None
         if isinstance(audit, Mapping):
             phases = audit.get("phases", [])
         else:
             # Controller failures can occur before the final audit is written;
             # _run_motion still preserves partial phases at record level.
+            phases = record.get("phases", [])
+        if not isinstance(phases, list) or not phases:
+            # A partial audit must not hide phase records captured by the
+            # matrix finally block after an early exception.
             phases = record.get("phases", [])
         if not isinstance(phases, list):
             continue
@@ -722,6 +735,9 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
                     velocity if current is None else max(float(current), velocity)
                 )
         audit = record.get("audit")
+        if not isinstance(audit, Mapping):
+            partial_audit = record.get("partial_audit")
+            audit = partial_audit if isinstance(partial_audit, Mapping) else None
         if isinstance(audit, Mapping):
             contract = audit.get("capture_contract")
             if isinstance(contract, Mapping) and contract.get("valid") is True:
@@ -730,10 +746,21 @@ def _diagnostic_aggregates(records: Sequence[Mapping[str, Any]]) -> dict[str, An
                 result["capture"]["missing"] += 1
             if audit.get("arrow_endpoints_uv") is not None:
                 result["parser"]["success"] += 1
+            elif isinstance(audit.get("depth_sanitization_policy"), Mapping):
+                # run_episode publishes this only after arrow decoding.  It is
+                # valid parser evidence even when depth policy rejects motion
+                # before endpoint depths can be recorded.
+                result["parser"]["success"] += 1
             else:
                 result["parser"]["failure"] += 1
             if audit.get("endpoint_depths_m") is not None:
                 result["depth"]["recorded"] += 1
+            elif isinstance(audit.get("depth_sanitization_policy"), Mapping):
+                policy_status = audit["depth_sanitization_policy"].get("status")
+                if policy_status in {"accepted", "valid"}:
+                    result["depth"]["recorded"] += 1
+                else:
+                    result["depth"]["failure"] += 1
             else:
                 result["depth"]["failure"] += 1
         failure_class = _record_failure_class(record)

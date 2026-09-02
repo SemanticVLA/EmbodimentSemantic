@@ -594,6 +594,10 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
             "status": "rejected",
             "rejection_reason": "invalid metric depth at arrow endpoint",
         }
+        _arrow_phase_audit = [
+            {"phase": "preplace", "status": "reached", "steps": 4},
+            {"phase": "descend_place", "status": "timeout", "steps": 80},
+        ]
 
         def close(self):
             pass
@@ -624,8 +628,17 @@ def test_early_capture_and_depth_policy_diagnostics_survive_episode_failure(
     assert record["depth_sanitization_policy"] == expected_policy
     assert record["diagnostics"]["capture_contract"] == expected_capture
     assert record["diagnostics"]["depth_sanitization_policy"] == expected_policy
-    assert record["audit"]["capture_contract"] == expected_capture
-    assert record["audit"]["depth_sanitization_policy"] == expected_policy
+    assert record["audit"] is None
+    assert record["partial_audit"]["capture_contract"] == expected_capture
+    assert record["partial_audit"]["depth_sanitization_policy"] == expected_policy
+    assert summary["phase_aggregates"]["descend_place"] == {
+        "count": 1,
+        "statuses": {"timeout": 1},
+        "failed": 1,
+    }
+    assert summary["diagnostic_aggregates"]["capture"] == {"valid": 1, "missing": 0}
+    assert summary["diagnostic_aggregates"]["parser"] == {"success": 1, "failure": 0}
+    assert summary["diagnostic_aggregates"]["depth"] == {"recorded": 0, "failure": 1}
 
 
 def test_timeout_phase_is_included_in_phase_aggregates(matrix):
