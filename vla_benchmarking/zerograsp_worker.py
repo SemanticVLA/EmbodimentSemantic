@@ -121,9 +121,9 @@ def _prepare_official_single_scene_batch(batch: Any, ofe_compatibility: str) -> 
         raise RuntimeError("official OFE compatibility received an unexpected fetch_data batch")
     released_masks = batch[1]
     shape = tuple(int(value) for value in getattr(released_masks, "shape", ()))
-    if len(shape) != 5 or shape[0] != 1 or shape[-1] != 2 or shape[1] <= 0:
+    if len(shape) != 6 or shape[:2] != (1, 1) or shape[-1] != 2 or shape[2] <= 0:
         raise RuntimeError(f"official OFE compatibility received unsupported mask layout: {shape}")
-    self_masks = released_masks[..., 0]
+    self_masks = released_masks[0, ..., 0]
     prepared = list(batch)
     prepared[1] = [self_masks]
     return tuple(prepared)

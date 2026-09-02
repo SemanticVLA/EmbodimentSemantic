@@ -177,7 +177,7 @@ def test_official_ofe_compat_rejects_unexpected_signature():
 
 
 def test_official_ofe_compat_converts_released_two_channel_masks():
-    batch = ("rgb", np.zeros((1, 3, 4, 5, 2), dtype=bool), "depth", "points", "rays", "K", "z", "frame")
+    batch = ("rgb", np.zeros((1, 1, 3, 4, 5, 2), dtype=bool), "depth", "points", "rays", "K", "z", "frame")
     prepared = _prepare_official_single_scene_batch(batch, "single_scene_boundaries_v1")
     assert isinstance(prepared, tuple)
     assert isinstance(prepared[1], list)
@@ -186,6 +186,6 @@ def test_official_ofe_compat_converts_released_two_channel_masks():
 
 
 def test_official_ofe_compat_rejects_ambiguous_mask_layout():
-    batch = ("rgb", np.zeros((2, 3, 4, 5, 2), dtype=bool), "depth", "points", "rays", "K", "z", "frame")
+    batch = ("rgb", np.zeros((1, 2, 3, 4, 5, 2), dtype=bool), "depth", "points", "rays", "K", "z", "frame")
     with pytest.raises(RuntimeError, match="unsupported mask layout"):
         _prepare_official_single_scene_batch(batch, "single_scene_boundaries_v1")
