@@ -3732,6 +3732,30 @@ def run_episode(
                     setattr(env, "_arrow_phase_audit", phase_audit)
                     grasp_search_audit.append(attempt_record)
                     break
+                except _GraspSearchRequested as search_exc:
+                    # A retry candidate is still subject to the retention
+                    # gate.  Losing contact on that candidate is a bounded
+                    # candidate failure, not a runtime failure: preserve its
+                    # partial trace and continue with the next RGB-D-derived
+                    # candidate.  Previously this exception fell through to
+                    # the generic handler, aborting the search after candidate
+                    # 1 and making the retention treatment look worse than it
+                    # was.
+                    partial = list(getattr(env, "_arrow_phase_audit", []) or [])
+                    search_actions += sum(int(item.get("steps", 0)) for item in partial)
+                    phase_audit = base_phase_audit + partial
+                    setattr(env, "_arrow_phase_audit", phase_audit)
+                    attempt_record["status"] = "post_lift_retention_failed"
+                    attempt_record["error_type"] = type(search_exc).__name__
+                    attempt_record["error"] = str(search_exc)
+                    attempt_record["actions_after"] = int(search_actions)
+                    attempt_record["gripper_qpos"] = _observed_gripper_qpos(partial)
+                    attempt_record["phase_statuses"] = [
+                        {"phase": item.get("phase"), "status": item.get("status")}
+                        for item in partial
+                    ]
+                    grasp_search_audit.append(attempt_record)
+                    continue
                 except ControllerMotionTimeout as search_exc:
                     partial = list(getattr(env, "_arrow_phase_audit", []) or [])
                     search_actions += sum(int(item.get("steps", 0)) for item in partial)
