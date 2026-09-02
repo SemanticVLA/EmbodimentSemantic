@@ -102,7 +102,7 @@ foreach ($line in $remoteLines) {
     }
     $suite = Get-Label $relative '(?:^|/)(vanilla|sealed_randomized)(?:/|$)' 'unknown_suite'
     $taskNumber = Get-Label $relative '(?:^|/)(?:task|task_id)[_-]([0-9]+)(?:/|$)' 'unknown'
-    $episodeNumber = Get-Label $relative '(?:^|/)(?:episode|episode_id)[_-]([0-9]+)(?:/|$)' 'unknown'
+$episodeNumber = Get-Label $relative '(?:^|/)(?:episode|episode_id)[_-]([0-9]+)(?:_|/|$)' 'unknown'
     $task = if ($taskNumber -eq 'unknown') { 'task_unknown' } else { "task_$taskNumber" }
     $episode = if ($episodeNumber -eq 'unknown') { 'episode_unknown' } else { "episode_$episodeNumber" }
     $kind = if ($relative -match '(?i)\.(mp4|avi|mov)$') { 'video' } elseif ($relative -match '(?i)(^|/)(phase_frames|frames)/.*\.(png|jpg)$') { 'frame' } else { 'manifest' }
