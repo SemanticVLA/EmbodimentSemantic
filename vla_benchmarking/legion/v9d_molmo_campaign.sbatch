@@ -242,6 +242,13 @@ setup_finished_epoch=$setup_finished_epoch
 setup_elapsed_seconds=$((setup_finished_epoch - setup_started_epoch))
 model_load_owner=run_v9d_molmo_campaign.py
 model_load_count_expected=1
+repair_gate=${V9D_MOLMO_REPAIR_GATE:-0}
 EOF
 
-"$PYTHON" "$CAMPAIGN_SCRIPT" --output-dir "$OUTPUT_ROOT" --label "$CANARY_LABEL"
+campaign_args=(--output-dir "$OUTPUT_ROOT" --label "$CANARY_LABEL")
+case "${V9D_MOLMO_REPAIR_GATE:-0}" in
+  1) campaign_args+=(--repair-gate) ;;
+  0) ;;
+  *) die 'V9D_MOLMO_REPAIR_GATE must be 0 or 1' ;;
+esac
+"$PYTHON" "$CAMPAIGN_SCRIPT" "${campaign_args[@]}"

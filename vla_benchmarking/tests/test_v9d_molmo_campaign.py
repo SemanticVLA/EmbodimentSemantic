@@ -5,6 +5,80 @@ import pytest
 import run_v9d_molmo_campaign as campaign
 
 
+def _repair_record(task, seed, *, hover=True, reached=()):
+    return {"status": "completed", "suite_mode": "vanilla", "task_id": task, "seed": seed,
+            "evaluator_result": False, "audit": {
+                "observation_hover": {"status": "completed" if hover else "failed"},
+                "canary_manifest": {"attempts": [{"results": [{"motion_phases_reached": list(reached)}]}]},
+            }}
+
+
+def test_repair_gate_needs_completed_hover_and_contact_for_each_task():
+    gate = campaign.RepairGate()
+    gate.observe(_repair_record(4, 1000, reached=("close",)))
+    gate.observe(_repair_record(4, 1001))
+    gate.observe(_repair_record(6, 1000, reached=("lift",)))
+    gate.observe(_repair_record(6, 1001))
+    assert gate.status == "passed"  # No evaluator success was supplied.
+    assert len(gate.canonical()["cells"]) == 4
+
+
+@pytest.mark.parametrize("bad_hover", [False, True])
+def test_repair_gate_fails_closed_on_missing_contact_or_hover(bad_hover):
+    gate = campaign.RepairGate()
+    gate.observe(_repair_record(4, 1000, reached=("close",)))
+    gate.observe(_repair_record(4, 1001))
+    gate.observe(_repair_record(6, 1000, hover=not bad_hover,
+                                reached=("close",) if bad_hover else ("pregrasp",)))
+    with pytest.raises(campaign.ArmStop, match="repair replay"):
+        gate.observe(_repair_record(6, 1001))
+    assert gate.status == "failed"
+
+
+def test_repair_gate_stops_before_any_other_arm(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(campaign, "MolmoPointRuntime", object)
+
+    def fake_main(argv, *, molmo_runtime, cell_completed_callback):
+        calls.append(argv)
+        try:
+            for task in (4, 6):
+                for seed in (1000, 1001):
+                    cell_completed_callback(_repair_record(task, seed))
+        except campaign.ArmStop:
+            return 2
+        return 0
+
+    monkeypatch.setattr(campaign.canary, "main", fake_main)
+    assert campaign.main(["--output-dir", str(tmp_path), "--repair-gate"]) == 2
+    assert len(calls) == 1
+    report = json.loads((tmp_path / "campaign.json").read_text())
+    assert report["status"] == "stopped_repair_gate"
+    assert report["repair_gate"]["status"] == "failed"
+    assert report["finalists"] == []
+
+
+def test_repair_gate_pass_continues_same_prefix_without_replay(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(campaign, "MolmoPointRuntime", object)
+
+    def fake_main(argv, *, molmo_runtime, cell_completed_callback):
+        args = dict(zip(argv[::2], argv[1::2]))
+        calls.append(args)
+        for task in (4, 6):
+            for seed in (1000, 1001):
+                cell_completed_callback(_repair_record(task, seed, reached=("close",)))
+        return 0
+
+    monkeypatch.setattr(campaign.canary, "main", fake_main)
+    # No fake matrix files: screen is incomplete, but all six arms execute.
+    assert campaign.main(["--output-dir", str(tmp_path), "--repair-gate", "--screen-only"]) == 2
+    assert len(calls) == 6
+    assert len({call["--output-dir"] for call in calls}) == 6
+    report = json.loads((tmp_path / "campaign.json").read_text())
+    assert report["repair_gate"]["status"] == "passed"
+
+
 def test_missing_and_failed_cells_stay_in_planned_denominator(tmp_path):
     campaign.write_json(tmp_path / "vanilla" / "arrow_pick_place_matrix_status.json", {"cells": [
         {"status": "completed", "suite_mode": "vanilla", "evaluator_result": True},

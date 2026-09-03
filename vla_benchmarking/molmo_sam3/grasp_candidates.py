@@ -115,6 +115,13 @@ class RobotGraspCalibration:
     workspace_max_m: ArrayLike = (0.8, 0.8, 1.8)
     calibration_source: str = "unverified"
     calibration_sha256: str | None = None
+    # These are optional live robot-only probe values.  They are deliberately
+    # absent from the legacy pure RGB-D fixtures: when present together they
+    # make candidate ranking relative to the measured robot pose, and the
+    # contact-relative spheres provide a bounded hand-volume collision check.
+    current_grip_site_world_m: ArrayLike | None = None
+    current_rotation_world_grip_site: ArrayLike | None = None
+    hand_collision_spheres_grasp: Sequence[Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +186,9 @@ class CandidatePolicy:
     insertion_depths_m: tuple[float, ...] = (0.0, 0.004, 0.008)
     obstruction_clearance_m: float | None = None
     release_world_m: ArrayLike | None = None
+    # Target-mask points are allowed only in this small neighborhood of the
+    # intended terminal contact.  Scene points outside it remain obstacles.
+    terminal_contact_allowance_m: float = 0.012
 
 
 def _value(source: Any, key: str) -> Any:
@@ -237,6 +247,52 @@ def _validate_robot(robot: RobotGraspCalibration) -> tuple[np.ndarray, np.ndarra
     if not np.isfinite(robot.pregrasp_distance_m) or robot.pregrasp_distance_m < 0:
         raise ValueError("pregrasp_distance_m must be finite and non-negative")
     return R_ge, offset, approach, lo, hi
+
+
+def _validate_live_robot_geometry(
+    robot: RobotGraspCalibration,
+) -> tuple[np.ndarray | None, np.ndarray | None, tuple[tuple[np.ndarray, float], ...]]:
+    """Validate optional live-pose and contact-relative hand primitives."""
+    current_position = None
+    current_rotation = None
+    if robot.current_grip_site_world_m is not None:
+        current_position = _finite_vector(robot.current_grip_site_world_m, 3, "current_grip_site_world_m")
+    if robot.current_rotation_world_grip_site is not None:
+        value = np.asarray(robot.current_rotation_world_grip_site, dtype=np.float64)
+        if value.shape != (3, 3) or not np.all(np.isfinite(value)):
+            raise ValueError("current_rotation_world_grip_site must be a finite 3x3 matrix")
+        if not np.allclose(value.T @ value, np.eye(3), atol=1e-5) or not np.isclose(np.linalg.det(value), 1.0, atol=1e-5):
+            raise ValueError("current_rotation_world_grip_site must be proper orthonormal")
+        current_rotation = value
+    if (current_position is None) != (current_rotation is None):
+        raise ValueError("current_grip_site_world_m and current_rotation_world_grip_site must be supplied together")
+    spheres: list[tuple[np.ndarray, float]] = []
+    raw_spheres = robot.hand_collision_spheres_grasp
+    for index, item in enumerate(() if raw_spheres is None else raw_spheres):
+        if isinstance(item, Mapping):
+            center_value = item.get("center", item.get("center_grasp", item.get("center_grasp_m", item.get("xyz"))))
+            radius_value = item.get("radius_m", item.get("radius", item.get("geom_rbound_m")))
+        else:
+            # Accept both flat ``(x, y, z, radius)`` records and the natural
+            # ``((x, y, z), radius)`` pair used by live probe callers.
+            try:
+                values = np.asarray(item, dtype=np.float64).reshape(-1)
+                center_value = values[:3] if values.size >= 4 else None
+                radius_value = values[3] if values.size >= 4 else None
+            except (TypeError, ValueError):
+                try:
+                    center_value, radius_value = item
+                except (TypeError, ValueError):
+                    center_value = getattr(item, "center_grasp_m", getattr(item, "center_grasp", getattr(item, "center", None)))
+                    radius_value = getattr(item, "radius_m", getattr(item, "radius", getattr(item, "geom_rbound_m", None)))
+        if center_value is None or radius_value is None:
+            raise ValueError(f"hand_collision_spheres_grasp[{index}] must contain center and radius")
+        center = _finite_vector(center_value, 3, f"hand_collision_spheres_grasp[{index}].center")
+        radius = float(radius_value)
+        if not np.isfinite(radius) or radius < 0:
+            raise ValueError(f"hand_collision_spheres_grasp[{index}].radius must be finite and non-negative")
+        spheres.append((center, radius))
+    return current_position, current_rotation, tuple(spheres)
 
 
 def _boundary(mask: np.ndarray) -> np.ndarray:
@@ -421,6 +477,11 @@ def _rotation_distance_deg(first: np.ndarray, second: np.ndarray) -> float:
     return float(acos(float(cosine)) * 180.0 / pi)
 
 
+def _rotation_distance_rad(first: np.ndarray, second: np.ndarray) -> float:
+    cosine = np.clip((np.trace(first.T @ second) - 1.0) / 2.0, -1.0, 1.0)
+    return float(acos(float(cosine)))
+
+
 def _inside_workspace(point: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> bool:
     return bool(np.all(point >= lo - 1e-9) and np.all(point <= hi + 1e-9))
 
@@ -433,20 +494,197 @@ def _obstruction_clearance(
     start: np.ndarray,
     end: np.ndarray,
     clearance: float,
-) -> float:
-    """Return nearest observed non-object point to the approach segment."""
-    valid = _valid_depth(depth) & ~mask
+) -> dict[str, Any]:
+    """Return nearest observed point and auditable segment diagnostics.
+
+    This is the conservative legacy fallback when no live hand primitives are
+    supplied.  Unlike the old helper it retains all observed RGB-D points and
+    their pixel provenance, so a rejection cannot look like an unexplained
+    scalar.
+    """
+    valid = _valid_depth(depth)
     pixels = np.column_stack(np.nonzero(valid))
-    worlds, _ = _support_points(pixels, depth, K, T)
+    worlds, kept = _support_points(pixels, depth, K, T)
     if len(worlds) == 0:
-        return float("inf")
+        return {
+            "status": "no_observed_scene",
+            "clearance_m": float("inf"),
+            "observed_point_count": 0,
+            "segment": "pregrasp_to_grip_site",
+        }
     direction = end - start
     length_sq = float(np.dot(direction, direction))
     if length_sq <= 1e-12:
-        return float(np.min(np.linalg.norm(worlds - start[None, :], axis=1)))
-    factors = np.clip(((worlds - start[None, :]) @ direction) / length_sq, 0.0, 1.0)
-    closest = start[None, :] + factors[:, None] * direction[None, :]
-    return float(np.min(np.linalg.norm(worlds - closest, axis=1)))
+        distances = np.linalg.norm(worlds - start[None, :], axis=1)
+        factors = np.zeros(len(worlds), dtype=np.float64)
+    else:
+        factors = np.clip(((worlds - start[None, :]) @ direction) / length_sq, 0.0, 1.0)
+        closest = start[None, :] + factors[:, None] * direction[None, :]
+        distances = np.linalg.norm(worlds - closest, axis=1)
+    nearest = int(np.argmin(distances))
+    return {
+        "status": "ok",
+        "clearance_m": float(distances[nearest]),
+        "closest_distance_m": float(distances[nearest]),
+        "distance_m": float(distances[nearest]),
+        "closest_world_m": worlds[nearest].tolist(),
+        "closest_offending_world_m": worlds[nearest].tolist(),
+        "closest_pixel_uv": [int(kept[nearest, 1]), int(kept[nearest, 0])],
+        "closest_offending_pixel_uv": [int(kept[nearest, 1]), int(kept[nearest, 0])],
+        "segment": "pregrasp_to_grip_site",
+        "segment_factor": float(factors[nearest]),
+        "observed_point_count": int(len(worlds)),
+        "threshold_m": float(clearance),
+    }
+
+
+def _current_hand_world_spheres(
+    current_grip: np.ndarray,
+    current_rotation_grip: np.ndarray,
+    grasp_to_grip: np.ndarray,
+    contact_offset: np.ndarray,
+    spheres: tuple[tuple[np.ndarray, float], ...],
+) -> tuple[tuple[np.ndarray, float], ...]:
+    """Transform contact-relative primitives into the measured robot frame."""
+    current_grasp = current_rotation_grip @ grasp_to_grip.T
+    current_contact = current_grip - current_grasp @ contact_offset
+    return tuple((current_contact + current_grasp @ center, radius) for center, radius in spheres)
+
+
+def _hand_volume_obstruction(
+    *,
+    depth: np.ndarray,
+    mask: np.ndarray,
+    K: np.ndarray,
+    T: np.ndarray,
+    contact: np.ndarray,
+    grip_site: np.ndarray,
+    pregrasp: np.ndarray,
+    rotation_world_grasp: np.ndarray,
+    spheres: tuple[tuple[np.ndarray, float], ...],
+    clearance: float,
+    terminal_allowance_m: float,
+    required_aperture_m: float,
+    ignored_robot_spheres: tuple[tuple[np.ndarray, float], ...] = (),
+) -> dict[str, Any]:
+    """Check a swept, contact-relative hand envelope against observed RGB-D.
+
+    The object mask is not removed globally.  Only target-mask samples within
+    ``terminal_allowance_m`` of the selected contact and at the terminal end
+    of the approach are allowed; this preserves bowl/scene collision checks.
+    """
+    pixels = np.column_stack(np.nonzero(_valid_depth(depth)))
+    worlds, kept = _support_points(pixels, depth, K, T)
+    if len(worlds) == 0:
+        return {
+            "status": "no_observed_scene",
+            "clearance_m": float("inf"),
+            "observed_point_count": 0,
+            "segment": "pregrasp_to_contact",
+            "aperture_m": float(required_aperture_m),
+        }
+
+    # The depth image contains the currently measured robot in some setups.
+    # Remove only points inside the measured robot envelope; never erase an
+    # arbitrary image region or the entire target mask.
+    keep = np.ones(len(worlds), dtype=bool)
+    for center, radius in ignored_robot_spheres:
+        keep &= np.linalg.norm(worlds - center[None, :], axis=1) > radius + clearance
+    worlds = worlds[keep]
+    kept = kept[keep]
+    if len(worlds) == 0:
+        return {
+            "status": "no_observed_scene_after_robot_exclusion",
+            "clearance_m": float("inf"),
+            "observed_point_count": 0,
+            "ignored_robot_point_count": int(np.count_nonzero(~keep)),
+            "segment": "pregrasp_to_contact",
+            "aperture_m": float(required_aperture_m),
+        }
+
+    direction = pregrasp - grip_site
+    path_length = float(np.linalg.norm(direction))
+    sample_count = max(2, int(np.ceil(path_length / 0.01)) + 1)
+    nearest: dict[str, Any] | None = None
+    nearest_gap = float("inf")
+    for sample_index, t in enumerate(np.linspace(0.0, 1.0, sample_count)):
+        # At t=1 the hand is in its contact-relative terminal pose.  The
+        # selected pregrasp is the same orientation translated along approach.
+        translation = direction * (1.0 - float(t))
+        for primitive_index, (center_grasp, radius) in enumerate(spheres):
+            center = contact + rotation_world_grasp @ center_grasp + translation
+            distances = np.linalg.norm(worlds - center[None, :], axis=1)
+            order = np.argsort(distances)
+            for point_index in order:
+                point_index = int(point_index)
+                distance = float(distances[point_index])
+                gap = distance - radius
+                v, u = kept[point_index]
+                target_allowance = bool(mask[int(v), int(u)] and t >= 0.75 and np.linalg.norm(worlds[point_index] - contact) <= terminal_allowance_m)
+                if target_allowance:
+                    # An intended terminal contact is not an obstruction and
+                    # must not lower the successful candidate's clearance.
+                    continue
+                if gap < nearest_gap:
+                    nearest_gap = gap
+                    nearest = {
+                        "closest_distance_m": distance,
+                        "clearance_m": gap,
+                        "distance_m": distance,
+                        "closest_world_m": worlds[point_index].tolist(),
+                        "closest_offending_world_m": worlds[point_index].tolist(),
+                        "closest_pixel_uv": [int(kept[point_index, 1]), int(kept[point_index, 0])],
+                        "closest_offending_pixel_uv": [int(kept[point_index, 1]), int(kept[point_index, 0])],
+                        "primitive_index": primitive_index,
+                        "primitive_center_world_m": center.tolist(),
+                        "primitive_radius_m": float(radius),
+                        "segment": "pregrasp_to_contact",
+                        "segment_sample_index": sample_index,
+                        "segment_sample_count": sample_count,
+                        "segment_fraction": float(t),
+                        "threshold_m": float(clearance),
+                        "aperture_m": float(required_aperture_m),
+                    }
+                if distance > radius + clearance:
+                    # Remaining points are farther from this primitive.
+                    break
+                # Report this actual blocking point, rather than an earlier
+                # target-mask point that was allowed at terminal contact.
+                details = {
+                    "closest_distance_m": distance,
+                    "clearance_m": gap,
+                    "distance_m": distance,
+                    "closest_world_m": worlds[point_index].tolist(),
+                    "closest_offending_world_m": worlds[point_index].tolist(),
+                    "closest_pixel_uv": [int(kept[point_index, 1]), int(kept[point_index, 0])],
+                    "closest_offending_pixel_uv": [int(kept[point_index, 1]), int(kept[point_index, 0])],
+                    "primitive_index": primitive_index,
+                    "primitive_center_world_m": center.tolist(),
+                    "primitive_radius_m": float(radius),
+                    "segment": "pregrasp_to_contact",
+                    "segment_sample_index": sample_index,
+                    "segment_sample_count": sample_count,
+                    "segment_fraction": float(t),
+                    "threshold_m": float(clearance),
+                    "aperture_m": float(required_aperture_m),
+                }
+                details.update({
+                    "status": "collision",
+                    "target_mask_terminal_allowance_m": float(terminal_allowance_m),
+                    "target_mask_allowed": False,
+                    "observed_point_count": int(len(worlds)),
+                    "ignored_robot_point_count": int(np.count_nonzero(~keep)),
+                })
+                return details
+    details = dict(nearest or {})
+    details.update({
+        "status": "ok",
+        "observed_point_count": int(len(worlds)),
+        "ignored_robot_point_count": int(np.count_nonzero(~keep)),
+        "target_mask_terminal_allowance_m": float(terminal_allowance_m),
+        "target_mask_allowed": True,
+    })
+    return details
 
 
 def generate_grasp_candidates(
@@ -487,6 +725,13 @@ def generate_grasp_candidates(
             raise ValueError("rgb and RGB-D depth must share original image height and width")
     K, T = _validate_camera(calibration, depth.shape)
     R_ge, contact_offset, approach, workspace_min, workspace_max = _validate_robot(robot_calibration)
+    current_grip, current_rotation, hand_spheres = _validate_live_robot_geometry(robot_calibration)
+    live_motion_available = current_grip is not None and current_rotation is not None
+    ignored_robot_spheres: tuple[tuple[np.ndarray, float], ...] = ()
+    if live_motion_available and hand_spheres:
+        ignored_robot_spheres = _current_hand_world_spheres(current_grip, current_rotation, R_ge, contact_offset, hand_spheres)
+    if not np.isfinite(config.terminal_contact_allowance_m) or config.terminal_contact_allowance_m < 0:
+        raise ValueError("terminal_contact_allowance_m must be finite and non-negative")
     valid = _valid_depth(depth)
     eligible_boundary = _boundary(mask) & valid
     boundary_pixels = np.column_stack(np.nonzero(eligible_boundary))
@@ -558,37 +803,118 @@ def generate_grasp_candidates(
             completion = np.cross(approach, jaw_yaw)
             completion /= np.linalg.norm(completion)
             R_world_grasp = np.column_stack((approach, jaw_yaw, completion))
-            R_world_grip = R_world_grasp @ R_ge
-            if not np.allclose(R_world_grip.T @ R_world_grip, np.eye(3), atol=1e-5) or np.linalg.det(R_world_grip) <= 0:
+            if not np.allclose(R_world_grasp.T @ R_world_grasp, np.eye(3), atol=1e-5) or np.linalg.det(R_world_grasp) <= 0:
                 for insertion in config.insertion_depths_m:
                     rejected.append(CandidateRejection(seed_index, yaw_float, float(insertion), "invalid_orientation"))
                 continue
-            grip_offset_world = R_world_grasp @ contact_offset
+            # The second branch is physically equivalent for a symmetric jaw:
+            # its approach axis is unchanged while jaw/completion are flipped.
+            # It is considered only with a live current pose, and is selected
+            # per insertion after workspace/obstruction feasibility checks.
+            orientation_frames = [(False, R_world_grasp)]
+            if live_motion_available:
+                orientation_frames.append((True, R_world_grasp @ np.diag((1.0, -1.0, -1.0))))
             for insertion in config.insertion_depths_m:
                 insertion_float = float(insertion)
                 if insertion_float < 0:
                     rejected.append(CandidateRejection(seed_index, yaw_float, insertion_float, "negative_insertion"))
                     continue
-                contact = base_contact + approach * insertion_float
-                grip_site = contact + grip_offset_world
-                pregrasp = grip_site - approach * float(robot_calibration.pregrasp_distance_m)
-                points_to_check = (contact, grip_site, pregrasp)
-                if any(not _inside_workspace(point, workspace_min, workspace_max) for point in points_to_check):
-                    rejected.append(CandidateRejection(seed_index, yaw_float, insertion_float, "workspace"))
-                    continue
-                clearance = float("inf")
-                if config.obstruction_clearance_m is not None:
-                    if config.obstruction_clearance_m < 0 or not np.isfinite(config.obstruction_clearance_m):
-                        raise ValueError("obstruction_clearance_m must be finite and non-negative")
-                    clearance = _obstruction_clearance(depth, mask, K, T, pregrasp, grip_site, float(config.obstruction_clearance_m))
-                    if clearance < float(config.obstruction_clearance_m):
-                        rejected.append(CandidateRejection(seed_index, yaw_float, insertion_float, "approach_obstruction", {"clearance_m": clearance}))
+                feasible_frames: list[dict[str, Any]] = []
+                rejection_details: list[dict[str, Any]] = []
+                for jaw_flip, grasp_frame in orientation_frames:
+                    grip_frame = grasp_frame @ R_ge
+                    if not np.allclose(grip_frame.T @ grip_frame, np.eye(3), atol=1e-5) or np.linalg.det(grip_frame) <= 0:
+                        rejection_details.append({"jaw_flip": jaw_flip, "reason": "invalid_orientation"})
                         continue
+                    contact = base_contact + approach * insertion_float
+                    # Recompute the asymmetric contact offset after choosing
+                    # the jaw branch; using the unflipped offset is incorrect.
+                    grip_site = contact + grasp_frame @ contact_offset
+                    pregrasp = grip_site - approach * float(robot_calibration.pregrasp_distance_m)
+                    points_to_check = (contact, grip_site, pregrasp)
+                    if any(not _inside_workspace(point, workspace_min, workspace_max) for point in points_to_check):
+                        rejection_details.append({"jaw_flip": jaw_flip, "reason": "workspace"})
+                        continue
+                    clearance = float("inf")
+                    obstruction_details: dict[str, Any] = {"status": "disabled"}
+                    if config.obstruction_clearance_m is not None:
+                        if config.obstruction_clearance_m < 0 or not np.isfinite(config.obstruction_clearance_m):
+                            raise ValueError("obstruction_clearance_m must be finite and non-negative")
+                        if hand_spheres:
+                            obstruction_details = _hand_volume_obstruction(
+                                depth=depth,
+                                mask=mask,
+                                K=K,
+                                T=T,
+                                contact=contact,
+                                grip_site=grip_site,
+                                pregrasp=pregrasp,
+                                rotation_world_grasp=grasp_frame,
+                                spheres=hand_spheres,
+                                clearance=float(config.obstruction_clearance_m),
+                                terminal_allowance_m=float(config.terminal_contact_allowance_m),
+                                required_aperture_m=required_aperture,
+                                ignored_robot_spheres=ignored_robot_spheres,
+                            )
+                        else:
+                            obstruction_details = _obstruction_clearance(depth, mask, K, T, pregrasp, grip_site, float(config.obstruction_clearance_m))
+                        clearance = float(obstruction_details.get("clearance_m", float("inf")))
+                        if obstruction_details.get("status") == "no_observed_scene" or obstruction_details.get("status") == "no_observed_scene_after_robot_exclusion":
+                            rejection_details.append({"jaw_flip": jaw_flip, "reason": "no_observed_scene", **obstruction_details})
+                            continue
+                        if clearance < float(config.obstruction_clearance_m):
+                            rejection_details.append({"jaw_flip": jaw_flip, "reason": "approach_obstruction", **obstruction_details})
+                            continue
+                    position_distance = None if not live_motion_available else float(np.linalg.norm(pregrasp - current_grip))
+                    rotation_distance = None if not live_motion_available else _rotation_distance_rad(current_rotation, grip_frame)
+                    position_motion_score = None if position_distance is None else 1.0 / (1.0 + position_distance)
+                    rotation_motion_score = None if rotation_distance is None else 1.0 / (1.0 + rotation_distance)
+                    motion_score = 1.0 if position_motion_score is None else 0.5 * (position_motion_score + rotation_motion_score)
+                    feasible_frames.append({
+                        "jaw_flip": jaw_flip,
+                        "grasp_frame": grasp_frame,
+                        "grip_frame": grip_frame,
+                        "contact": contact,
+                        "grip_site": grip_site,
+                        "pregrasp": pregrasp,
+                        "clearance": clearance,
+                        "obstruction_details": obstruction_details,
+                        "position_distance": position_distance,
+                        "rotation_distance": rotation_distance,
+                        "position_motion_score": position_motion_score,
+                        "rotation_motion_score": rotation_motion_score,
+                        "motion_score": motion_score,
+                    })
+                if not feasible_frames:
+                    # Keep one rejection per candidate grid cell even when
+                    # both symmetric jaw frames fail.  Preserve both attempts
+                    # in the audit so the discarded branch is still visible.
+                    priority = {"approach_obstruction": 0, "no_observed_scene": 1, "workspace": 2, "invalid_orientation": 3}
+                    selected_details = min(rejection_details, key=lambda item: priority.get(str(item.get("reason")), 99)) if rejection_details else {"reason": "invalid_orientation"}
+                    reason = str(selected_details.get("reason", "invalid_orientation"))
+                    details = {key: value for key, value in selected_details.items() if key != "reason"}
+                    details["symmetry_attempts"] = rejection_details
+                    rejected.append(CandidateRejection(seed_index, yaw_float, insertion_float, reason, details))
+                    continue
+                if live_motion_available:
+                    chosen = min(feasible_frames, key=lambda item: (float(item["rotation_distance"]), float(item["position_distance"]), bool(item["jaw_flip"])))
+                else:
+                    chosen = feasible_frames[0]
+                jaw_flip = bool(chosen["jaw_flip"])
+                grasp_frame = chosen["grasp_frame"]
+                grip_frame = chosen["grip_frame"]
+                contact = chosen["contact"]
+                grip_site = chosen["grip_site"]
+                pregrasp = chosen["pregrasp"]
+                clearance = float(chosen["clearance"])
                 insertion_score = 1.0 - insertion_float / max(max(config.insertion_depths_m), 1e-9)
-                motion_score = 1.0 / (1.0 + float(np.linalg.norm(pregrasp - grip_site)))
-                score = 4.0 + 0.5 * molmo_score + 0.25 * clearance_score + 0.15 * min(depth_support / 64.0, 1.0) + 0.1 * insertion_score + 0.05 * motion_score
+                motion_score = float(chosen["motion_score"])
+                score = 4.0 + 0.5 * molmo_score + 0.25 * clearance_score + 0.15 * min(depth_support / 64.0, 1.0) + 0.1 * insertion_score + (0.5 if live_motion_available else 0.05) * motion_score
                 release = None if config.release_world_m is None else _finite_vector(config.release_world_m, 3, "release_world_m")
                 candidate = GraspCandidate(
+                    # Jaw symmetry is a frame-selection detail, not a new
+                    # proposal.  Keep identity stable across recovery/live
+                    # pose changes; the selected branch is audited below.
                     candidate_id=f"seed{seed_index:02d}_yaw{yaw_float:+05.1f}_ins{insertion_float * 1000.0:04.1f}mm",
                     seed_index=seed_index,
                     source_pixel_uv=(float(u), float(v)),
@@ -599,16 +925,29 @@ def generate_grasp_candidates(
                     grip_site_world_m=grip_site,
                     pregrasp_world_m=pregrasp,
                     release_world_m=release,
-                    rotation_world_grasp=R_world_grasp,
-                    rotation_world_grip_site=R_world_grip,
-                    quaternion_world_grip_site_xyzw=_quaternion_xyzw(R_world_grip),
-                    jaw_axis_world=jaw_yaw,
+                    rotation_world_grasp=grasp_frame,
+                    rotation_world_grip_site=grip_frame,
+                    quaternion_world_grip_site_xyzw=_quaternion_xyzw(grip_frame),
+                    jaw_axis_world=grasp_frame[:, 1],
                     rim_tangent_world=tangent,
                     required_aperture_m=required_aperture,
                     depth_support_count=depth_support,
                     clearance_m=clearance,
                     score=score,
-                    audit={"frame": "world_grip_site", "source_frame": "original_image_uv", "no_legacy_source_offset": True, "support_pixels": int(len(rim_world))},
+                    audit={
+                        "frame": "world_grip_site", "source_frame": "original_image_uv", "no_legacy_source_offset": True,
+                        "support_pixels": int(len(rim_world)), "jaw_flip": jaw_flip,
+                        "current_pose_available": live_motion_available,
+                        "position_distance_m": chosen["position_distance"],
+                        "rotation_distance_rad": chosen["rotation_distance"],
+                        "current_to_pregrasp_distance_m": chosen["position_distance"],
+                        "current_to_candidate_rotation_rad": chosen["rotation_distance"],
+                        "position_motion_score": chosen["position_motion_score"],
+                        "rotation_motion_score": chosen["rotation_motion_score"],
+                        "motion_score": motion_score,
+                        "obstruction": chosen["obstruction_details"],
+                        "required_aperture_m": required_aperture,
+                    },
                 )
                 duplicate = False
                 for prior in candidates:
@@ -621,7 +960,17 @@ def generate_grasp_candidates(
                     candidates.append(candidate)
     candidates.sort(key=lambda candidate: (-candidate.score, candidate.candidate_id))
     candidates = candidates[: config.max_candidates]
-    return GraspCandidateResult(tuple(candidates), tuple(rejected), tuple((u, v) for v, u in seeds), config.name, {"seed_audit": seed_audit, "candidate_grid_size": len(seeds) * len(config.yaw_offsets_deg) * len(config.insertion_depths_m), "returned_count": len(candidates)})
+    return GraspCandidateResult(
+        tuple(candidates), tuple(rejected), tuple((u, v) for v, u in seeds), config.name,
+        {
+            "seed_audit": seed_audit,
+            "candidate_grid_size": len(seeds) * len(config.yaw_offsets_deg) * len(config.insertion_depths_m),
+            "returned_count": len(candidates),
+            "current_pose_available": live_motion_available,
+            "hand_collision_sphere_count": len(hand_spheres),
+            "terminal_contact_allowance_m": float(config.terminal_contact_allowance_m),
+        },
+    )
 
 
 def generate_from_observation(

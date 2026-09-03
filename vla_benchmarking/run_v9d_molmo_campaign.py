@@ -46,6 +46,52 @@ class ArmStop(RuntimeError):
     pass
 
 
+class RepairGate:
+    """Use the first four planned cells to verify the repaired motion path."""
+
+    expected = {(task, seed) for task in (4, 6) for seed in (1000, 1001)}
+
+    def __init__(self) -> None:
+        self.cells: dict[tuple[int, int], dict[str, Any]] = {}
+        self.status = "pending"
+        self.reason: str | None = None
+
+    def observe(self, record: Mapping[str, Any]) -> None:
+        if record.get("suite_mode") != "vanilla":
+            return
+        key = (int(record["task_id"]), int(record["seed"]))
+        if key not in self.expected:
+            return
+        audit = record.get("audit") or {}
+        manifest = audit.get("canary_manifest") or {}
+        results = [result for attempt in manifest.get("attempts", []) for result in attempt.get("results", [])]
+        reached = set()
+        for result in results:
+            reached.update(result.get("motion_phases_reached") or [])
+            for phase in (result.get("audit") or {}).get("phases", []):
+                if phase.get("status") in {"reached", "dwell", "stop"}:
+                    reached.add(phase.get("phase"))
+        self.cells[key] = {
+            "task_id": key[0], "seed": key[1],
+            "hover_completed": (audit.get("observation_hover") or {}).get("status") == "completed",
+            "completed_contact_phase": bool(reached & {"close", "lift"}),
+            "motion_phases_reached": sorted(p for p in reached if p),
+            "status": record.get("status"),
+        }
+        if set(self.cells) != self.expected:
+            return
+        hover_ok = all(cell["hover_completed"] for cell in self.cells.values())
+        contact_ok = all(any(cell["task_id"] == task and cell["completed_contact_phase"] for cell in self.cells.values()) for task in (4, 6))
+        self.status = "passed" if hover_ok and contact_ok else "failed"
+        if self.status == "failed":
+            self.reason = "repair replay requires four completed hovers and a completed close/lift on both T4 and T6"
+            raise ArmStop(self.reason)
+
+    def canonical(self) -> dict[str, Any]:
+        return {"status": self.status, "reason": self.reason, "cells": [self.cells[key] for key in sorted(self.cells)],
+                "purpose": "motion integration check; success is not required and evaluator results do not select grasps"}
+
+
 class StopRules:
     def __init__(self) -> None:
         self.failures: dict[tuple[str, str, str], set[tuple[str, int, int]]] = {}
@@ -132,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--label", default="v9d_molmo_rgbd")
     parser.add_argument("--screen-only", action="store_true")
+    parser.add_argument("--repair-gate", action="store_true", help="require the first T4/T6 cells to clear hover and contact before continuing the campaign")
     args = parser.parse_args(argv)
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -147,12 +194,22 @@ def main(argv: list[str] | None = None) -> int:
         "comparison": "exploratory grasp pipeline comparison; geometry control shares motion and hover",
         "historical_baselines": {"1914768": {"successes": 15, "planned": 60}, "1917528": {"successes": 14, "planned": 60}},
         "historical_comparison_note": "Historical commits differ; compare matching task/seed/suite cells. No baseline rerun or default promotion.",
+        "repair_gate": {"status": "pending" if args.repair_gate else "disabled"},
     }
     write_json(report_path, report)
     runtime = MolmoPointRuntime()
+    repair_gate = RepairGate() if args.repair_gate else None
 
     def run_arm(arm: Arm, phase: str) -> dict[str, Any]:
         rules = StopRules()
+        def on_cell(record: Mapping[str, Any]) -> None:
+            rules(record)
+            if repair_gate is not None and arm.name == ARMS[0].name and phase == "prefix":
+                try:
+                    repair_gate.observe(record)
+                finally:
+                    report["repair_gate"] = repair_gate.canonical()
+                    write_json(report_path, report)
         started = time.monotonic()
         print(f"CAMPAIGN arm={arm.name} phase={phase} prompt={arm.prompt} starting", flush=True)
         rc = canary.main([
@@ -160,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
             "--output-dir", str(root / arm.name), "--label", f"{args.label}__{arm.name}",
             "--phase", phase, "--molmopoint-revision", canary.MOLMOPOINT_MODEL_REVISION,
             "--molmopoint-prompt-id", arm.prompt,
-        ], molmo_runtime=runtime, cell_completed_callback=rules)
+        ], molmo_runtime=runtime, cell_completed_callback=on_cell)
         result = {"arm": asdict(arm), "phase": phase, "returncode": rc,
                   "stop_reason": rules.reason, "fatal": rules.fatal,
                   "elapsed_s": time.monotonic() - started,
@@ -174,6 +231,12 @@ def main(argv: list[str] | None = None) -> int:
         write_json(report_path, report)
         if result["fatal"]:
             report["status"] = "stopped_contract_violation"
+            write_json(report_path, report)
+            return 2
+        if repair_gate is not None and arm.name == ARMS[0].name and repair_gate.status != "passed":
+            report["repair_gate"] = repair_gate.canonical()
+            report["status"] = "stopped_repair_gate"
+            report["finished_unix"] = time.time()
             write_json(report_path, report)
             return 2
     eligible = sorted((r for r in report["screen"] if r["returncode"] == 0 and r["metrics"]["terminal_cells"] == 12), key=rank_key)

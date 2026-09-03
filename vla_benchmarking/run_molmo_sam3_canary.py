@@ -41,6 +41,7 @@ YAW_OFFSETS_DEG = (-15.0, 0.0, 15.0)
 INSERTION_OFFSETS_M = (0.0, 0.004, 0.008)
 OBSERVATION_HOVER_OFFSET_M = 0.10
 GRIPPER_OPEN_TIMEOUT_STEPS = 160
+DEFAULT_STALL_DELTA_M = 1e-4
 SAM3_SOURCE_COMMIT = "96914d2425f90a64f45ca977c2b5165418099543"
 SAM3_CHECKPOINT_SHA256 = "0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6"
 MOLMOPOINT_MODEL_ID = "allenai/MolmoPoint-8B"
@@ -90,6 +91,9 @@ class GraspCandidate:
     score: float = 0.0
     feasible: bool = True
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Explicit approach target from the geometry worker.  ``None`` is retained
+    # for old test fixtures; live Molmo/SAM3 candidates populate this field.
+    pregrasp_world_m: tuple[float, float, float] | None = None
 
     def __post_init__(self) -> None:
         p = np.asarray(self.position_world_m, dtype=np.float64)
@@ -106,11 +110,15 @@ class GraspCandidate:
             uv = np.asarray(self.source_pixel_xy, dtype=np.float64)
             if uv.shape != (2,) or not np.isfinite(uv).all():
                 raise ValueError("source_pixel_xy must be a finite 2-vector")
+        if self.pregrasp_world_m is not None:
+            pregrasp = np.asarray(self.pregrasp_world_m, dtype=np.float64)
+            if pregrasp.shape != (3,) or not np.isfinite(pregrasp).all():
+                raise ValueError("pregrasp_world_m must be a finite world-frame 3-vector")
 
     def canonical(self) -> dict[str, Any]:
         q = np.asarray(self.orientation_xyzw, dtype=np.float64)
         q = q / np.linalg.norm(q)
-        return {
+        result = {
             "candidate_id": self.candidate_id,
             "position_world_m": [float(v) for v in self.position_world_m],
             "orientation_xyzw": [float(v) for v in q],
@@ -120,6 +128,9 @@ class GraspCandidate:
             "feasible": bool(self.feasible),
             "metadata": _json_safe(self.metadata),
         }
+        if self.pregrasp_world_m is not None:
+            result["pregrasp_world_m"] = [float(v) for v in self.pregrasp_world_m]
+        return result
 
 
 @dataclass(frozen=True)
@@ -226,6 +237,7 @@ def _normalise_candidate(value: Any, index: int) -> GraspCandidate:
     # imports the experimental package, while preserving its complete audit.
     if hasattr(value, "grip_site_world_m"):
         position = getattr(value, "grip_site_world_m")
+        pregrasp = getattr(value, "pregrasp_world_m", None)
         orientation = getattr(value, "quaternion_world_grip_site_xyzw")
         audit = getattr(value, "audit", {})
         metadata = dict(audit) if isinstance(audit, Mapping) else {}
@@ -241,6 +253,7 @@ def _normalise_candidate(value: Any, index: int) -> GraspCandidate:
             score=float(getattr(value, "score", 0.0)),
             feasible=True,
             metadata=metadata,
+            pregrasp_world_m=None if pregrasp is None else tuple(float(v) for v in pregrasp),
         )
     if not isinstance(value, Mapping):
         raise TypeError(f"candidate {index} must be a mapping or GraspCandidate")
@@ -257,6 +270,10 @@ def _normalise_candidate(value: Any, index: int) -> GraspCandidate:
         score=float(value.get("score", 0.0)),
         feasible=bool(value.get("feasible", True)),
         metadata=value.get("metadata", {}),
+        pregrasp_world_m=(
+            None if value.get("pregrasp_world_m") is None
+            else tuple(float(v) for v in value["pregrasp_world_m"])
+        ),
     )
 
 
@@ -271,7 +288,8 @@ def rank_candidates(candidates: Sequence[GraspCandidate]) -> list[GraspCandidate
             -float(c.score),
             -float(c.metadata.get("clearance_m", 0.0)),
             -float(c.metadata.get("depth_support", 0.0)),
-            float(c.metadata.get("motion_distance_m", 0.0)),
+            float(c.metadata.get("position_distance_m", c.metadata.get("motion_distance_m", 0.0))),
+            float(c.metadata.get("rotation_distance_rad", 0.0)),
             c.candidate_id,
         ),
     )
@@ -325,6 +343,7 @@ def expand_grasp_candidates(
                     score=seed.score,
                     feasible=seed.feasible,
                     metadata=meta,
+                    pregrasp_world_m=seed.pregrasp_world_m,
                 ))
                 if len(expanded) >= max_candidates:
                     return rank_candidates(expanded)
@@ -364,6 +383,18 @@ def _failed_grasp(result: Mapping[str, Any]) -> bool:
     }
 
 
+def _completed_motion_phases(phases: Any) -> list[str]:
+    """Return only phases that actually reached their completion boundary."""
+    if not isinstance(phases, Sequence) or isinstance(phases, (str, bytes)):
+        return []
+    return [
+        str(item.get("phase"))
+        for item in phases
+        if isinstance(item, Mapping)
+        and item.get("status") in {"reached", "dwell", "stop"}
+    ]
+
+
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_json_safe(value), indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -389,6 +420,7 @@ def run_canary_episode(
     arrow_refresh_fn: Callable[[Any], tuple[np.ndarray, Sequence[float], Sequence[float] | None]] | None = None,
     experiment_schema: str = SAM_EXPERIMENT_SCHEMA,
     region_backend: str = "sam3",
+    before_propose_callback: Callable[[Any], Any] | None = None,
 ) -> dict[str, Any]:
     """Run one bounded canary episode, regenerating candidates after failure."""
     selected_variant = VARIANTS[variant] if isinstance(variant, str) else variant
@@ -447,6 +479,11 @@ def run_canary_episode(
             output_dir=root,
             placement_displacement_world_m=displacement,
         )
+        # Candidate geometry must use a no-motion probe synchronized with the
+        # exact capture that feeds proposal generation.  This is called for
+        # the initial proposal and every post-recovery retry.
+        if before_propose_callback is not None:
+            before_propose_callback(env)
         candidates, diagnostics = _worker_candidates(worker, request)
         candidates = candidates[:MAX_CANDIDATES]
         attempt_record: dict[str, Any] = {
@@ -494,10 +531,18 @@ def run_canary_episode(
             raise
         if result.get("retreat_complete"):
             context.mark_retreat_complete()
+        # Keep the phase boundary explicit in the attempt record.  The runner
+        # may append recovery phases after a failed candidate; callers need the
+        # candidate's own completed phases for gating and diagnosis.
+        result.setdefault(
+            "motion_phases_reached",
+            _completed_motion_phases(result.get("audit", {}).get("phases", []) if isinstance(result.get("audit"), Mapping) else ()),
+        )
         if result.get("evaluator_called") and not context._retreat_complete:
             raise RuntimeError("episode runner reports evaluator use before retreat")
         item = {"candidate_id": candidate.candidate_id, **result}
         attempt_record["results"].append(item)
+        attempt_record["motion_phases_reached"] = list(result.get("motion_phases_reached", []))
         final_result = result
         if str(result.get("status", "")).lower() == "recovery_failed":
             attempt_record["status"] = "recovery_failed"
@@ -932,7 +977,7 @@ class ModelPerceptionWorker:
             "latency_s": float(time.perf_counter() - started),
             "geometry_audit": result.audit,
             "rejections": [
-                {"seed_index": item.seed_index, "yaw_deg": item.yaw_deg, "insertion_depth_m": item.insertion_depth_m, "reason": item.reason}
+                {"seed_index": item.seed_index, "yaw_deg": item.yaw_deg, "insertion_depth_m": item.insertion_depth_m, "reason": item.reason, "details": _json_safe(item.details)}
                 for item in result.rejected
             ],
         }
@@ -1020,7 +1065,8 @@ class ModelPerceptionWorker:
             "geometry_audit": result.audit,
             "rejections": [
                 {"seed_index": item.seed_index, "yaw_deg": item.yaw_deg,
-                 "insertion_depth_m": item.insertion_depth_m, "reason": item.reason}
+                 "insertion_depth_m": item.insertion_depth_m, "reason": item.reason,
+                 "details": _json_safe(item.details)}
                 for item in result.rejected
             ],
         }
@@ -1060,6 +1106,20 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
                 if idx >= 0:
                     return idx, name
         raise RuntimeError(f"Panda calibration probe could not resolve {kind} names {tuple(names)!r}")
+
+    def optional_named_id(kind: str, names: Sequence[str]) -> tuple[int, str] | None:
+        """Resolve a model name when present (fixtures omit some Panda geoms)."""
+        resolver = getattr(model, f"{kind}_name2id", None)
+        if not callable(resolver):
+            return None
+        for name in names:
+            try:
+                idx = int(resolver(name))
+            except (KeyError, ValueError, IndexError, TypeError):
+                continue
+            if idx >= 0:
+                return idx, name
+        return None
 
     # Robosuite's Panda XML exposes the two finger bodies under these stable
     # names.  Resolve them as an identity check, but use contact-pad geoms
@@ -1155,6 +1215,90 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
     if usable_aperture <= 1e-4:
         raise RuntimeError("Panda contact-pad usable aperture is closed after pad extent correction")
     contact_offset_grasp = grasp_to_grip_site @ contact_offset_site
+
+    # Capture conservative collision primitives for the live hand/finger
+    # geometry.  Centers are measured in the contact-midpoint grasp frame, so
+    # the geometry worker can transform them relative to each candidate without
+    # reading object/evaluator state.  ``geom_rbound`` is preferred; the
+    # Euclidean half-size bound is a safe fallback for lightweight MuJoCo fakes.
+    # The collision mesh for the Panda palm is owned by the right-gripper
+    # body, not by the ``robot0_right_hand`` site body.  Include both owners
+    # when available, and explicitly resolve the stable palm collision geom
+    # because some MuJoCo models omit body-parent metadata on lightweight
+    # wrappers.  Finger collision meshes are likewise included by name.
+    right_gripper = optional_named_id("body", ("gripper0_right_gripper", "right_gripper"))
+    hand_body_ids = {int(left_id), int(right_id), int(palm_id)}
+    if right_gripper is not None:
+        hand_body_ids.add(int(right_gripper[0]))
+    geom_body_ids = getattr(model, "geom_bodyid", None)
+    geom_positions = getattr(data, "geom_xpos", None)
+    geom_sizes = getattr(model, "geom_size", None)
+    geom_rbounds = getattr(model, "geom_rbound", None)
+    collision_spheres: list[dict[str, Any]] = []
+    candidate_geom_ids = {int(left_pad_id), int(right_pad_id)}
+    for geom_names in (
+        ("gripper0_hand_collision", "hand_collision"),
+        (
+            "gripper0_leftfinger_collision", "gripper0_rightfinger_collision",
+            "gripper0_finger1_collision", "gripper0_finger2_collision",
+            "leftfinger_collision", "rightfinger_collision", "finger1_collision", "finger2_collision",
+        ),
+    ):
+        resolved = optional_named_id("geom", geom_names)
+        if resolved is not None:
+            candidate_geom_ids.add(int(resolved[0]))
+    geom_name_resolver = getattr(model, "geom_id2name", None)
+    model_geom_names = getattr(model, "names", {}).get("geom", ()) if isinstance(getattr(model, "names", {}), Mapping) else ()
+    if geom_body_ids is not None and geom_positions is not None:
+        body_ids = np.asarray(geom_body_ids).reshape(-1)
+        for geom_id, body_id in enumerate(body_ids):
+            if int(body_id) in hand_body_ids:
+                candidate_geom_ids.add(int(geom_id))
+    for geom_id in sorted(candidate_geom_ids):
+        try:
+            # Match MuJoCo's collision filtering: visual-only geoms have both
+            # masks cleared and must not become conservative hand obstacles.
+            # Missing masks are accepted only for minimal test doubles.
+            contypes = getattr(model, "geom_contype", None)
+            conaffinities = getattr(model, "geom_conaffinity", None)
+            if contypes is not None and conaffinities is not None:
+                contype = int(np.asarray(contypes).reshape(-1)[geom_id])
+                conaffinity = int(np.asarray(conaffinities).reshape(-1)[geom_id])
+                if contype == 0 and conaffinity == 0:
+                    continue
+            center_world = np.asarray(geom_positions[geom_id], dtype=np.float64).reshape(-1)
+            if center_world.shape != (3,) or not np.isfinite(center_world).all():
+                continue
+            if geom_rbounds is not None:
+                radius = float(np.asarray(geom_rbounds).reshape(-1)[geom_id])
+            elif geom_sizes is not None:
+                size = np.asarray(geom_sizes[geom_id], dtype=np.float64).reshape(-1)
+                radius = float(np.linalg.norm(size[:3])) if size.size >= 3 else float("nan")
+            else:
+                radius = float("nan")
+            if not np.isfinite(radius) or radius < 0.0:
+                continue
+            center_site = site_rotation.T @ (center_world - midpoint)
+            center_grasp = grasp_to_grip_site @ center_site
+            if callable(geom_name_resolver):
+                try:
+                    geom_name = str(geom_name_resolver(int(geom_id)))
+                except (KeyError, IndexError, TypeError, ValueError):
+                    geom_name = str(geom_id)
+            elif int(geom_id) < len(model_geom_names):
+                geom_name = str(model_geom_names[int(geom_id)])
+            else:
+                geom_name = str(geom_id)
+            collision_spheres.append({
+                "center_grasp_m": center_grasp.tolist(),
+                "radius_m": radius,
+                "geom_id": int(geom_id),
+                "geom_name": geom_name,
+            })
+        except (IndexError, TypeError, ValueError):
+            continue
+    if not collision_spheres:
+        raise RuntimeError("Panda calibration probe found no finite hand collision geometry")
     record = dict(record)
     record["gripper_geometry"] = {
         "left_body": left_name, "right_body": right_name,
@@ -1175,6 +1319,11 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
          "measured_opening_m": usable_aperture,
          "contact_to_grip_site_site_m": contact_offset_site.tolist(),
         "contact_to_grip_site_grasp_m": contact_offset_grasp.tolist(),
+        "current_grip_site_world_m": site.tolist(),
+        "current_rotation_world_grip_site": site_rotation.tolist(),
+        "hand_collision_spheres_grasp": collision_spheres,
+        "hand_collision_geom_count": len(collision_spheres),
+        "hand_collision_geom_names": [item["geom_name"] for item in collision_spheres],
         "source": "no_motion_mujoco_contact_pad_geom_probe",
     }
     calibration = RobotGraspCalibration(
@@ -1182,12 +1331,21 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
          max_aperture_m=max(0.005, usable_aperture * 0.98),
         calibration_source="panda_grip_site_frame_and_contact_pad_probe_no_motion",
         calibration_sha256=str(record.get("calibration_sha256") or ""),
+        current_grip_site_world_m=site,
+        current_rotation_world_grip_site=site_rotation,
+        hand_collision_spheres_grasp=collision_spheres,
     )
     setattr(env, "_molmo_sam3_robot_calibration_probe", record)
     return calibration, transform, record
 
 
-def _recover_after_failed_candidate(env: Any, *, output_dir: Path, orientation_transform: np.ndarray | None) -> dict[str, Any]:
+def _recover_after_failed_candidate(
+    env: Any,
+    *,
+    output_dir: Path,
+    orientation_transform: np.ndarray | None,
+    motion_settings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Open and retreat with bounded actions before a fresh perception retry."""
     try:
         try:
@@ -1214,11 +1372,17 @@ def _recover_after_failed_candidate(env: Any, *, output_dir: Path, orientation_t
         if hover_budget <= 0:
             raise RuntimeError("1200-action retry budget exhausted before observation hover")
         phases = episode._run_motion(
-            env, waypoints, observation, phase_timeout_steps=160, gripper_dwell_steps=20,
+            env, waypoints, observation,
+            phase_timeout_steps=int((motion_settings or {}).get("phase_timeout_steps", 160)),
+            gripper_dwell_steps=int((motion_settings or {}).get("gripper_dwell_steps", 20)),
             stop_after_phase="retreat", start_phase="open", dry_run=False,
             action_budget=budget if budget is not None else remaining,
             eef_orientation_transform=orientation_transform,
             motion_trace_path=output_dir / "recovery_motion_trace.json",
+            stall_window_steps=int((motion_settings or {}).get("stall_window_steps", 0)),
+            stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
+            osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
+            phase_policies=(motion_settings or {}).get("phase_policies"),
         )
         recovery_steps = int(sum(1 for item in (getattr(env, "_arrow_motion_trace", []) or []) if isinstance(item, Mapping) and item.get("action_sent")))
         total_actions = int(budget.used) if budget is not None else prior_actions + recovery_steps
@@ -1265,6 +1429,7 @@ def _perform_gripper_open(
     *,
     output_dir: Path,
     motion_started_callback: Callable[[], None] | None = None,
+    motion_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Open at the current EEF pose before measuring contact-pad geometry."""
     try:
@@ -1285,12 +1450,17 @@ def _perform_gripper_open(
         waypoints = np.tile(current, (6, 1))
         phases = episode._run_motion(
             env, waypoints, observation,
-            phase_timeout_steps=GRIPPER_OPEN_TIMEOUT_STEPS,
-            gripper_dwell_steps=20, stop_after_phase="open", start_phase="open",
+            phase_timeout_steps=int((motion_settings or {}).get("phase_timeout_steps", GRIPPER_OPEN_TIMEOUT_STEPS)),
+            gripper_dwell_steps=int((motion_settings or {}).get("gripper_dwell_steps", 20)),
+            stop_after_phase="open", start_phase="open",
             dry_run=False, action_budget=budget if budget is not None else remaining,
             motion_started_callback=motion_started_callback,
             motion_trace_path=output_dir / "gripper_open_trace.json",
             motion_trace_segment="gripper_open_preflight",
+            stall_window_steps=int((motion_settings or {}).get("stall_window_steps", 0)),
+            stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
+            osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
+            phase_policies=(motion_settings or {}).get("phase_policies"),
         )
         steps = int(sum(int(item.get("steps", 0)) for item in phases))
         total_actions = int(budget.used) if budget is not None else prior_actions + steps
@@ -1318,6 +1488,7 @@ def _perform_observation_hover(
     *,
     output_dir: Path,
     motion_started_callback: Callable[[], None] | None = None,
+    motion_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Move to the fixed 10-cm observation hover used by every source arm."""
     try:
@@ -1339,12 +1510,20 @@ def _perform_observation_hover(
         if hover_budget <= 0:
             raise RuntimeError("1200-action budget exhausted before observation hover")
         phases = episode._run_motion(
-            env, waypoints, observation, phase_timeout_steps=160,
-            gripper_dwell_steps=20, stop_after_phase="pregrasp", dry_run=False,
+            env, waypoints, observation,
+            phase_timeout_steps=int((motion_settings or {}).get("phase_timeout_steps", 160)),
+            gripper_dwell_steps=int((motion_settings or {}).get("gripper_dwell_steps", 20)),
+            stop_after_phase="pregrasp", dry_run=False,
             action_budget=budget if budget is not None else hover_budget,
             motion_started_callback=motion_started_callback,
             motion_trace_path=output_dir / "observation_hover_trace.json",
             motion_trace_segment="observation_hover",
+            # Hover has a fixed target and must not trigger the legacy
+            # ten-sample stall detector.  Keep this explicit in the call.
+            stall_window_steps=0,
+            stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
+            osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
+            phase_policies=(motion_settings or {}).get("phase_policies"),
         )
         audit = {
             "status": "completed",
@@ -1560,6 +1739,35 @@ def main(
         # CLI backend selection is part of the experimental identity and is
         # reflected in every cell, including legacy variant names.
         variant = replace(variant, region_backend=args.region_backend)
+        frozen_motion_variant = episode._resolve_controller_variant(
+            kwargs.get("controller_variant"), suite_mode=suite_mode
+        )
+        motion_settings = {
+            "phase_timeout_steps": int(frozen_motion_variant.phase_timeout_steps),
+            "gripper_dwell_steps": int(frozen_motion_variant.gripper_dwell_steps),
+            "stall_window_steps": int(frozen_motion_variant.stall_window_steps),
+            "stall_delta_m": float(frozen_motion_variant.stall_delta_m),
+            "osc_position_scale_m": frozen_motion_variant.osc_position_scale_m,
+        }
+        phase_policies = {name: dict(policy) for name, policy in episode.PHASE_POLICIES.items()}
+        if frozen_motion_variant.approach_tolerance_m is not None:
+            for name in ("descend", "descend_place"):
+                phase_policies[name]["tolerance_m"] = float(frozen_motion_variant.approach_tolerance_m)
+        if frozen_motion_variant.waypoint_tolerance_m is not None:
+            for name in episode.PHASES:
+                if name not in {"close", "open"}:
+                    phase_policies[name]["tolerance_m"] = float(frozen_motion_variant.waypoint_tolerance_m)
+        staging_tolerance = float(
+            frozen_motion_variant.waypoint_tolerance_m
+            if frozen_motion_variant.waypoint_tolerance_m is not None
+            else 0.015
+        )
+        for name in ("vertical_clearance", "rotate", "translate_clearance", "pregrasp"):
+            phase_policies[name] = {
+                "role": "experimental_staging",
+                "tolerance_m": staging_tolerance,
+            }
+        motion_settings["phase_policies"] = phase_policies
         bboxes = kwargs.get("bboxes")
         if not isinstance(bboxes, Mapping):
             raise ValueError("canary episode requires existing arrow input-generation bboxes")
@@ -1576,6 +1784,7 @@ def main(
         _perform_gripper_open(
             env, output_dir=output_dir / "gripper_open",
             motion_started_callback=motion_callback,
+            motion_settings=motion_settings,
         )
         calibration, transform, probe = probe_robot_calibration(env)
         worker_state["robot_calibration"] = calibration
@@ -1592,6 +1801,7 @@ def main(
         _perform_observation_hover(
             env, initial, provisional_source, output_dir=hover_output,
             motion_started_callback=motion_callback,
+            motion_settings=motion_settings,
         )
         fresh = episode.capture_agentview(env, resolution=resolution, camera_name=AGENTVIEW)
         arrow_state: dict[str, Any] = {"rgb": None, "source_uv": None, "destination_uv": None}
@@ -1614,6 +1824,21 @@ def main(
                 return cached
             return episode.capture_agentview(capture_env, resolution=resolution, camera_name=camera_name)
 
+        def refresh_robot_calibration(_env: Any) -> None:
+            # This callback runs after the fresh RGB-D capture and immediately
+            # before worker.propose, including every post-recovery retry.
+            calibration, refreshed_transform, probe = probe_robot_calibration(_env)
+            worker_state["robot_calibration"] = calibration
+            worker_state["transform"] = refreshed_transform
+            geometry = probe.get("gripper_geometry") if isinstance(probe, Mapping) else None
+            worker_state["opening_m"] = (
+                float(geometry["measured_opening_m"])
+                if isinstance(geometry, Mapping) and geometry.get("measured_opening_m") is not None
+                else None
+            )
+            worker_state["worker"].robot_calibration = calibration
+            setattr(_env, "_molmo_sam3_robot_calibration_probe", probe)
+
         transform = worker_state.get("transform")
         if transform is None or worker_state.get("worker") is None:
             raise RuntimeError("Panda calibration/model worker was not initialized")
@@ -1622,6 +1847,9 @@ def main(
                     retreat_completed_callback: Callable[[], None] | None = None) -> Mapping[str, Any]:
             action_count_before = int(getattr(env, "_molmo_sam3_action_count", 0))
             trace_before = getattr(env, "_arrow_motion_trace", None)
+            # Do not let a previous candidate's phase audit leak into a
+            # pre-motion failure or into the recovery snapshot for this one.
+            setattr(env, "_arrow_phase_audit", [])
             attempt_output_dir = output_dir / "attempts" / f"attempt_{int(context.attempt_index):02d}"
             attempt_output_dir.mkdir(parents=True, exist_ok=True)
             try:
@@ -1637,27 +1865,11 @@ def main(
                 return {"status": "recovery_failed", "grasp_retained": False, "retreat_complete": False,
                         "total_actions": action_count_before,
                         "error": "1200-action retry budget exhausted before candidate"}
-            try:
-                # Re-probe the no-motion contact geometry for every candidate;
-                # retries must not reuse an aperture measured before recovery.
-                live_calibration, live_transform, live_probe = probe_robot_calibration(env)
-                worker_state["robot_calibration"] = live_calibration
-                worker_state["transform"] = live_transform
-                geometry = live_probe.get("gripper_geometry") if isinstance(live_probe, Mapping) else None
-                worker_state["opening_m"] = (
-                    float(geometry["measured_opening_m"])
-                    if isinstance(geometry, Mapping) and geometry.get("measured_opening_m") is not None
-                    else None
-                )
-                worker_state["worker"].robot_calibration = live_calibration
-                transform = live_transform
-            except Exception as exc:
-                return {
-                    "status": "recovery_failed", "grasp_retained": False,
-                    "retreat_complete": False, "error_type": type(exc).__name__,
-                    "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
-                    "error": f"live contact calibration failed closed: {exc}",
-                }
+            transform = worker_state.get("transform")
+            if transform is None or worker_state.get("worker") is None:
+                return {"status": "recovery_failed", "grasp_retained": False,
+                        "retreat_complete": False, "total_actions": action_count_before,
+                        "error": "live contact calibration unavailable before candidate"}
             try:
                 audit = episode.run_episode(
                     env=env, task_id=task_id, seed=seed, output_dir=attempt_output_dir,
@@ -1689,6 +1901,7 @@ def main(
                     "evaluator_called": bool(evaluator is not None),
                     "evaluator_success": audit.get("evaluator_success"),
                     "audit": audit,
+                    "motion_phases_reached": _completed_motion_phases(audit.get("phases", [])),
                 }
             except Exception as exc:
                 if "evaluator failure" in str(exc).lower():
@@ -1698,12 +1911,19 @@ def main(
                     setattr(env, "_molmo_sam3_action_count", int(env._molmo_sam3_action_budget.used))
                 else:
                     setattr(env, "_molmo_sam3_action_count", action_count_before + trace_steps)
-                recovery = _recover_after_failed_candidate(env, output_dir=attempt_output_dir, orientation_transform=transform)
+                attempt_phases = list(getattr(env, "_arrow_phase_audit", []) or [])
+                reached = _completed_motion_phases(attempt_phases)
+                recovery = _recover_after_failed_candidate(
+                    env, output_dir=attempt_output_dir,
+                    orientation_transform=transform, motion_settings=motion_settings,
+                )
                 return {
                     "status": "grasp_failed" if recovery.get("retreat_complete") else "recovery_failed",
                     "grasp_retained": False, "retreat_complete": bool(recovery.get("retreat_complete")),
                     "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
                     "error_type": type(exc).__name__, "error": str(exc), "recovery": recovery,
+                    "motion_phases_reached": reached,
+                    "attempt_phases": attempt_phases,
                 }
 
         result = run_canary_episode(
@@ -1715,6 +1935,7 @@ def main(
             arrow_refresh_fn=refresh_arrow,
             experiment_schema=(RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),
             region_backend=args.region_backend,
+            before_propose_callback=refresh_robot_calibration,
         )
         final = result.get("final_result") if isinstance(result.get("final_result"), Mapping) else {}
         audit = final.get("audit") if isinstance(final, Mapping) else None
@@ -1723,7 +1944,9 @@ def main(
             "evaluator_success": final.get("evaluator_success") if isinstance(final, Mapping) else None,
             "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
             "gripper_open_preflight": getattr(env, "_molmo_sam3_gripper_open", None),
+            "observation_hover": getattr(env, "_molmo_sam3_observation_hover", None),
             "phases": audit.get("phases", []) if isinstance(audit, Mapping) else [],
+            "motion_phases_reached": final.get("motion_phases_reached", []) if isinstance(final, Mapping) else [],
             "grasp_search": [], "canary_manifest": result,
             "experimental_identity": (RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),
         }

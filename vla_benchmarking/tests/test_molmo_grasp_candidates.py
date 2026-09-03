@@ -155,3 +155,156 @@ def test_duplicate_molmo_points_are_deduplicated_before_grid_expansion():
     )
     assert len(result.seeds_uv) == 1
     assert len(result.candidates) == 9
+
+
+def test_live_pose_ranks_by_position_and_rotation_and_records_audit():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    baseline = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=robot,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    target = next(item for item in baseline.candidates if item.yaw_deg == 0.0 and item.insertion_depth_m == 0.0)
+    live = RobotGraspCalibration(
+        max_aperture_m=robot.max_aperture_m,
+        finger_clearance_m=robot.finger_clearance_m,
+        pregrasp_distance_m=robot.pregrasp_distance_m,
+        current_grip_site_world_m=target.pregrasp_world_m,
+        current_rotation_world_grip_site=target.rotation_world_grip_site,
+    )
+    result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=live,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    first = result.candidates[0]
+    assert first.audit["current_pose_available"] is True
+    assert first.audit["position_distance_m"] == pytest.approx(0.0)
+    assert first.audit["rotation_distance_rad"] == pytest.approx(0.0)
+    assert first.audit["motion_score"] == pytest.approx(1.0)
+    assert result.audit["current_pose_available"] is True
+
+
+def test_live_pose_selects_180_degree_jaw_symmetry_and_recomputes_asymmetric_offset():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    asymmetric = RobotGraspCalibration(
+        contact_to_grip_site_m=(0.02, 0.01, 0.0),
+        max_aperture_m=robot.max_aperture_m,
+        finger_clearance_m=robot.finger_clearance_m,
+        pregrasp_distance_m=robot.pregrasp_distance_m,
+    )
+    baseline = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=asymmetric,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    target = next(item for item in baseline.candidates if item.yaw_deg == 0.0 and item.insertion_depth_m == 0.0)
+    flipped_grasp = target.rotation_world_grasp @ np.diag((1.0, -1.0, -1.0))
+    flipped_grip = flipped_grasp @ np.asarray(asymmetric.grasp_to_grip_site)
+    flipped_contact = target.contact_world_m
+    flipped_grip_site = flipped_contact + flipped_grasp @ np.asarray(asymmetric.contact_to_grip_site_m)
+    baseline_live = RobotGraspCalibration(
+        grasp_to_grip_site=asymmetric.grasp_to_grip_site,
+        contact_to_grip_site_m=asymmetric.contact_to_grip_site_m,
+        max_aperture_m=asymmetric.max_aperture_m,
+        finger_clearance_m=asymmetric.finger_clearance_m,
+        pregrasp_distance_m=asymmetric.pregrasp_distance_m,
+        current_grip_site_world_m=target.pregrasp_world_m,
+        current_rotation_world_grip_site=target.rotation_world_grip_site,
+    )
+    baseline_result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=baseline_live,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    live = RobotGraspCalibration(
+        grasp_to_grip_site=asymmetric.grasp_to_grip_site,
+        contact_to_grip_site_m=asymmetric.contact_to_grip_site_m,
+        max_aperture_m=asymmetric.max_aperture_m,
+        finger_clearance_m=asymmetric.finger_clearance_m,
+        pregrasp_distance_m=asymmetric.pregrasp_distance_m,
+        current_grip_site_world_m=flipped_grip_site - np.asarray(asymmetric.approach_axis_world) * asymmetric.pregrasp_distance_m,
+        current_rotation_world_grip_site=flipped_grip,
+    )
+    result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=live,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    selected = next(item for item in result.candidates if item.yaw_deg == 0.0 and item.insertion_depth_m == 0.0)
+    baseline_selected = next(item for item in baseline_result.candidates if item.yaw_deg == 0.0 and item.insertion_depth_m == 0.0)
+    assert selected.audit["jaw_flip"] is True
+    assert baseline_selected.candidate_id == selected.candidate_id
+    assert np.allclose(selected.rotation_world_grasp, flipped_grasp)
+    assert np.allclose(selected.grip_site_world_m, flipped_grip_site)
+    assert selected.audit["rotation_distance_rad"] == pytest.approx(0.0)
+
+
+def test_hand_volume_reports_off_centerline_obstruction_with_pixel_and_primitive_details():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    # An observed obstacle away from the centerline, but inside a contact-
+    # relative hand sphere.  Its pixel is intentionally outside the target mask.
+    depth[22, 44] = 1.0
+    live = RobotGraspCalibration(
+        max_aperture_m=robot.max_aperture_m,
+        finger_clearance_m=robot.finger_clearance_m,
+        pregrasp_distance_m=robot.pregrasp_distance_m,
+        hand_collision_spheres_grasp=(((0.0, 0.0, -0.03), 0.012),),
+        current_grip_site_world_m=(0.0, 0.0, 1.2),
+        current_rotation_world_grip_site=np.eye(3),
+    )
+    result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=live,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local", "obstruction_clearance_m": 0.006}),
+    )
+    obstruction = [item for item in result.rejected if item.reason == "approach_obstruction"]
+    assert obstruction
+    detail = next(item.details for item in obstruction if item.details.get("closest_pixel_uv") == [44, 22])
+    assert detail["primitive_index"] == 0
+    assert detail["segment"] == "pregrasp_to_contact"
+    assert detail["aperture_m"] > 0
+
+
+def test_obstruction_policy_rejects_fabricated_empty_observation():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    depth[~mask] = np.nan
+    live = RobotGraspCalibration(
+        max_aperture_m=robot.max_aperture_m,
+        finger_clearance_m=robot.finger_clearance_m,
+        pregrasp_distance_m=robot.pregrasp_distance_m,
+        hand_collision_spheres_grasp=(((0.0, 0.0, 0.0), 0.01),),
+        current_grip_site_world_m=(0.0, 0.0, 1.2),
+        current_rotation_world_grip_site=np.eye(3),
+    )
+    result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=live,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local", "obstruction_clearance_m": 0.006}),
+    )
+    assert not result.candidates
+    assert any(item.reason == "approach_obstruction" for item in result.rejected) or any(item.reason == "no_observed_scene" for item in result.rejected)
+
+
+def test_terminal_target_contact_allowance_does_not_lower_successful_clearance():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    live = RobotGraspCalibration(
+        max_aperture_m=robot.max_aperture_m,
+        finger_clearance_m=robot.finger_clearance_m,
+        pregrasp_distance_m=robot.pregrasp_distance_m,
+        hand_collision_spheres_grasp=(((0.0, 0.0, 0.0), 0.001),),
+        current_grip_site_world_m=(0.0, 0.0, 1.2),
+        current_rotation_world_grip_site=np.eye(3),
+    )
+    result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=live,
+        policy=CandidatePolicy(**{
+            **policy.__dict__, "name": "molmo_local", "obstruction_clearance_m": 0.006,
+            "terminal_contact_allowance_m": 0.2,
+        }),
+    )
+    assert result.candidates
+    for candidate in result.candidates:
+        assert candidate.audit["obstruction"]["status"] == "ok"
+        assert candidate.clearance_m >= 0.0
