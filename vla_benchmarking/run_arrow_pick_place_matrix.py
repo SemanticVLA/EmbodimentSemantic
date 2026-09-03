@@ -1098,8 +1098,10 @@ def _run_matrix_impl(
     arrow_input_builder: Callable[[Any, int, int], Mapping[str, Any]] | None = None,
     evaluator: Callable[[Any], bool] | None = None,
     resume: bool = False,
+    resume_terminal: bool = False,
     retry_motion_began: bool = False,
     continue_on_motion_failure: bool = False,
+    experiment_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
     suite_mode = parse_suite_mode(suite_mode)
@@ -1189,12 +1191,18 @@ def _run_matrix_impl(
         controller_config=controller_config_provenance,
         init_state_preflight=init_state_preflight,
     )
+    if experiment_metadata is not None:
+        protocol["experimental_identity"] = dict(experiment_metadata)
     protocol["source_hashes"] = _source_file_hashes()
     contract_hash = _contract_hash(protocol, cells)
     provenance = {
         "launcher_path": Path(__file__).resolve().as_posix(),
         "repository_root": Path(__file__).resolve().parents[1].as_posix(),
-        "episode_runner": "run_arrow_pick_place_eval.run_episode",
+        "episode_runner": (
+            "run_molmo_sam3_canary.episode_runner"
+            if experiment_metadata is not None
+            else "run_arrow_pick_place_eval.run_episode"
+        ),
         "suite_mode": suite_mode,
         "controller_variant": controller_variant,
         "controller_config": controller_config_provenance,
@@ -1205,6 +1213,8 @@ def _run_matrix_impl(
         "platform": platform.platform(),
         "dependency_versions": _dependency_versions(),
     }
+    if experiment_metadata is not None:
+        provenance["experimental_identity"] = dict(experiment_metadata)
     resolved_runtime_provenance = (
         resolved_controller.provenance()
         if controller_config_provenance is not None and resolved_controller is not None
@@ -1216,36 +1226,106 @@ def _run_matrix_impl(
             f"matrix output already exists at {root}; choose a new output root or pass resume=True"
         )
     previous_by_index: dict[int, dict[str, Any]] = {}
+    previous_by_identity: dict[tuple[int, int], dict[str, Any]] = {}
+    resume_contract_hashes = {contract_hash}
     if resume:
         if not status_path.is_file():
             raise FileNotFoundError(f"cannot resume without status file: {status_path}")
         previous = json.loads(status_path.read_text(encoding="utf-8"))
         if previous.get("contract_hash") != contract_hash:
-            raise ValueError("resume contract hash does not match the requested matrix")
+            # A prefix shard (2 episodes/task) is intentionally extendable to
+            # the full shard (10 episodes/task).  Permit only that exact
+            # protocol change; all provenance/configuration remains immutable.
+            old_protocol = previous.get("protocol")
+            extendable = False
+            if isinstance(old_protocol, Mapping):
+                old_count = int(old_protocol.get("episodes_per_task", 0))
+                new_count = int(protocol.get("episodes_per_task", 0))
+                extendable = old_count > 0 and old_count < new_count
+                for key in protocol:
+                    if not extendable or key in {"episodes_per_task", "init_state_preflight"}:
+                        continue
+                    if old_protocol.get(key) != protocol.get(key):
+                        extendable = False
+                        break
+                if extendable:
+                    old_preflight = old_protocol.get("init_state_preflight")
+                    new_preflight = protocol.get("init_state_preflight")
+                    if not isinstance(old_preflight, Mapping) or not isinstance(new_preflight, Mapping):
+                        extendable = old_preflight == new_preflight
+                    else:
+                        # The preflight count and selected init-state prefix
+                        # grow with the shard; all other preflight provenance
+                        # must remain byte-for-byte compatible.
+                        for key in new_preflight:
+                            if key == "required_count" or key == "selected_indices":
+                                continue
+                            if old_preflight.get(key) != new_preflight.get(key):
+                                extendable = False
+                                break
+                        if extendable:
+                            old_selected = old_preflight.get("selected_indices", {})
+                            new_selected = new_preflight.get("selected_indices", {})
+                            if isinstance(old_selected, Mapping) and isinstance(new_selected, Mapping):
+                                for task_key, old_indices in old_selected.items():
+                                    new_indices = new_selected.get(task_key)
+                                    if not isinstance(old_indices, list) or not isinstance(new_indices, list) or new_indices[:len(old_indices)] != old_indices:
+                                        extendable = False
+                                        break
+                            elif old_selected != new_selected:
+                                extendable = False
+            if not extendable:
+                raise ValueError("resume contract hash does not match the requested matrix")
+            if previous.get("contract_hash"):
+                resume_contract_hashes.add(str(previous["contract_hash"]))
         for record in previous.get("cells", []):
             if isinstance(record, Mapping) and "cell_index" in record:
                 previous_by_index[int(record["cell_index"])] = dict(record)
-        unsafe = [
-            record for record in previous_by_index.values()
-            if (
-                record.get("status") == "running"
-                or (
-                    record.get("status") != "completed"
-                    and bool(record.get("motion_began"))
-                )
-                or any(
-                    isinstance(attempt, Mapping)
-                    and (
-                        attempt.get("status") == "running"
-                        or (
-                            attempt.get("status") != "completed"
-                            and bool(attempt.get("motion_began"))
-                        )
-                    )
-                    for attempt in record.get("attempts", [])
-                )
+                if "task_id" in record and "seed" in record:
+                    previous_by_identity[(int(record["task_id"]), int(record["seed"]))] = dict(record)
+        def _preserved_terminal(record: Mapping[str, Any]) -> bool:
+            """Whether a terminal outcome may be carried into an extension.
+
+            A failed/interrupted prefix cell is already a durable experiment
+            outcome and must not be rerun while extending (for example) the
+            2-episode prefix to the 10-episode shard.  A nested running
+            attempt is still unsafe, even if its parent status was flushed as
+            terminal during interruption.
+            """
+
+            if not resume_terminal or record.get("status") not in {"failed", "interrupted"}:
+                return False
+            return not any(
+                isinstance(attempt, Mapping) and attempt.get("status") == "running"
+                for attempt in record.get("attempts", [])
             )
-        ]
+
+        unsafe = []
+        for record in previous_by_index.values():
+            preserved_terminal = _preserved_terminal(record)
+            if record.get("status") == "running":
+                unsafe.append(record)
+                continue
+            if (
+                not preserved_terminal
+                and record.get("status") != "completed"
+                and bool(record.get("motion_began"))
+            ):
+                unsafe.append(record)
+                continue
+            if any(
+                isinstance(attempt, Mapping)
+                and (
+                    attempt.get("status") == "running"
+                    or (
+                        not preserved_terminal
+                        and attempt.get("status") != "completed"
+                        and bool(attempt.get("motion_began"))
+                    )
+                )
+                for attempt in record.get("attempts", [])
+            ):
+                unsafe.append(record)
         if unsafe and not retry_motion_began:
             first = unsafe[0]
             raise RuntimeError(
@@ -1271,7 +1351,21 @@ def _run_matrix_impl(
             )
             + "\n",
         )
-    status_records = [previous_by_index.get(int(cell["cell_index"]), _planned_record(cell)) for cell in cells]
+    def prior_for_cell(cell: Mapping[str, Any]) -> dict[str, Any] | None:
+        # Cell indices change when a prefix shard is extended (e.g. 2 to 10
+        # episodes per task).  Task/seed identity is the stable resume key.
+        identity = previous_by_identity.get((int(cell["task_id"]), int(cell["seed"])))
+        if identity is not None:
+            return identity
+        # Index fallback is retained only for genuinely legacy status files
+        # that predate task/seed identity fields; never reuse a modern record
+        # merely because an extended plan happens to share its cell index.
+        legacy = previous_by_index.get(int(cell["cell_index"]))
+        if legacy is not None and ("task_id" not in legacy or "seed" not in legacy):
+            return legacy
+        return None
+
+    status_records = [prior_for_cell(cell) or _planned_record(cell) for cell in cells]
 
     def write_status() -> None:
         _atomic_write_text(
@@ -1334,10 +1428,10 @@ def _run_matrix_impl(
                 ) from exc
             if not isinstance(parsed, Mapping):
                 raise ValueError(f"matrix manifest line {line_number} is not an object")
-            if parsed.get("contract_hash") not in (None, contract_hash):
+            if parsed.get("contract_hash") not in (None, *resume_contract_hashes):
                 raise ValueError("resume manifest contract hash does not match status")
             manifest_history.append(dict(parsed))
-        for prior_record in previous_by_index.values():
+        for prior_record in previous_by_identity.values():
             if prior_record.get("status") not in {"completed", "failed", "interrupted"}:
                 continue
             expected_attempts = prior_record.get("attempts", [])
@@ -1371,8 +1465,11 @@ def _run_matrix_impl(
             # failure and could attach cleanup errors to the wrong cell.
             cell_record: dict[str, Any] | None = None
             cell_index = int(cell["cell_index"])
-            prior = previous_by_index.get(cell_index)
-            if resume and prior is not None and prior.get("status") == "completed":
+            prior = prior_for_cell(cell)
+            if resume and prior is not None and (
+                prior.get("status") == "completed"
+                or (resume_terminal and prior.get("status") in {"failed", "interrupted"})
+            ):
                 cell_record = prior
                 records.append(cell_record)
                 continue
