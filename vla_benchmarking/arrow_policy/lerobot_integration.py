@@ -525,6 +525,22 @@ class ArrowStageTrainer:
         self.optimizer_config = optimizer_config
         self.checkpoints = AtomicCheckpointStore(output_dir)
 
+    def _set_stage_modes(self, stage: StageName) -> None:
+        """Set train/eval modes independently from ``requires_grad``.
+
+        ``Module.train()`` recursively flips every child, including frozen
+        vision/connector modules.  Their frozen A-C path must stay in eval
+        mode so dropout and running-stat updates cannot change the teacher
+        feature distribution. Stage D deliberately enables train mode again.
+        """
+
+        self.model.train()
+        vision_training = stage is StageName.D_FULL_STUDENT
+        for name in ("vision_encoder", "visual_connector"):
+            component = getattr(self.model, name, None)
+            if component is not None:
+                component.train(vision_training)
+
     def run_stage(self, stage: StageName, batches: Iterable[Mapping[str, Tensor]], *, teacher: Optional[SmolVLATeacherAdapter] = None, updates: Optional[int] = None, resume: bool = True) -> dict[str, Any]:
         optimizer = build_stage_optimizer(self.model, stage, optimizer_config=self.optimizer_config)
         scheduler = build_stage_scheduler(optimizer, stage, warmup_fraction=self.optimizer_config.warmup_fraction, final_lr_fraction=self.optimizer_config.final_lr_fraction)
@@ -542,7 +558,7 @@ class ArrowStageTrainer:
                     start_update = state["update"]
                 else:
                     self.checkpoints.load_model_latest(self.model, map_location=self.device)
-        self.model.train()
+        self._set_stage_modes(stage)
         iterator = iter(batches)
         target_updates = updates if updates is not None else next(item.updates for item in STAGE_SCHEDULE if item.name == stage)
         completed = start_update

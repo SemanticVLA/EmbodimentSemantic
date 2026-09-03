@@ -192,23 +192,48 @@ import hashlib, json, os, sys, tempfile
 from pathlib import Path
 out, run_id, commit, trainer, dataset, teacher_dataset, teacher, initial, base, libero, flags = sys.argv[1:]
 
-def digest(path: Path):
+def digest(path: Path, role: str):
     if not path.exists():
         return None
-    candidates = []
     if path.is_file():
-        candidates = [path]
-    else:
-        # Hash small identity/configuration files. The base manifest itself
-        # contains hashes for the large model tensors; hashing a multi-GB file
-        # at every resume would delay recovery without adding identity.
-        names = {"meta/info.json", "meta/stats.json", "meta/tasks.parquet", "config.json", "adapter_config.json", "adapter_model.safetensors", "train_config.json", "base_snapshot_manifest.json", "policy_preprocessor_step_5_normalizer_processor.safetensors"}
-        candidates = [p for p in path.rglob("*") if p.is_file() and str(p.relative_to(path)).replace("\\", "/") in names]
-    payload = []
-    for item in sorted(candidates):
-        h = hashlib.sha256(item.read_bytes()).hexdigest()
-        payload.append({"path": str(item), "sha256": h, "size": item.stat().st_size})
-    return payload
+        return {"kind": "file", "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+
+    # The inventory records every dataset file, and payload hashes detect
+    # same-size mutations. The full dataset is intentionally hashed at contract
+    # creation/resume startup because the paired LIBERO inputs are part of the
+    # experiment identity. Immutable base manifests still avoid rereading the
+    # multi-GB model files.
+    files = [p for p in path.rglob("*") if p.is_file() and ".cache" not in p.parts]
+    inventory = []
+    for item in sorted(files):
+        relative = item.relative_to(path).as_posix()
+        inventory.append({"path": relative, "size": item.stat().st_size})
+
+    manifest_path = path / "base_snapshot_manifest.json"
+    manifest_hashes = {}
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(manifest.get("files"), dict):
+            manifest_hashes = dict(manifest["files"])
+            actual_names = {entry["path"] for entry in inventory if entry["path"] != "base_snapshot_manifest.json"}
+            if actual_names != set(manifest_hashes):
+                raise SystemExit(f"{role} manifest file inventory differs from the directory")
+
+    metadata_names = {
+        "meta/info.json", "meta/stats.json", "meta/tasks.parquet", "config.json",
+        "adapter_config.json", "train_config.json", "base_snapshot_manifest.json",
+        "policy_preprocessor_step_5_normalizer_processor.safetensors",
+    }
+    hashed_files = []
+    for item in sorted(files):
+        relative = item.relative_to(path).as_posix()
+        if relative in manifest_hashes:
+            # The immutable base manifest authenticates multi-GB model files;
+            # reuse its digest instead of rereading them during every resume.
+            hashed_files.append({"path": relative, "sha256": manifest_hashes[relative], "source": "authenticated_manifest"})
+        elif role == "dataset" or role == "checkpoint" or role == "base_policy" or relative in metadata_names:
+            hashed_files.append({"path": relative, "sha256": hashlib.sha256(item.read_bytes()).hexdigest(), "source": "local_hash"})
+    return {"kind": "directory", "inventory": inventory, "hashed_files": hashed_files}
 
 contract = {
     "schema": "arrow-policy-run-contract-v1",
@@ -226,12 +251,12 @@ contract = {
         "libero_config": libero,
     },
     "identity_files": {
-        "dataset": digest(Path(dataset)),
-        "teacher_dataset": digest(Path(teacher_dataset)),
-        "teacher_checkpoint": digest(Path(teacher)),
-        "initial_checkpoint": digest(Path(initial)),
-        "base_policy": digest(Path(base)),
-        "libero_config": digest(Path(libero)),
+        "dataset": digest(Path(dataset), "dataset"),
+        "teacher_dataset": digest(Path(teacher_dataset), "dataset"),
+        "teacher_checkpoint": digest(Path(teacher), "checkpoint"),
+        "initial_checkpoint": digest(Path(initial), "checkpoint"),
+        "base_policy": digest(Path(base), "base_policy"),
+        "libero_config": digest(Path(libero), "config"),
     },
     "stages": ["A_distill_bridge", "B_action_bridge", "C_joint_action", "D_full_student"],
 }
@@ -331,13 +356,17 @@ run_logged integration_smoke "$PYTHON" "${smoke_args[@]}" "${trainer_flags[@]}" 
 archive_snapshot integration_smoke || die 'integration-smoke archive failed'
 
 stages=(A_distill_bridge B_action_bridge C_joint_action D_full_student)
-for stage in "${stages[@]}"; do
+stage_targets=(5000 5000 10000 10000)
+for stage_index in "${!stages[@]}"; do
+  stage="${stages[$stage_index]}"
+  target_updates="${stage_targets[$stage_index]}"
   marker="$RUN_ROOT/stages/${stage}.complete.json"
   if [[ -s "$marker" ]]; then
-    "$PYTHON" - "$marker" "$stage" "$RUN_ROOT/checkpoints" "$RUN_CONTRACT_SHA" <<'PY'
-import json, sys
+    "$PYTHON" - "$marker" "$stage" "$target_updates" "$RUN_ROOT/checkpoints" "$RUN_CONTRACT_SHA" <<'PY'
+import hashlib, json, sys
 from pathlib import Path
-marker, expected_stage, checkpoint_root, contract_sha = sys.argv[1:]
+marker, expected_stage, target_updates, checkpoint_root, contract_sha = sys.argv[1:]
+target_updates = int(target_updates)
 data = json.loads(Path(marker).read_text(encoding="utf-8"))
 if data.get("schema") != "arrow-policy-stage-v1" or data.get("stage") != expected_stage:
     raise SystemExit("invalid or mismatched stage marker")
@@ -345,12 +374,28 @@ if data.get("contract_sha256") != contract_sha:
     raise SystemExit("stage marker belongs to a different run contract")
 if Path(data.get("checkpoint_root", "")).resolve() != Path(checkpoint_root).resolve():
     raise SystemExit("stage marker checkpoint root differs from this run")
-stage_root = Path(checkpoint_root) / expected_stage
-manifests = list(stage_root.glob("update_*/manifest.json"))
-if not manifests:
-    raise SystemExit("stage marker exists but this stage has no checkpoint manifest")
-if not any(json.loads(path.read_text(encoding="utf-8")).get("stage") == expected_stage for path in manifests):
-    raise SystemExit("stage marker has no matching stage checkpoint")
+manifest_path = Path(data.get("checkpoint_manifest", "")).resolve()
+stage_root = Path(checkpoint_root).resolve() / expected_stage
+if manifest_path.parent != stage_root or manifest_path.name != "manifest.json":
+    raise SystemExit("stage marker checkpoint manifest is outside its stage directory")
+if not manifest_path.is_file():
+    raise SystemExit("stage marker checkpoint manifest is missing")
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+if manifest.get("stage") != expected_stage or int(manifest.get("update", -1)) < target_updates:
+    raise SystemExit("stage marker checkpoint has the wrong stage or insufficient updates")
+files = manifest.get("files")
+if not isinstance(files, dict) or not files:
+    raise SystemExit("stage checkpoint manifest has no file hashes")
+for name, expected in files.items():
+    child = manifest_path.parent / name
+    if Path(name).is_absolute() or ".." in Path(name).parts or not child.is_file():
+        raise SystemExit(f"stage checkpoint file is invalid or missing: {name}")
+    if hashlib.sha256(child.read_bytes()).hexdigest() != expected:
+        raise SystemExit(f"stage checkpoint checksum mismatch: {name}")
+if data.get("update") != int(manifest["update"]):
+    raise SystemExit("stage marker update does not match checkpoint manifest")
+if data.get("manifest_sha256") != hashlib.sha256(manifest_path.read_bytes()).hexdigest():
+    raise SystemExit("stage marker manifest hash does not match checkpoint manifest")
 PY
     printf 'resuming: completed stage marker exists: %s\n' "$marker"
     archive_snapshot "resume_${stage}" || die "archive failed while resuming $stage"
@@ -360,16 +405,44 @@ PY
     -m "$TRAINER_MODULE" --stage "$stage" --run-root "$RUN_ROOT" --output-root "$RUN_ROOT"
     --checkpoint-root "$RUN_ROOT/checkpoints" --dataset-root "$ARROW_DATASET_ROOT" --teacher-dataset-root "$ARROW_TEACHER_DATASET_ROOT"
     --teacher-checkpoint "$ARROW_TEACHER_CHECKPOINT" --initial-checkpoint "$ARROW_INITIAL_CHECKPOINT" --base-policy "$ARROW_BASE_POLICY"
-    --libero-config-path "$LIBERO_CONFIG_PATH" --device cuda --resume
+    --libero-config-path "$LIBERO_CONFIG_PATH" --device cuda --updates "$target_updates" --resume
   )
   run_logged "train_${stage}" "$PYTHON" "${stage_args[@]}" "${trainer_flags[@]}" || die "trainer failed in stage $stage; partial state was archived"
-  [[ -n "$(find "$RUN_ROOT/checkpoints" -type f -print -quit 2>/dev/null)" ]] || die "trainer left no checkpoint files after $stage"
-  "$PYTHON" - "$marker" "$stage" "$RUN_ROOT/checkpoints" "$RUN_CONTRACT_SHA" <<'PY'
-import json, os, sys
+  "$PYTHON" - "$marker" "$stage" "$target_updates" "$RUN_ROOT/checkpoints" "$RUN_CONTRACT_SHA" <<'PY'
+import hashlib, json, os, sys, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-marker, stage, checkpoint_root, contract_sha = sys.argv[1:]
-Path(marker).write_text(json.dumps({"schema": "arrow-policy-stage-v1", "stage": stage, "checkpoint_root": str(Path(checkpoint_root).resolve()), "contract_sha256": contract_sha, "completed_job_id": os.environ.get("SLURM_JOB_ID"), "completed_at_utc": datetime.now(timezone.utc).isoformat()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+marker, stage, target_updates, checkpoint_root, contract_sha = sys.argv[1:]
+target_updates = int(target_updates)
+stage_root = Path(checkpoint_root).resolve() / stage
+valid = []
+for manifest_path in stage_root.glob("update_*/manifest.json"):
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        update = int(manifest.get("update", -1))
+        files = manifest.get("files")
+        if manifest.get("stage") != stage or update < target_updates or not isinstance(files, dict) or not files:
+            continue
+        for name, expected in files.items():
+            child = manifest_path.parent / name
+            if Path(name).is_absolute() or ".." in Path(name).parts or not child.is_file():
+                raise ValueError(f"invalid checkpoint file {name}")
+            if hashlib.sha256(child.read_bytes()).hexdigest() != expected:
+                raise ValueError(f"checkpoint checksum mismatch {name}")
+        valid.append((update, manifest_path, manifest))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        continue
+if not valid:
+    raise SystemExit(f"no valid {stage} checkpoint manifest reached target update {target_updates}")
+update, manifest_path, manifest = max(valid, key=lambda item: item[0])
+payload = {"schema": "arrow-policy-stage-v1", "stage": stage, "target_updates": target_updates, "update": update, "checkpoint_root": str(Path(checkpoint_root).resolve()), "checkpoint_manifest": str(manifest_path.resolve()), "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(), "contract_sha256": contract_sha, "completed_job_id": os.environ.get("SLURM_JOB_ID"), "completed_at_utc": datetime.now(timezone.utc).isoformat()}
+target = Path(marker)
+fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.replace(temporary, target)
 PY
   archive_snapshot "completed_${stage}" || die "archive failed after stage $stage"
 done

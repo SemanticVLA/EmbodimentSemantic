@@ -298,3 +298,23 @@ def test_normalizer_resolution_requires_matching_checkpoint_stats(tmp_path):
     (initial / stat_name).write_bytes(b"different")
     with pytest.raises(ValueError, match="different normalizer"):
         _resolve_normalizer_path(teacher, initial, base)
+
+
+def test_stage_trainer_keeps_frozen_vision_in_eval_until_stage_d(tmp_path):
+    from vla_benchmarking.arrow_policy.lerobot_integration import ArrowStageTrainer
+
+    class ModeModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.vision_encoder = nn.Dropout()
+            self.visual_connector = nn.Dropout()
+
+    model = ModeModel()
+    trainer = ArrowStageTrainer(model, tmp_path, device="cpu")
+    trainer._set_stage_modes(StageName.C_JOINT_ACTION)
+    assert model.training is True
+    assert model.vision_encoder.training is False
+    assert model.visual_connector.training is False
+    trainer._set_stage_modes(StageName.D_FULL_STUDENT)
+    assert model.vision_encoder.training is True
+    assert model.visual_connector.training is True
