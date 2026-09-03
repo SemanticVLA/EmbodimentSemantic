@@ -161,6 +161,8 @@ def test_diagnostics_forward_to_helper_using_backend_keyword(tmp_path, monkeypat
         return [{"phase": "open", "steps": 1, "status": "stop"}]
 
     fake_episode._run_motion = run_motion
+    import vla_benchmarking
+    monkeypatch.setattr(vla_benchmarking, "run_arrow_pick_place_eval", fake_episode, raising=False)
     monkeypatch.setitem(sys.modules, "vla_benchmarking.run_arrow_pick_place_eval", fake_episode)
     monkeypatch.setitem(sys.modules, "run_arrow_pick_place_eval", fake_episode)
     env = SimpleNamespace(_molmo_sam3_action_count=0)

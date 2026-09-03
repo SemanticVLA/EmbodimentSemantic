@@ -19,6 +19,10 @@ runner = importlib.import_module("run_molmo_sam3_canary")
 def test_rgbd_main_passes_frozen_v9d_matrix_selection(tmp_path, monkeypatch):
     matrix = importlib.import_module("run_arrow_pick_place_matrix")
     selected = []
+    monkeypatch.setattr(runner, "_execution_provenance", lambda **_kwargs: {
+        "execution_sha": "a" * 40, "checkout_clean": True,
+        "live_verified": True, "provenance_status": "live_verified", "dirty_paths": [],
+    })
 
     def validate_selection(**kwargs):
         label, _, _ = matrix._resolve_controller_selection(

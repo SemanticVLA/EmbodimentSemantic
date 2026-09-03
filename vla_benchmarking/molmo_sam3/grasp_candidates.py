@@ -190,6 +190,10 @@ class CandidatePolicy:
     yaw_offsets_deg: tuple[float, ...] = (-15.0, 0.0, 15.0)
     insertion_depths_m: tuple[float, ...] = (0.0, 0.004, 0.008)
     obstruction_clearance_m: float | None = None
+    # Clearance used only when removing the currently observed robot from the
+    # RGB-D support image.  ``None`` retains the historical coupling to the
+    # admission/hand-envelope margin.
+    robot_exclusion_clearance_m: float | None = None
     release_world_m: ArrayLike | None = None
     # Target-mask points are allowed only in this small neighborhood of the
     # intended terminal contact.  Scene points outside it remain obstacles.
@@ -646,6 +650,7 @@ def _hand_volume_obstruction(
     boxes: tuple[dict[str, Any], ...] = (),
     ignored_robot_spheres: tuple[tuple[np.ndarray, float], ...] = (),
     ignored_robot_boxes: tuple[dict[str, Any], ...] = (),
+    robot_exclusion_clearance: float | None = None,
     observed_worlds: np.ndarray | None = None,
     observed_pixels_vu: np.ndarray | None = None,
 ) -> dict[str, Any]:
@@ -655,6 +660,12 @@ def _hand_volume_obstruction(
     ``terminal_allowance_m`` of the selected contact and at the terminal end
     of the approach are allowed; this preserves bowl/scene collision checks.
     """
+    if robot_exclusion_clearance is None:
+        # Direct callers predating the decoupled policy retain the historical
+        # hand-admission threshold for robot-point filtering.
+        robot_exclusion_clearance = float(clearance)
+    if not np.isfinite(robot_exclusion_clearance) or robot_exclusion_clearance < 0.0:
+        raise ValueError("robot_exclusion_clearance must be finite and non-negative")
     if observed_worlds is None or observed_pixels_vu is None:
         pixels = np.column_stack(np.nonzero(_valid_depth(depth)))
         worlds, kept = _support_points(pixels, depth, K, T)
@@ -674,11 +685,11 @@ def _hand_volume_obstruction(
     # arbitrary image region or the entire target mask.
     keep = np.ones(len(worlds), dtype=bool)
     for center, radius in ignored_robot_spheres:
-        keep &= np.linalg.norm(worlds - center[None, :], axis=1) > radius + clearance
+        keep &= np.linalg.norm(worlds - center[None, :], axis=1) > radius + robot_exclusion_clearance
     for box in ignored_robot_boxes:
         keep &= _points_box_signed_clearance(
             worlds, box["center_world_m"], box["rotation_world_box"], box["half_extents_m"]
-        ) > clearance
+        ) > robot_exclusion_clearance
     worlds = worlds[keep]
     kept = kept[keep]
     if len(worlds) == 0:
@@ -849,6 +860,12 @@ def generate_grasp_candidates(
     collision_spheres = () if collision_boxes else hand_spheres
     observed_worlds: np.ndarray | None = None
     observed_pixels_vu: np.ndarray | None = None
+    if config.robot_exclusion_clearance_m is None:
+        robot_exclusion_clearance = float(config.obstruction_clearance_m or 0.0)
+    else:
+        robot_exclusion_clearance = float(config.robot_exclusion_clearance_m)
+        if not np.isfinite(robot_exclusion_clearance) or robot_exclusion_clearance < 0.0:
+            raise ValueError("robot_exclusion_clearance_m must be finite and non-negative")
     if config.obstruction_clearance_m is not None and (collision_spheres or collision_boxes):
         observed_pixels_vu = np.column_stack(np.nonzero(_valid_depth(depth)))
         observed_worlds, observed_pixels_vu = _support_points(observed_pixels_vu, depth, K, T)
@@ -876,9 +893,9 @@ def generate_grasp_candidates(
     # is geometry-only self filtering from the live probe, not mask dilation.
     masked_keep = np.ones(len(masked_world), dtype=bool)
     for center, radius in ignored_robot_spheres:
-        masked_keep &= np.linalg.norm(masked_world - center[None, :], axis=1) > radius + float(config.obstruction_clearance_m or 0.0)
+        masked_keep &= np.linalg.norm(masked_world - center[None, :], axis=1) > radius + robot_exclusion_clearance
     for box in ignored_robot_boxes:
-        masked_keep &= _points_box_signed_clearance(masked_world, box["center_world_m"], box["rotation_world_box"], box["half_extents_m"]) > float(config.obstruction_clearance_m or 0.0)
+        masked_keep &= _points_box_signed_clearance(masked_world, box["center_world_m"], box["rotation_world_box"], box["half_extents_m"]) > robot_exclusion_clearance
     masked_world = masked_world[masked_keep]
     masked_kept = masked_kept[masked_keep]
     if len(masked_world) == 0:
@@ -1014,6 +1031,7 @@ def generate_grasp_candidates(
                                 required_aperture_m=required_aperture,
                                 ignored_robot_spheres=ignored_robot_spheres,
                                 ignored_robot_boxes=ignored_robot_boxes,
+                                robot_exclusion_clearance=robot_exclusion_clearance,
                                 observed_worlds=observed_worlds,
                                 observed_pixels_vu=observed_pixels_vu,
                             )
@@ -1023,7 +1041,7 @@ def generate_grasp_candidates(
                         if obstruction_details.get("status") == "no_observed_scene" or obstruction_details.get("status") == "no_observed_scene_after_robot_exclusion":
                             rejection_details.append({"jaw_flip": jaw_flip, "reason": "no_observed_scene", **obstruction_details})
                             continue
-                        if clearance < float(config.obstruction_clearance_m):
+                        if obstruction_details.get("status") == "collision" or clearance <= float(config.obstruction_clearance_m):
                             rejection_details.append({"jaw_flip": jaw_flip, "reason": "approach_obstruction", **obstruction_details})
                             continue
                     position_distance = None if not live_motion_available else float(np.linalg.norm(pregrasp - current_grip))
@@ -1140,6 +1158,8 @@ def generate_grasp_candidates(
             "upper_rim_threshold_m": upper_threshold,
             "rim_height_band_m": float(config.rim_height_band_m),
             "rim_local_radius_m": float(rim_local_radius_m),
+            "obstruction_clearance_m": (None if config.obstruction_clearance_m is None else float(config.obstruction_clearance_m)),
+            "robot_exclusion_clearance_m": float(robot_exclusion_clearance),
         },
     )
 

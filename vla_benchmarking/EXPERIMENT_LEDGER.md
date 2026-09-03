@@ -1,6 +1,75 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
-## Visual-endpoint XY ablation preparation — 2026-09-03
+## Bounded T4 perception replay and resume repair — preparation 2026-09-03
+
+Final local gate:80 focused tests passed; independent tester63checks including
+probe CLI/guards and actual matrix extension passed. Identity extension runs
+24new cells/suite(seeds1002–1009) while preserving terminal success, evaluator
+false, failure and interrupted prefix cells. Changed/legacy identity rejects
+without mutating original matrix records. Shell syntax, Python compilation,
+diff and frozen-config checks passed. Independent review APPROVE,36focused
+checks passed independently, no HIGH/BLOCKER. Approval covers only the
+perception-only probe, not a5mm grasp-motion canary or improvement claim.
+
+Implement a separate perception-only diagnostic, not a task-success canary.
+One fresh vanillaT4seed1000 cell uses normal hover20mm and rim_clearance Molmo
+perception, captures complete geometry inputs, then runs pure geometry at6mm
+and5mm admission margins with current-robot point exclusion fixed6mm. Return
+no candidates to the motion runner and guard candidate execution/evaluator.
+Persist RGB, metric depth, mask, camera K/T, robot OBB calibration, points,
+policies and hashes. Admission counts—not stored first-hit clearances—decide
+whether a subsequent margin-only canary is worth running. No hardware safety
+claim, default change or reduced action/retention requirements.
+
+Verified prior first-hit counts >=5/4/3mm across current T4 cells:
+vanilla1000:27/39/50; vanilla1001:9/24/41;
+sealed1000:34/63/81; sealed1001:33/58/75. These are NOT admission counts.
+The helper exits at its first blocker, and the old margin also changes robot
+exclusion/upper-rim support. Decouple these with optional robot exclusion
+margin(defaultNone retains old behavior). Reject explicit collision status
+at equality too: helper uses<= while caller previously used<. Both new-code
+diagnostic arms share that fail-closed boundary correction. Old1919241 stays
+immutable. No prior exact replay is possible: T4 artifacts lack full depth/mask
+and robot-probe arrays. Do not infer object identity for offending pixels.
+
+Parallel identity-only repair follows the architect's previous package:
+scientific identity excludes operational label/phase/count/output and includes
+clean execution SHA, full immutable inference/config identity, controller hash,
+camera/geometry/motion/hover/task-seed-suite settings. Keep matrix resume guard
+and old-prefix identities untouched. Test actual matrix extension with retained
+terminal successes/failures and no replay before any future60-cell cohort.
+
+## Visual-endpoint XY ablation running — 2026-09-03
+
+Latest metrics **23:32:58 UTC**:10terminal/12planned,2successes,6retention-evidence,
+2successfulretries,2,898actions,1,629.958sperception. Four no_candidates,
+two grasp_failed,two evaluator-rejected completed placements; bothsuites1/6.
+Stillrunning, below historical3/12 so no improvement claim.
+
+Audit **23:15:17 UTC**:1919241 stillRUNNING, four terminal of12 planned,
+one success(vanillaT6seed1001), two retention-evidence cells, one successful
+retry,1,270actions,667.592sperception. T4bothseeds no_candidates, T6seed1000
+grasp_failed; vanillaT9seed1000running. No improvement claim from this partial.
+
+Fresh audit **23:03:40 UTC**: **1919241 RUNNING on compute-3-14**, elapsed2:19.
+Exact source, one NVIDIA A40, BF16, torch2.10.0/Transformers4.57.1 and effective
+clearance/hover20mm/release20_visual_xy/screen_only1 verified. Campaign started;
+no result claim yet. Initial queued snapshot follows.
+
+Job **1919241** submitted **23:00:30 UTC**, verified **23:01:03 UTC PENDING /
+Priority**, no dependency. Exact source
+`1973c0961e7857e7fc9f0e26831ad9b91672ac41`, label
+`v9d_molmo_visualxy_1973c09`; one A40/eight CPUs/64GB. Clean immutable release,
+frozen-config diff and bundle SHA256
+`2800d8d8cbf9593236112707dafa6509745ea940e3f8c58cc1bef7059a40b7f6`
+verified on Legion. Effective submission: dense_agentview_clearance,
+hover20mm, release20_visual_xy, screen_only1, repair_gate0, motion_probe0.
+No trial results or runtime verification yet. No active/pending duplicate.
+
+Source: `/home/hjaber/EmbodimentSemantic_runtime/checkouts/v9d_molmo_1973c0961e7857e7fc9f0e26831ad9b91672ac41`.
+Expected output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_visualxy_1973c09_1919241/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_visualxy_1973c09_1919241`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919241.out`.
 
 At 22:52:46 UTC, higher-release job1919238 has 2 successes /11 terminal /12
 planned cells, seven retention-evidence cells, two successful retries, 3,444
@@ -39,6 +108,23 @@ Independent operational inspection identified a prefix-to-full60 resume hash
 mismatch (phase/output identity changes). No extension or provenance bypass
 has been attempted. Repair that narrow resume contract before any finalist
 extension; this does not block fresh12-cell screens.
+Architect direction: retain matrix strict resume guard; new scientific hash
+must exclude operational phase/count/output/label but include actual clean
+execution SHA and controller/model/prompt/camera/motion/hover identity. Keep
+operational manifest separately. Existing old-schema prefixes cannot be silently
+restamped as a new-SHA cohort; preserve them and fail incompatible resumes.
+Implement before the next cohort intended for60 cells. No such code is in1919241.
+
+Next-failure triage (read-only): all eight T4 cells across1919230/1919238 rejected
+144/144 proposals for `approach_obstruction` on `pregrasp_to_contact`, threshold
+6mm. Current vanilla seed1000 clearance spans-6.190 to5.949mm:53negative,
+94below3mm,117below5mm, three at least5.9mm. Region/depth exists, all vanilla
+Molmo points passed, no aperture-exceeded outcomes; ranking never ran. Source
+gate is `_hand_volume_obstruction` in grasp_candidates.py and policy threshold
+in run_molmo_sam3_canary.py. This identifies the rejection gate, not a proven
+geometry bug. Next bounded diagnostic: offline clearance sensitivity from saved
+proposals and geometric consistency of the nearest obstacles. Do not silently
+weaken collision criteria or treat lower-margin admission as safety evidence.
 
 ## Release-height ablation completed — 2026-09-03
 

@@ -21,6 +21,7 @@
 #   V9D_MOLMO_OBSERVATION_PROFILE baseline (default) or hover20mm
 #   V9D_MOLMO_MOTION_PROFILE  baseline (default), placement_micro5mm, release_plus20mm or release20_visual_xy
 #   V9D_MOLMO_SCREEN_ONLY     1 disables any 60-cell extension
+#   V9D_MOLMO_GEOMETRY_PROBE  1 runs one perception-only T4 clearance replay, not a canary
 
 #SBATCH --job-name=v9d_molmo_campaign
 #SBATCH --partition=gpu_a40
@@ -63,6 +64,11 @@ actual_commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" || die 'cannot
 BASE_PYTHON="${V9D_MOLMO_BASE_PYTHON:-/home/hjaber/.conda/envs/embodiment-smolvla-py312/bin/python}"
 [[ -x "$BASE_PYTHON" ]] || die "validated base Python is missing: $BASE_PYTHON"
 CAMPAIGN_SCRIPT="$REPO_ROOT/vla_benchmarking/run_v9d_molmo_campaign.py"
+case "${V9D_MOLMO_GEOMETRY_PROBE:-0}" in
+  0) ;;
+  1) CAMPAIGN_SCRIPT="$REPO_ROOT/vla_benchmarking/run_molmo_geometry_probe.py" ;;
+  *) die 'V9D_MOLMO_GEOMETRY_PROBE must be 0 or 1' ;;
+esac
 REQUIREMENTS_FILE="$REPO_ROOT/vla_benchmarking/legion/molmo_requirements.txt"
 [[ -f "$CAMPAIGN_SCRIPT" ]] || die "campaign entrypoint is missing: $CAMPAIGN_SCRIPT"
 [[ -f "$REQUIREMENTS_FILE" ]] || die "Molmo requirements are missing: $REQUIREMENTS_FILE"
@@ -245,7 +251,7 @@ dtype=bfloat16
 setup_started_epoch=$setup_started_epoch
 setup_finished_epoch=$setup_finished_epoch
 setup_elapsed_seconds=$((setup_finished_epoch - setup_started_epoch))
-model_load_owner=run_v9d_molmo_campaign.py
+model_load_owner=$(basename "$CAMPAIGN_SCRIPT")
 model_load_count_expected=1
 repair_gate=${V9D_MOLMO_REPAIR_GATE:-0}
 motion_probe=${V9D_MOLMO_MOTION_PROBE:-0}
@@ -253,7 +259,13 @@ selected_arms=${V9D_MOLMO_ARMS:-all}
 observation_profile=${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}
 motion_profile=${V9D_MOLMO_MOTION_PROFILE:-baseline}
 screen_only=${V9D_MOLMO_SCREEN_ONLY:-0}
+geometry_probe=${V9D_MOLMO_GEOMETRY_PROBE:-0}
 EOF
+
+if [[ "${V9D_MOLMO_GEOMETRY_PROBE:-0}" == 1 ]]; then
+  "$PYTHON" "$CAMPAIGN_SCRIPT" --output-dir "$OUTPUT_ROOT" --label "$CANARY_LABEL"
+  exit $?
+fi
 
 campaign_args=(--output-dir "$OUTPUT_ROOT" --label "$CANARY_LABEL")
 case "${V9D_MOLMO_REPAIR_GATE:-0}" in

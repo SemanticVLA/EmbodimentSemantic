@@ -21,6 +21,7 @@ import json
 import math
 import re
 import sys
+import subprocess
 import time
 import traceback
 from dataclasses import asdict, dataclass, field, replace
@@ -28,6 +29,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import numpy as np
+
+try:
+    from .controller_configs import ACTIVE_CONTROLLER_CONFIG_FILENAME
+except ImportError:  # pragma: no cover - direct script use
+    from controller_configs import ACTIVE_CONTROLLER_CONFIG_FILENAME
 
 BASELINE_COMMIT = "fd24a4c5cf8da4991013ab18b15704523ad0836b"
 SAM_EXPERIMENT_SCHEMA = "molmo_sam3_canary.v1"
@@ -51,6 +57,7 @@ MOLMOPOINT_PROMPT_IDS = ("rim_contact", "rim_downward_approach", "rim_clearance"
 MOTION_PROFILE_NAMES = (
     "baseline", "placement_micro5mm", "release_plus20mm", "release20_visual_xy",
 )
+SCIENTIFIC_IDENTITY_SCHEMA = "molmo_sam3_scientific_identity.v1"
 PLACEMENT_MICRO_CORRECTION_PARAMS = {
     "enabled": True,
     "phases": ("preplace", "descend_place"),
@@ -125,6 +132,94 @@ def resolve_observation_profile(name: str) -> dict[str, Any]:
     if name not in OBSERVATION_PROFILE_NAMES:
         raise ValueError(f"observation profile must be one of {OBSERVATION_PROFILE_NAMES}")
     return {"name": name, **dict(OBSERVATION_PROFILE_PARAMS[name])}
+
+
+def _stable_model_identity(model_provenance: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Keep model identity fields while excluding paths, timings, and load state."""
+    source = model_provenance if isinstance(model_provenance, Mapping) else {}
+    keys = (
+        "sam3_source_commit", "sam3_checkpoint_sha256",
+        "molmopoint_model", "molmopoint_revision", "molmopoint_prompt_id",
+        "molmopoint_prompt", "model_id", "model_revision", "prompt_id", "prompt",
+        "transformers_version", "dtype", "device", "device_map", "max_new_tokens",
+        "max_points", "padding_side", "config_sha256",
+    )
+    return {key: _json_safe(source[key]) for key in keys if key in source}
+
+
+def build_scientific_identity(
+    *,
+    execution_sha: str,
+    controller_config_digest: str,
+    model_provenance: Mapping[str, Any] | None,
+    variant: str,
+    candidate_policy: str,
+    camera_name: str,
+    region_backend: str,
+    backend: str,
+    motion_profile: str,
+    motion_profile_params: Mapping[str, Any],
+    motion_diagnostics: bool,
+    observation_profile: str,
+    observation_profile_params: Mapping[str, Any],
+    task_ids: Sequence[int],
+    seed_base: int,
+    suite_modes: Sequence[str],
+) -> tuple[dict[str, Any], str]:
+    """Build a stable scientific identity, excluding operational run metadata."""
+    payload = {
+        "schema": SCIENTIFIC_IDENTITY_SCHEMA,
+        "execution_sha": str(execution_sha),
+        "controller_config_digest": str(controller_config_digest),
+        "model": _stable_model_identity(model_provenance),
+        "variant": {
+            "name": str(variant), "candidate_policy": str(candidate_policy),
+            "camera_name": str(camera_name),
+        },
+        "backend": {"region_backend": str(region_backend), "backend": str(backend)},
+        "motion": {
+            "profile": str(motion_profile),
+            "params": _json_safe(motion_profile_params),
+            "diagnostics": bool(motion_diagnostics),
+        },
+        "observation": {
+            "profile": str(observation_profile),
+            "params": _json_safe(observation_profile_params),
+        },
+        "task_seed": {"task_ids": [int(value) for value in task_ids], "seed_base": int(seed_base)},
+        "suite_modes": [str(value) for value in suite_modes],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return payload, hashlib.sha256(encoded).hexdigest()
+
+
+def _execution_provenance(*, repo_root: Path | None = None, require_clean: bool) -> dict[str, Any]:
+    """Read the actual worktree SHA and enforce cleanliness for live execution."""
+    root = (repo_root or Path(__file__).resolve().parents[1]).expanduser().resolve()
+    try:
+        sha_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+            capture_output=True, text=True,
+        )
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=root,
+            check=True, capture_output=True, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"unable to resolve execution worktree provenance: {exc}") from exc
+    sha = sha_result.stdout.strip()
+    status_lines = [line for line in status_result.stdout.splitlines() if line.strip()]
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+        raise RuntimeError("execution worktree did not provide a valid HEAD SHA")
+    if require_clean and status_lines:
+        raise RuntimeError("live execution requires a clean checkout")
+    return {
+        "execution_sha": sha.lower(),
+        "checkout_clean": not bool(status_lines),
+        "live_verified": bool(require_clean and not status_lines),
+        "provenance_status": "live_verified" if require_clean else "dry_run_unverified",
+        "dirty_paths": status_lines if not require_clean else [],
+    }
 
 
 @dataclass(frozen=True)
@@ -540,6 +635,22 @@ def _completed_motion_phases(phases: Any) -> list[str]:
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_json_safe(value), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _resolved_controller_config_digest(path: Path) -> str:
+    """Return the semantic digest of the fully resolved controller config."""
+    try:
+        try:
+            from .controller_configs import load_controller_config
+        except ImportError:  # pragma: no cover - direct script use
+            from controller_configs import load_controller_config
+        resolved = load_controller_config(path)
+    except Exception as exc:
+        raise RuntimeError(f"unable to resolve controller config for identity: {path}") from exc
+    digest = str(resolved.get("config_hash", ""))
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        raise RuntimeError("resolved controller config did not provide a valid semantic digest")
+    return digest.lower()
 
 
 def run_canary_episode(
@@ -2135,6 +2246,34 @@ def main(
         print(f"molmo/sam3 canary preflight failed: {exc}", file=sys.stderr)
         traceback.print_exc()
         return 2
+    try:
+        controller_config = args.config or (Path(__file__).resolve().parent / "controller_configs" / ACTIVE_CONTROLLER_CONFIG_FILENAME)
+        if not controller_config.is_file():
+            raise RuntimeError(f"canary controller config is unavailable: {controller_config}")
+        controller_config_digest = _resolved_controller_config_digest(controller_config)
+        execution_provenance = _execution_provenance(require_clean=not args.dry_run)
+    except Exception as exc:
+        print(f"molmo/sam3 execution provenance failed: {exc}", file=sys.stderr)
+        traceback.print_exc()
+        return 2
+    scientific_identity_payload, scientific_identity_hash = build_scientific_identity(
+        execution_sha=execution_provenance["execution_sha"],
+        controller_config_digest=controller_config_digest,
+        model_provenance=model_provenance,
+        variant=args.variant,
+        candidate_policy=VARIANTS[args.variant].policy,
+        camera_name=VARIANTS[args.variant].camera_name,
+        region_backend=args.region_backend,
+        backend="v9d_rgbd_region" if args.region_backend == "rgbd" else "sam3",
+        motion_profile=resolved_motion_profile["name"],
+        motion_profile_params=resolved_motion_profile,
+        motion_diagnostics=bool(args.motion_diagnostics),
+        observation_profile=resolved_observation_profile["name"],
+        observation_profile_params=resolved_observation_profile,
+        task_ids=tasks,
+        seed_base=args.seed_base,
+        suite_modes=suites,
+    )
     manifest = {
         "schema_version": RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA,
         "experiment_id": str(args.label), "baseline_commit": BASELINE_COMMIT,
@@ -2153,18 +2292,11 @@ def main(
         "motion_diagnostics": bool(args.motion_diagnostics),
         "observation_profile": resolved_observation_profile["name"],
         "observation_profile_params": _json_safe(resolved_observation_profile),
+        "execution_provenance": execution_provenance,
+        "scientific_identity_payload": scientific_identity_payload,
+        "scientific_identity_hash": scientific_identity_hash,
     }
-    manifest["experiment_configuration_hash"] = hashlib.sha256(
-        json.dumps(
-            _json_safe({
-                "manifest": manifest,
-                "motion_profile": resolved_motion_profile,
-                "motion_diagnostics": bool(args.motion_diagnostics),
-                "observation_profile": resolved_observation_profile,
-            }),
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()
+    manifest["experiment_configuration_hash"] = scientific_identity_hash
     if args.dry_run:
         _write_json(args.output_dir.expanduser().resolve() / "molmo_sam3_canary_preflight.json", manifest)
         print(json.dumps(manifest, sort_keys=True))
@@ -2177,11 +2309,9 @@ def main(
         try:
             from . import run_arrow_pick_place_eval as episode
             from . import run_arrow_pick_place_matrix as matrix
-            from .controller_configs import ACTIVE_CONTROLLER_CONFIG_FILENAME
         except ImportError:  # pragma: no cover - direct script use
             import run_arrow_pick_place_eval as episode
             import run_arrow_pick_place_matrix as matrix
-            from controller_configs import ACTIVE_CONTROLLER_CONFIG_FILENAME
     except ImportError as exc:  # pragma: no cover - dependency-free host
         print(f"live canary imports unavailable: {exc}", file=sys.stderr)
         return 2
@@ -2508,6 +2638,8 @@ def main(
                     "motion_profile_params": _json_safe(resolved_motion_profile),
                     "motion_diagnostics": bool(args.motion_diagnostics),
                     "experiment_configuration_hash": manifest["experiment_configuration_hash"],
+                    "scientific_identity_hash": scientific_identity_hash,
+                    "scientific_identity_payload": scientific_identity_payload,
                     "observation_profile": resolved_observation_profile["name"],
                     "observation_profile_params": _json_safe(resolved_observation_profile),
                     **({
