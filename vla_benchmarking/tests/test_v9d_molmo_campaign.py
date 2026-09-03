@@ -269,7 +269,7 @@ def test_selected_screen_rejects_invalid_or_confounded_arguments(tmp_path, extra
     assert not (tmp_path / "campaign.json").exists()
 
 
-@pytest.mark.parametrize("motion_profile", ["baseline", "release_plus20mm"])
+@pytest.mark.parametrize("motion_profile", ["baseline", "release_plus20mm", "release20_visual_xy"])
 def test_selected_clearance_screen_records_hover_profile_without_extension(tmp_path, monkeypatch, motion_profile):
     calls = []
     monkeypatch.setattr(campaign, "MolmoPointRuntime", object)

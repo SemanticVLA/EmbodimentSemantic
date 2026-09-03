@@ -48,7 +48,9 @@ MOLMOPOINT_MODEL_ID = "allenai/MolmoPoint-8B"
 MOLMOPOINT_MODEL_REVISION = "188130f961c8e0888a34e11121a1423c461a01ba"
 MOLMOPOINT_PROMPT_IDS = ("rim_contact", "rim_downward_approach", "rim_clearance")
 
-MOTION_PROFILE_NAMES = ("baseline", "placement_micro5mm", "release_plus20mm")
+MOTION_PROFILE_NAMES = (
+    "baseline", "placement_micro5mm", "release_plus20mm", "release20_visual_xy",
+)
 PLACEMENT_MICRO_CORRECTION_PARAMS = {
     "enabled": True,
     "phases": ("preplace", "descend_place"),
@@ -93,7 +95,8 @@ def resolve_motion_profile(name: str, *, region_backend: str) -> dict[str, Any]:
             dict(PLACEMENT_MICRO_CORRECTION_PARAMS)
             if name == "placement_micro5mm" else None
         ),
-        "release_height_offset_m": 0.020 if name == "release_plus20mm" else 0.0,
+        "release_height_offset_m": 0.020 if name in {"release_plus20mm", "release20_visual_xy"} else 0.0,
+        "transfer_xy_policy": "visual_endpoints" if name == "release20_visual_xy" else "legacy_displacement",
     }
 
 
@@ -112,6 +115,8 @@ def _candidate_motion_kwargs(
     release_offset = float(resolved_motion_profile.get("release_height_offset_m", 0.0))
     if release_offset != 0.0:
         kwargs["experimental_release_height_offset_m"] = release_offset
+    if resolved_motion_profile.get("transfer_xy_policy") == "visual_endpoints":
+        kwargs["experimental_transfer_xy_policy"] = "visual_endpoints"
     return kwargs
 
 

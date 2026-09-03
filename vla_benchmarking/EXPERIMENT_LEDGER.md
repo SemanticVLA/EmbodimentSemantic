@@ -1,6 +1,71 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
-## Release-height ablation preparation — 2026-09-03
+## Visual-endpoint XY ablation preparation — 2026-09-03
+
+At 22:52:46 UTC, higher-release job1919238 has 2 successes /11 terminal /12
+planned cells, seven retention-evidence cells, two successful retries, 3,444
+reported actions and 1,099.421 seconds perception. Both suites currently1/6;
+four no-candidate, three grasp-failed and two completed-placement/task-failure
+outcomes. No improvement over historical3/12 is established.
+
+Next question: does removing the legacy lateral transfer bias improve landing?
+New opt-in `release20_visual_xy` changes only transfer XY from the preserved
+classical delta to destination_visual minus source_visual. Keep its legacy Z
+delta, release+20mm, hover20mm, clearance prompt, model, source grasp geometry,
+rotations, budgets and post-retreat evaluator fixed. Fresh canonical12-cell
+screen against job1919238; no combining results across revisions or default
+promotion. The observed anchors are not proven object centers; no-slip carrying
+and unchanged orientation are assumptions. This is an exploratory ablation,
+not a proven double-offset bug or a claim of better placement.
+
+Verified T9 seed1000 attempt02: legacy XY contribution is(-20.3,+5.2)mm.
+Pure visual XY shifts transfer targets(+20.3,-5.2)mm, preserving candidate
+contact offset and all Z values. Release changes from
+[0.008362646,0.229016602,0.927280029] to
+[0.028662646,0.223816602,0.927280029]m. Exact camera calibration projects
+these to[203.687,87.384] and[203.239,82.399]pixels respectively. These are
+grip-site pixels, not bowl centers. Actual close was2.97mm from its candidate.
+Do not remove only the source offset: that leaves the large common Y bias.
+
+Launch gate passed:62 focused tests on final code, including an independent
+real run_episode to _run_motion smoke completing all11 phases in49/1200
+actions. Actual stage targets, omitted-default equivalence, separate candidate
+release targets, release20 and rotations checked. Independent review APPROVE,
+no HIGH/BLOCKER;31 focused plus6 final transfer tests passed under review.
+Python compilation, shell syntax, diff and frozen-config checks passed.
+This approves a fresh12-cell experiment only, not an improvement claim.
+
+Independent operational inspection identified a prefix-to-full60 resume hash
+mismatch (phase/output identity changes). No extension or provenance bypass
+has been attempted. Repair that narrow resume contract before any finalist
+extension; this does not block fresh12-cell screens.
+
+## Release-height ablation completed — 2026-09-03
+
+Final audit **22:55:29 UTC**: **1919238 completed, exit0, archive VERIFIED**.
+Final **2/12**, eight retention-evidence cells, two successful retries,
+3,734 reported actions, perception1,196.281s; vanilla1/6, sealed_randomized1/6.
+Failures: no_candidates4, grasp_failed4, task_failure2. Two formerly stalled
+placements completed but failed the evaluator. This ties the previous2/12
+control and remains below historical3/12. Advance the new XY screen, not a
+full60 extension of this unchanged treatment. Earlier snapshots follow.
+
+Fresh audit **22:30:23 UTC**: **1919238 RUNNING on compute-4-11**, elapsed1:02.
+Exact SHA, NVIDIA A40, BF16, pinned torch/Transformers and effective
+`dense_agentview_clearance / hover20mm / release_plus20mm / screen_only=1`
+verified from runtime and job context. Campaign is running; no final result yet.
+
+Job **1919238** submitted at **22:29:00 UTC**, scheduler **PENDING / Priority**
+at submission. Source `0f1f90b27a447c1e916e2605ebb0bfe4f6c9fc0c`, label
+`v9d_molmo_release20mm_0f1f90b`, one A40/eight CPUs/64 GB. Clean SHA-named
+release and bundle SHA-256
+`a43c9e23b8e635bff30012c6c791594669bd4a8da2833cf883969a412b6b2db0`
+verified on Legion. Only one older experiment remained allocated at submission;
+no duplicate or running source was changed. Runtime is now verified above.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_release20mm_0f1f90b_1919238/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_release20mm_0f1f90b_1919238`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919238.out`.
 
 Implement `release_plus20mm` against parent source
 `15789cd6d0c14e2c99dee6542e33dc119857ba47`. Fixed world-Z +20 mm applies only
@@ -102,7 +167,14 @@ blocking defects; 39 tests also passed under review. Python compilation,
 launcher syntax and diff checks passed. Frozen v9d config diff is empty.
 This establishes launch readiness, not physical improvement.
 
-## Placement motion probe running — 2026-09-03
+## Placement motion probe stopped and archived — 2026-09-03
+
+Final verified at22:52:46 UTC: both arms0/12, four retention-evidence cells and
+3,387 reported actions each. Control perception1,996.497s; burst2,027.902s.
+Each had four no-candidate, six grasp-failed and two controller-failure cells.
+Campaign `motion_probe_stopped`, exit2, archive VERIFIED. The repeated
+observation-hover failure triggered its operational stop; no pulse benefit.
+The following submission/partial notes are retained as historical snapshots.
 
 Job **1919194** was submitted at **21:10:39 UTC**. Fresh scheduler audit at
 **22:12:34 UTC**: **RUNNING on compute-3-14**, started 21:11:21 UTC.

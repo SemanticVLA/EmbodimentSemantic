@@ -33,13 +33,20 @@ def test_motion_profile_resolution_is_explicit_and_rgbd_gated():
     baseline = runner.resolve_motion_profile("baseline", region_backend="sam3")
     assert baseline["micro_correction"] is None
     assert baseline["release_height_offset_m"] == 0.0
+    assert baseline["transfer_xy_policy"] == "legacy_displacement"
     treatment = runner.resolve_motion_profile("placement_micro5mm", region_backend="rgbd")
     assert treatment["micro_correction"]["phases"] == ("preplace", "descend_place")
     assert treatment["micro_correction"]["residual_max_m"] == pytest.approx(0.005)
     assert treatment["release_height_offset_m"] == 0.0
+    assert treatment["transfer_xy_policy"] == "legacy_displacement"
     release = runner.resolve_motion_profile("release_plus20mm", region_backend="rgbd")
     assert release["micro_correction"] is None
     assert release["release_height_offset_m"] == pytest.approx(0.020)
+    assert release["transfer_xy_policy"] == "legacy_displacement"
+    visual = runner.resolve_motion_profile("release20_visual_xy", region_backend="rgbd")
+    assert visual["micro_correction"] is None
+    assert visual["release_height_offset_m"] == pytest.approx(0.020)
+    assert visual["transfer_xy_policy"] == "visual_endpoints"
     with pytest.raises(ValueError, match="requires --region-backend rgbd"):
         runner.resolve_motion_profile("placement_micro5mm", region_backend="sam3")
 
@@ -48,6 +55,7 @@ def test_release_profile_passes_only_bounded_height_offset_to_candidate_runner()
     baseline = runner.resolve_motion_profile("baseline", region_backend="sam3")
     micro = runner.resolve_motion_profile("placement_micro5mm", region_backend="rgbd")
     release = runner.resolve_motion_profile("release_plus20mm", region_backend="rgbd")
+    visual = runner.resolve_motion_profile("release20_visual_xy", region_backend="rgbd")
     marker = object()
 
     seen = []
@@ -58,11 +66,16 @@ def test_release_profile_passes_only_bounded_height_offset_to_candidate_runner()
     fake_run_episode(**runner._candidate_motion_kwargs(baseline))
     fake_run_episode(**runner._candidate_motion_kwargs(micro, experimental_micro_correction=marker))
     fake_run_episode(**runner._candidate_motion_kwargs(release))
+    fake_run_episode(**runner._candidate_motion_kwargs(visual))
 
     assert seen[0] == {}
     assert seen[1] == {"experimental_micro_correction": marker}
     assert seen[2] == {"experimental_release_height_offset_m": pytest.approx(0.020)}
-    assert release != baseline and release != micro
+    assert seen[3] == {
+        "experimental_release_height_offset_m": pytest.approx(0.020),
+        "experimental_transfer_xy_policy": "visual_endpoints",
+    }
+    assert release != baseline and release != micro and visual != release
 
 
 def test_profile_manifest_records_provenance_and_configuration_hash(tmp_path):
@@ -112,7 +125,16 @@ def test_profile_manifest_records_provenance_and_configuration_hash(tmp_path):
         dry_run=True, region_backend="rgbd", motion_profile="release_plus20mm",
         motion_profile_params=runner.resolve_motion_profile("release_plus20mm", region_backend="rgbd"),
     )
+    visual_manifest = runner.run_canary_episode(
+        env=object(), task_id=4, seed=1000, output_dir=tmp_path / "visual",
+        variant=runner.VARIANTS["rgbd_geometry_agentview"], worker=Worker(),
+        episode_runner=episode_runner, source_uv=(1.0, 1.0), capture_fn=capture_fn,
+        dry_run=True, region_backend="rgbd", motion_profile="release20_visual_xy",
+        motion_profile_params=runner.resolve_motion_profile("release20_visual_xy", region_backend="rgbd"),
+    )
     assert baseline_manifest["experiment_config_hash"] != release_manifest["experiment_config_hash"]
+    assert release_manifest["experiment_config_hash"] != visual_manifest["experiment_config_hash"]
+    assert visual_manifest["motion_profile_params"]["transfer_xy_policy"] == "visual_endpoints"
 
 
 def test_diagnostics_forward_to_helper_using_backend_keyword(tmp_path, monkeypatch):

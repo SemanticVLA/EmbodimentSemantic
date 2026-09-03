@@ -2785,6 +2785,7 @@ def run_episode(
     experimental_eef_orientation_transform: Sequence[Sequence[float]] | np.ndarray | None = None,
     experimental_gripper_opening_m: float | None = None,
     experimental_release_height_offset_m: float = 0.0,
+    experimental_transfer_xy_policy: str = "legacy_displacement",
     experimental_motion_diagnostics: bool = False,
     experimental_micro_correction: MicroCorrectionPolicy | None = None,
     retreat_completed_callback: Callable[[], None] | None = None,
@@ -2801,6 +2802,10 @@ def run_episode(
         raise ValueError("experimental_release_height_offset_m only supports +0.020 m")
     if release_height_offset != 0.0 and experimental_candidate is None:
         raise ValueError("experimental_release_height_offset_m requires an experimental candidate")
+    if experimental_transfer_xy_policy not in {"legacy_displacement", "visual_endpoints"}:
+        raise ValueError("experimental_transfer_xy_policy must be legacy_displacement or visual_endpoints")
+    if experimental_transfer_xy_policy == "visual_endpoints" and experimental_candidate is None:
+        raise ValueError("experimental_transfer_xy_policy=visual_endpoints requires an experimental candidate")
     variant_suite_mode = (
         controller_variant.suite_mode
         if isinstance(controller_variant, ControllerVariantConfig)
@@ -3031,11 +3036,18 @@ def run_episode(
     experimental_orientation_matrix: np.ndarray | None = None
     experimental_aperture_m: float | None = None
     if experimental_candidate_pose is not None:
-        # Preserve the frozen transfer displacement while replacing only the
-        # physical source contact.  The v9d source offset is never applied to
-        # the candidate itself.
+        # The default policy preserves the frozen transfer displacement while
+        # the opt-in visual_endpoints policy replaces only its XY component.
+        # Both policies replace the physical source contact; the v9d source
+        # offset is never applied to the candidate itself.
         candidate_point, candidate_rotation, candidate_aperture, candidate_pregrasp = experimental_candidate_pose
-        transfer_displacement = classical_destination_point - classical_source_point
+        legacy_transfer_displacement = classical_destination_point - classical_source_point
+        transfer_displacement = legacy_transfer_displacement.copy()
+        if experimental_transfer_xy_policy == "visual_endpoints":
+            transfer_displacement[:2] = (
+                np.asarray(destination_visual_point, dtype=np.float64)[:2]
+                - np.asarray(source_visual_point, dtype=np.float64)[:2]
+            )
         bowl_point = candidate_point.copy()
         destination_point = bowl_point + transfer_displacement
         experimental_orientation_matrix = candidate_rotation.copy()
@@ -3046,10 +3058,22 @@ def run_episode(
             "grip_site_world_m": bowl_point.tolist(),
             "required_aperture_m": experimental_aperture_m,
             "transfer_displacement_world_m": transfer_displacement.tolist(),
+            "transfer_xy_policy": experimental_transfer_xy_policy,
+            "legacy_transfer_displacement_world_m": legacy_transfer_displacement.tolist(),
+            "visual_source_anchor_world_m": np.asarray(source_visual_point, dtype=np.float64).tolist(),
+            "visual_destination_anchor_world_m": np.asarray(destination_visual_point, dtype=np.float64).tolist(),
             "orientation_world_grip_site": experimental_orientation_matrix.tolist(),
             "audit": dict(experimental_candidate_audit or {}),
             "no_legacy_source_offset": True,
         })
+        experimental_candidate_audit = dict(experimental_candidate_audit or {})
+        experimental_candidate_audit["transfer_xy"] = {
+            "policy": experimental_transfer_xy_policy,
+            "legacy_displacement_world_m": legacy_transfer_displacement.tolist(),
+            "chosen_displacement_world_m": transfer_displacement.tolist(),
+            "visual_source_anchor_world_m": np.asarray(source_visual_point, dtype=np.float64).tolist(),
+            "visual_destination_anchor_world_m": np.asarray(destination_visual_point, dtype=np.float64).tolist(),
+        }
     source_approach_audit: dict[str, Any] | None = None
     support_plane_audit: dict[str, Any] | None = None
     source_policy = variant.source_approach
