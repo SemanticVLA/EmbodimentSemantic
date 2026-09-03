@@ -48,6 +48,32 @@ MOLMOPOINT_MODEL_ID = "allenai/MolmoPoint-8B"
 MOLMOPOINT_MODEL_REVISION = "188130f961c8e0888a34e11121a1423c461a01ba"
 MOLMOPOINT_PROMPT_IDS = ("rim_contact", "rim_downward_approach", "rim_clearance")
 
+MOTION_PROFILE_NAMES = ("baseline", "placement_micro5mm")
+PLACEMENT_MICRO_CORRECTION_PARAMS = {
+    "enabled": True,
+    "phases": ("preplace", "descend_place"),
+    "plateau_window_steps": 10,
+    "plateau_delta_m": 0.0001,
+    "residual_max_m": 0.005,
+    "correction_gain": 1.0,
+    "burst_steps": 8,
+    "max_rounds": 1,
+    "max_actions": 16,
+}
+
+
+def resolve_motion_profile(name: str, *, region_backend: str) -> dict[str, Any]:
+    """Resolve the bounded motion treatment without changing baseline knobs."""
+    if name not in MOTION_PROFILE_NAMES:
+        raise ValueError(f"motion profile must be one of {MOTION_PROFILE_NAMES}")
+    if name == "placement_micro5mm" and region_backend != "rgbd":
+        raise ValueError("placement_micro5mm requires --region-backend rgbd")
+    return {
+        "name": name,
+        "region_backend": region_backend,
+        "micro_correction": None if name == "baseline" else dict(PLACEMENT_MICRO_CORRECTION_PARAMS),
+    }
+
 
 @dataclass(frozen=True)
 class CanaryVariant:
@@ -421,6 +447,9 @@ def run_canary_episode(
     experiment_schema: str = SAM_EXPERIMENT_SCHEMA,
     region_backend: str = "sam3",
     before_propose_callback: Callable[[Any], Any] | None = None,
+    motion_profile: str = "baseline",
+    motion_profile_params: Mapping[str, Any] | None = None,
+    motion_diagnostics: bool = False,
 ) -> dict[str, Any]:
     """Run one bounded canary episode, regenerating candidates after failure."""
     selected_variant = VARIANTS[variant] if isinstance(variant, str) else variant
@@ -574,6 +603,9 @@ def run_canary_episode(
         "region_backend": str(region_backend),
         "backend": "v9d_rgbd_region" if region_backend == "rgbd" else "sam3",
         "sam3_used": bool(region_backend == "sam3"),
+        "motion_profile": motion_profile,
+        "motion_profile_params": _json_safe(motion_profile_params or {}),
+        "motion_diagnostics": bool(motion_diagnostics),
     }
     digest = hashlib.sha256(json.dumps(_json_safe(manifest), sort_keys=True).encode()).hexdigest()
     manifest["experiment_config_hash"] = digest
@@ -1503,6 +1535,7 @@ def _recover_after_failed_candidate(
         hover_budget = min(160, int(budget.remaining)) if budget is not None else 160
         if hover_budget <= 0:
             raise RuntimeError("1200-action retry budget exhausted before observation hover")
+        motion_diag_kwargs = {"experimental_motion_diagnostics": True} if (motion_settings or {}).get("motion_diagnostics") else {}
         phases = episode._run_motion(
             env, waypoints, observation,
             phase_timeout_steps=int((motion_settings or {}).get("phase_timeout_steps", 160)),
@@ -1515,6 +1548,7 @@ def _recover_after_failed_candidate(
             stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
             osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
             phase_policies=(motion_settings or {}).get("phase_policies"),
+            **motion_diag_kwargs,
         )
         recovery_steps = int(sum(1 for item in (getattr(env, "_arrow_motion_trace", []) or []) if isinstance(item, Mapping) and item.get("action_sent")))
         total_actions = int(budget.used) if budget is not None else prior_actions + recovery_steps
@@ -1580,6 +1614,7 @@ def _perform_gripper_open(
         if remaining <= 0:
             raise RuntimeError("1200-action budget exhausted before gripper open")
         waypoints = np.tile(current, (6, 1))
+        motion_diag_kwargs = {"experimental_motion_diagnostics": True} if (motion_settings or {}).get("motion_diagnostics") else {}
         phases = episode._run_motion(
             env, waypoints, observation,
             phase_timeout_steps=int((motion_settings or {}).get("phase_timeout_steps", GRIPPER_OPEN_TIMEOUT_STEPS)),
@@ -1593,6 +1628,7 @@ def _perform_gripper_open(
             stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
             osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
             phase_policies=(motion_settings or {}).get("phase_policies"),
+            **motion_diag_kwargs,
         )
         steps = int(sum(int(item.get("steps", 0)) for item in phases))
         total_actions = int(budget.used) if budget is not None else prior_actions + steps
@@ -1696,6 +1732,7 @@ def _perform_observation_hover(
         staging_policy = policies.get("pregrasp", {"tolerance_m": 0.015})
         for name in ("hover_raise", "hover_translate", "hover_lower"):
             policies[name] = {"role": "experimental_hover", "tolerance_m": float(staging_policy.get("tolerance_m", 0.015))}
+        motion_diag_kwargs = {"experimental_motion_diagnostics": True} if (motion_settings or {}).get("motion_diagnostics") else {}
         phases = episode._run_motion(
             env, waypoints, observation,
             phase_timeout_steps=int((motion_settings or {}).get("phase_timeout_steps", 160)),
@@ -1713,6 +1750,7 @@ def _perform_observation_hover(
             stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
             osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
             phase_policies=policies,
+            **motion_diag_kwargs,
         )
         audit = {
             "status": "completed",
@@ -1756,6 +1794,8 @@ def main(
     parser.add_argument("--suite-modes", default="vanilla,sealed_randomized")
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--region-backend", choices=("sam3", "rgbd"), default="sam3")
+    parser.add_argument("--motion-profile", choices=MOTION_PROFILE_NAMES, default="baseline")
+    parser.add_argument("--motion-diagnostics", action="store_true", help="record bounded motion diagnostics")
     parser.add_argument("--sam3-source", type=Path, required=False)
     parser.add_argument("--sam3-checkpoint", type=Path, required=False)
     parser.add_argument("--sam3-source-commit", required=False)
@@ -1771,6 +1811,7 @@ def main(
     if args.episodes_per_task <= 0:
         parser.error("--episodes-per-task must be positive")
     try:
+        resolved_motion_profile = resolve_motion_profile(args.motion_profile, region_backend=args.region_backend)
         if VARIANTS[args.variant].region_backend == "rgbd" and args.region_backend != "rgbd":
             raise ValueError("rgbd_geometry_agentview requires --region-backend rgbd")
         tasks = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
@@ -1857,7 +1898,20 @@ def main(
         "sam3_used": bool(args.region_backend == "sam3"),
         "molmopoint_prompt_id": args.molmopoint_prompt_id,
         "dry_run": bool(args.dry_run),
+        "motion_profile": resolved_motion_profile["name"],
+        "motion_profile_params": _json_safe(resolved_motion_profile),
+        "motion_diagnostics": bool(args.motion_diagnostics),
     }
+    manifest["experiment_configuration_hash"] = hashlib.sha256(
+        json.dumps(
+            _json_safe({
+                "manifest": manifest,
+                "motion_profile": resolved_motion_profile,
+                "motion_diagnostics": bool(args.motion_diagnostics),
+            }),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     if args.dry_run:
         _write_json(args.output_dir.expanduser().resolve() / "molmo_sam3_canary_preflight.json", manifest)
         print(json.dumps(manifest, sort_keys=True))
@@ -1878,6 +1932,12 @@ def main(
     except ImportError as exc:  # pragma: no cover - dependency-free host
         print(f"live canary imports unavailable: {exc}", file=sys.stderr)
         return 2
+
+    experimental_micro_correction = None
+    if resolved_motion_profile["micro_correction"] is not None:
+        experimental_micro_correction = episode.MicroCorrectionPolicy(
+            **dict(resolved_motion_profile["micro_correction"])
+        )
 
     controller_config = args.config or (Path(__file__).resolve().parent / "controller_configs" / ACTIVE_CONTROLLER_CONFIG_FILENAME)
     if not controller_config.is_file():
@@ -1942,6 +2002,7 @@ def main(
             "stall_window_steps": int(frozen_motion_variant.stall_window_steps),
             "stall_delta_m": float(frozen_motion_variant.stall_delta_m),
             "osc_position_scale_m": frozen_motion_variant.osc_position_scale_m,
+            "motion_diagnostics": bool(args.motion_diagnostics),
         }
         phase_policies = {name: dict(policy) for name, policy in episode.PHASE_POLICIES.items()}
         if frozen_motion_variant.approach_tolerance_m is not None:
@@ -1962,6 +2023,8 @@ def main(
                 "tolerance_m": staging_tolerance,
             }
         motion_settings["phase_policies"] = phase_policies
+        motion_settings["motion_profile"] = resolved_motion_profile["name"]
+        motion_settings["motion_profile_params"] = _json_safe(resolved_motion_profile["micro_correction"] or {})
         bboxes = kwargs.get("bboxes")
         if not isinstance(bboxes, Mapping):
             raise ValueError("canary episode requires existing arrow input-generation bboxes")
@@ -2065,6 +2128,11 @@ def main(
                         "retreat_complete": False, "total_actions": action_count_before,
                         "error": "live contact calibration unavailable before candidate"}
             try:
+                candidate_motion_kwargs: dict[str, Any] = {}
+                if experimental_micro_correction is not None:
+                    candidate_motion_kwargs["experimental_micro_correction"] = experimental_micro_correction
+                if args.motion_diagnostics:
+                    candidate_motion_kwargs["experimental_motion_diagnostics"] = True
                 audit = episode.run_episode(
                     env=env, task_id=task_id, seed=seed, output_dir=attempt_output_dir,
                     arrow_rgb=arrow_state["rgb"], dry_run=dry_run, resolution=resolution,
@@ -2080,6 +2148,7 @@ def main(
                     post_lift_retention_gate=retention_gate,
                     retreat_completed_callback=retreat_completed_callback,
                     experimental_action_budget=getattr(env, "_molmo_sam3_action_budget", None),
+                    **candidate_motion_kwargs,
                 )
                 trace_steps = _newly_sent_actions(env, trace_before)
                 if getattr(env, "_molmo_sam3_action_budget", None) is not None:
@@ -2130,6 +2199,9 @@ def main(
             experiment_schema=(RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),
             region_backend=args.region_backend,
             before_propose_callback=refresh_robot_calibration,
+            motion_profile=resolved_motion_profile["name"],
+            motion_profile_params=resolved_motion_profile,
+            motion_diagnostics=bool(args.motion_diagnostics),
         )
         final = result.get("final_result") if isinstance(result.get("final_result"), Mapping) else {}
         audit = final.get("audit") if isinstance(final, Mapping) else None
@@ -2173,6 +2245,10 @@ def main(
                     "molmopoint_prompt_id": args.molmopoint_prompt_id,
                     "candidate_policy": VARIANTS[args.variant].policy,
                     "source_camera": VARIANTS[args.variant].camera_name,
+                    "motion_profile": resolved_motion_profile["name"],
+                    "motion_profile_params": _json_safe(resolved_motion_profile),
+                    "motion_diagnostics": bool(args.motion_diagnostics),
+                    "experiment_configuration_hash": manifest["experiment_configuration_hash"],
                     **({
                         "sam3_source_commit": args.sam3_source_commit,
                         "sam3_checkpoint_sha256": args.sam3_checkpoint_sha256,

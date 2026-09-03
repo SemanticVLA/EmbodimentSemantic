@@ -1,11 +1,25 @@
 {
   "schema_version": 2,
   "v9d_molmo_candidate_campaigns": {
-    "audited_at_utc": "2026-09-03T19:57:05Z",
+    "audited_at_utc": "2026-09-03T21:07:07Z",
     "frozen_baseline_commit": "fd24a4c5cf8da4991013ab18b15704523ad0836b",
+    "placement_motion_probe_preparation": {
+      "status": "validated_not_launched",
+      "validation": "114 passed, 1 skipped; independent actual open/hover/recovery diagnostic helper smokes passed; final review PASS with no remaining HIGH/BLOCKER",
+      "parent_source_commit": "d9c919c8e0c027554c381c0c93990465e339f251",
+      "hypothesis": "A bounded placement-only command bias may overcome controller equilibrium; robot load and per-action traces distinguish response from a possible physical constraint",
+      "verified_cause": false,
+      "arms": ["placement_control", "placement_burst5mm"],
+      "planned_cells_per_arm": 12,
+      "changed_factor": "placement micro-correction enabled only in treatment",
+      "shared": ["dense agentview perception", "rim_downward_approach prompt", "model revision", "candidate geometry", "motion diagnostics", "tasks 4,6,9", "seeds 1000,1001", "vanilla and sealed_randomized", "original waypoint convergence", "160 phase steps", "1200 cell actions", "four grasps"],
+      "correction": {"phases": ["preplace", "descend_place"], "plateau_window_steps": 10, "plateau_delta_m": 0.0001, "max_bias_m": 0.005, "gain": 1.0, "burst_steps": 8, "max_rounds_per_phase": 1, "max_actions_per_cell": 16},
+      "decision": "Run paired diagnostic in a separate immutable single-A40 job after focused validation; retain current six-arm job unchanged; no automatic 60-cell extension of probe",
+      "comparison_limit": "Exploratory diagnostic; no verified new frame defect and no proven performance improvement"
+    },
     "next_revision": {
       "name": "repair4",
-      "status": "implementing",
+      "status": "running",
       "local_targeted_tests": "44 passed; independent focused tester and reviewer approved exploratory launch",
       "hypothesis": "Actual observed upper-rim seeds and metric local jaw geometry avoid lower-wall contact proposals",
       "changed_factors": ["observed upper-rim contact and metric local tangent/per-yaw opening", "reporting-only retention count correction after placement failure"],
@@ -24,6 +38,55 @@
       "evidence": "/home/hjaber/EmbodimentSemantic_archive/runs/{arrow_v9d_canary_1914768,arrow_v9d_sealed_compare_1917528}/run/results/{vanilla,sealed_randomized}/arrow_pick_place_matrix_status.json"
     },
     "active": {
+      "job_id": "1919168",
+      "source_commit": "d9c919c8e0c027554c381c0c93990465e339f251",
+      "label": "v9d_molmo_repair4_d9c919c",
+      "status": "RUNNING",
+      "submitted_at_utc": "2026-09-03T20:09:00Z",
+      "started_at_utc": "2026-09-03T20:09:20Z",
+      "node": "compute-4-11",
+      "gpu": "NVIDIA A40",
+      "stage": "Dense, geometry-only and local agentview screens each terminal at 0/12; contact-prompt screen 0/4, vanilla task9 seed1000 running; clearance and wrist not started",
+      "sam3_used": false,
+      "region_backend": "v9d_rgbd_region",
+      "model": "allenai/MolmoPoint-8B",
+      "model_revision": "188130f961c8e0888a34e11121a1423c461a01ba",
+      "repair_gate_enabled": false,
+      "screen_planned_cells": 72,
+      "finalist_policy": "At most two complete positive-success screen arms; extend matching cells to 60 each without repeats; all-zero screens do not extend",
+      "terminal_cells": 40,
+      "successes": 0,
+      "retained_lifts": 12,
+      "retention_metric_note": "Explicit passed lift-proprioception gates in twelve arm/cell trials; none completed successful placement; heuristic alone is not proof of object retention",
+      "screen_progress": {
+        "dense_agentview": {"planned": 12, "terminal_cells": 12, "successes": 0, "retained_lifts": 4, "returncode": 2, "stop_reason": "same operational failure on two cells: run_episode: ControllerMotionTimeout: phase hover_translate exceeded 160 steps", "fatal": false, "elapsed_s": 1357.9297592419898, "reported_actions": 3387, "perception_latency_s": 1158.157869467861, "failure_categories": {"no_candidates": 4, "grasp_failed": 6, "controller_failure": 2}},
+        "geometry_agentview": {"planned": 12, "terminal_cells": 12, "successes": 0, "retained_lifts": 4, "returncode": 2, "reported_actions": 3635, "perception_latency_s": 1098.06237185793, "failure_categories": {"no_candidates": 4, "grasp_failed": 6, "controller_failure": 2}},
+        "local_agentview": {"planned": 12, "terminal_cells": 12, "successes": 0, "retained_lifts": 3, "returncode": 2, "reported_actions": 1515, "perception_latency_s": 210.71028071537148, "failure_categories": {"no_candidates": 7, "grasp_failed": 3, "controller_failure": 2}},
+        "dense_agentview_contact": {"planned": 12, "terminal_cells": 4, "successes": 0, "retained_lifts": 1, "current_cell": "vanilla task9 seed1000", "reported_actions": 1277, "perception_latency_s": 370.5496729159495, "failure_categories": {"no_candidates": 2, "grasp_failed": 2}}
+      },
+      "screen_decision": "First three arms each 0/12 do not qualify for extension and are below historical matching prefixes of 3/12; historical source commits differ. Remaining camera/prompt arms continue unchanged while a new paired motion-response probe is prepared.",
+      "local_targeted_tests": "44 passed; independent focused review approved launch without HIGH/BLOCKER",
+      "source_release": "/home/hjaber/EmbodimentSemantic_runtime/checkouts/v9d_molmo_d9c919c8e0c027554c381c0c93990465e339f251",
+      "bundle_sha256": "0f34fb8c02258856e33fc09de09f361b540811dad03f61df02a493f4665261bb",
+      "output_root": "/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_repair4_d9c919c_1919168/results",
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_repair4_d9c919c_1919168",
+      "stdout": "/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919168.out"
+    },
+    "motion_reference_audit": {
+      "runtime_source": "Installed Robosuite 1.4.0 Python/XML, read only on Legion",
+      "verified": "robot0_eef_pos and OSC ee_pos both use grip_site; body quaternion conversion to site is explicit and calibrated",
+      "conclusion": "No verified position-frame mismatch; no motion-frame changes justified by current residual evidence"
+    },
+    "repair4_placement_audit": {
+      "source_job": "1919168",
+      "source_commit": "d9c919c8e0c027554c381c0c93990465e339f251",
+      "task6_vanilla_seed1000": "Passed retention heuristic, then preplace timeout after 160 steps: target [0.044548,0.252117,1.034205], last EEF [0.064556,0.259422,1.049511], 26.23 mm position residual",
+      "task9_vanilla_seed1000": "Passed retention heuristic and reached preplace in 36 steps; descend_place timed out after 160: release target [-0.015844,0.133167,0.901941], last EEF [-0.004345,0.132606,0.920164], 21.56 mm residual",
+      "verified": "No verified frame-contract error or insufficient preplace travel height; shared safe_z is max(source.z,target.z)+0.08 m; task9 stalls during placement descent, not lateral transfer",
+      "hypothesis_only": "Placement-path/controller convergence or contact-limited release height warrants a bounded future test; no hidden object state inspected",
+      "decision": "Keep active release unchanged; collect remaining camera/prompt screens before choosing the next repair"
+    },
+    "previous_failed_repair3": {
       "job_id": "1919163",
       "source_commit": "4ae6be0b4da7fb12731fbc6d7796433794a13566",
       "label": "v9d_molmo_repair3_4ae6be0",

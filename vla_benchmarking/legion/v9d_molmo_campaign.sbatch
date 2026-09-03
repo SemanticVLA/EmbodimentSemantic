@@ -16,6 +16,7 @@
 #   V9D_MOLMO_OUTPUT_ROOT     absolute output path; defaults to scratch/results
 #   V9D_MOLMO_RUNTIME_ROOT    persistent runtime root under $HOME by default
 #   V9D_MOLMO_ARCHIVE_ROOT    persistent archive root under $HOME by default
+#   V9D_MOLMO_MOTION_PROBE    1 selects the paired 24-cell placement diagnostic
 
 #SBATCH --job-name=v9d_molmo_campaign
 #SBATCH --partition=gpu_a40
@@ -243,6 +244,7 @@ setup_elapsed_seconds=$((setup_finished_epoch - setup_started_epoch))
 model_load_owner=run_v9d_molmo_campaign.py
 model_load_count_expected=1
 repair_gate=${V9D_MOLMO_REPAIR_GATE:-0}
+motion_probe=${V9D_MOLMO_MOTION_PROBE:-0}
 EOF
 
 campaign_args=(--output-dir "$OUTPUT_ROOT" --label "$CANARY_LABEL")
@@ -250,5 +252,11 @@ case "${V9D_MOLMO_REPAIR_GATE:-0}" in
   1) campaign_args+=(--repair-gate) ;;
   0) ;;
   *) die 'V9D_MOLMO_REPAIR_GATE must be 0 or 1' ;;
+esac
+case "${V9D_MOLMO_MOTION_PROBE:-0}" in
+  1) [[ "${V9D_MOLMO_REPAIR_GATE:-0}" == 0 ]] || die 'motion probe cannot enable the global repair gate'
+     campaign_args+=(--motion-probe) ;;
+  0) ;;
+  *) die 'V9D_MOLMO_MOTION_PROBE must be 0 or 1' ;;
 esac
 "$PYTHON" "$CAMPAIGN_SCRIPT" "${campaign_args[@]}"

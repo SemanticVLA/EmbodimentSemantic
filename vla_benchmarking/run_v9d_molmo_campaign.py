@@ -23,6 +23,7 @@ class Arm:
     name: str
     variant: str
     prompt: str = "rim_downward_approach"
+    motion_profile: str = "baseline"
 
 
 ARMS = (
@@ -32,6 +33,10 @@ ARMS = (
     Arm("dense_agentview_contact", "molmo_dense_agentview", "rim_contact"),
     Arm("dense_agentview_clearance", "molmo_dense_agentview", "rim_clearance"),
     Arm("dense_wrist", "molmo_dense_wrist"),
+)
+MOTION_PROBE_ARMS = (
+    Arm("placement_control", "molmo_dense_agentview"),
+    Arm("placement_burst5mm", "molmo_dense_agentview", motion_profile="placement_micro5mm"),
 )
 TERMINAL = {"completed", "failed", "interrupted"}
 CONTRACT_ERRORS = (
@@ -212,8 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--label", default="v9d_molmo_rgbd")
     parser.add_argument("--screen-only", action="store_true")
+    parser.add_argument("--motion-probe", action="store_true", help="paired 12-cell placement-control/bounded-correction diagnostic; never extends to 60")
     parser.add_argument("--repair-gate", action="store_true", help="require the first T4/T6 cells to clear hover and contact before continuing the campaign")
     args = parser.parse_args(argv)
+    if args.motion_probe and args.repair_gate:
+        parser.error("--motion-probe cannot enable the obsolete global repair gate")
+    arms = MOTION_PROBE_ARMS if args.motion_probe else ARMS
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
     report_path = root / "campaign.json"
@@ -222,7 +231,9 @@ def main(argv: list[str] | None = None) -> int:
     report: dict[str, Any] = {
         "schema": "v9d_molmo_rgbd_campaign.v1", "label": args.label,
         "baseline_commit": canary.BASELINE_COMMIT, "sam3_used": False,
-        "region_backend": "v9d_rgbd_region", "arms": [asdict(a) for a in ARMS],
+        "region_backend": "v9d_rgbd_region", "arms": [asdict(a) for a in arms],
+        "mode": "placement_motion_probe" if args.motion_probe else "candidate_screen",
+        "motion_diagnostics": bool(args.motion_probe),
         "screen_planned_per_arm": 12, "screen": [], "finalists": [],
         "status": "running", "started_unix": time.time(),
         "comparison": "exploratory grasp pipeline comparison; geometry control shares motion and hover",
@@ -230,6 +241,16 @@ def main(argv: list[str] | None = None) -> int:
         "historical_comparison_note": "Historical commits differ; compare matching task/seed/suite cells. No baseline rerun or default promotion.",
         "repair_gate": {"status": "pending" if args.repair_gate else "disabled"},
     }
+    if args.motion_probe:
+        report["comparison"] = "paired exploratory placement-response probe; same dense-agentview perception, prompt and 12 canary cells; only bounded placement correction differs"
+        report["motion_probe_contract"] = {
+            "planned_cells": 24, "phases": ["preplace", "descend_place"],
+            "max_added_target_bias_m": 0.005, "burst_steps": 8,
+            "max_rounds_per_phase": 1, "max_correction_actions_per_cell": 16,
+            "phase_step_limit": 160, "cell_action_limit": 1200,
+            "convergence_target": "original_waypoint", "finalist_extension": False,
+            "interpretation": "motion response and available robot load diagnostics; no response without load evidence is inconclusive; unchanged evaluator determines task success",
+        }
     write_json(report_path, report)
     runtime = MolmoPointRuntime()
     repair_gate = RepairGate() if args.repair_gate else None
@@ -246,12 +267,15 @@ def main(argv: list[str] | None = None) -> int:
                     write_json(report_path, report)
         started = time.monotonic()
         print(f"CAMPAIGN arm={arm.name} phase={phase} prompt={arm.prompt} starting", flush=True)
-        rc = canary.main([
+        canary_args = [
             "--region-backend", "rgbd", "--variant", arm.variant,
             "--output-dir", str(root / arm.name), "--label", f"{args.label}__{arm.name}",
             "--phase", phase, "--molmopoint-revision", canary.MOLMOPOINT_MODEL_REVISION,
             "--molmopoint-prompt-id", arm.prompt,
-        ], molmo_runtime=runtime, cell_completed_callback=on_cell)
+        ]
+        if args.motion_probe:
+            canary_args.extend(["--motion-profile", arm.motion_profile, "--motion-diagnostics"])
+        rc = canary.main(canary_args, molmo_runtime=runtime, cell_completed_callback=on_cell)
         result = {"arm": asdict(arm), "phase": phase, "returncode": rc,
                   "stop_reason": rules.reason, "fatal": rules.fatal,
                   "elapsed_s": time.monotonic() - started,
@@ -259,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         print("CAMPAIGN " + json.dumps(result, sort_keys=True), flush=True)
         return result
 
-    for arm in ARMS:
+    for arm in arms:
         result = run_arm(arm, "prefix")
         report["screen"].append(result)
         write_json(report_path, report)
@@ -273,6 +297,12 @@ def main(argv: list[str] | None = None) -> int:
             report["finished_unix"] = time.time()
             write_json(report_path, report)
             return 2
+    if args.motion_probe:
+        complete = all(r["returncode"] == 0 and r["metrics"]["terminal_cells"] == 12 for r in report["screen"])
+        report["status"] = "motion_probe_completed" if complete else "motion_probe_stopped"
+        report["finished_unix"] = time.time()
+        write_json(report_path, report)
+        return 0 if complete else 2
     eligible = sorted((r for r in report["screen"] if r["returncode"] == 0 and r["metrics"]["terminal_cells"] == 12 and r["metrics"]["successes"] > 0), key=rank_key)
     if not args.screen_only:
         for selected in eligible[:2]:

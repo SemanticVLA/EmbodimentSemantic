@@ -213,3 +213,43 @@ def test_zero_success_screen_arms_are_not_extended(tmp_path, monkeypatch):
     assert all(screen["metrics"]["terminal_cells"] == 12 for screen in report["screen"])
     assert report["finalists"] == []
     assert report["status"] == "no_successful_arm"
+
+
+@pytest.mark.parametrize("success", [False, True])
+def test_motion_probe_has_two_matched_prefixes_one_runtime_and_no_extension(tmp_path, monkeypatch, success):
+    sentinel = object()
+    calls = []
+    monkeypatch.setattr(campaign, "MolmoPointRuntime", lambda: sentinel)
+
+    def fake_main(argv, *, molmo_runtime, cell_completed_callback):
+        assert molmo_runtime is sentinel
+        assert "--motion-diagnostics" in argv
+        pairs = [item for item in argv if item != "--motion-diagnostics"]
+        args = dict(zip(pairs[::2], pairs[1::2]))
+        calls.append(args)
+        assert args["--phase"] == "prefix"
+        assert args["--region-backend"] == "rgbd"
+        assert args["--variant"] == "molmo_dense_agentview"
+        output = __import__("pathlib").Path(args["--output-dir"])
+        for suite in ("vanilla", "sealed_randomized"):
+            campaign.write_json(output / suite / "arrow_pick_place_matrix_status.json", {"cells": [
+                {"status": "completed", "evaluator_result": success, "suite_mode": suite, "task_id": task, "seed": seed}
+                for task in (4, 6, 9) for seed in (1000, 1001)
+            ]})
+        return 0
+
+    monkeypatch.setattr(campaign.canary, "main", fake_main)
+    assert campaign.main(["--output-dir", str(tmp_path), "--motion-probe"]) == 0
+    report = json.loads((tmp_path / "campaign.json").read_text())
+    assert len(calls) == 2
+    assert [c["--motion-profile"] for c in calls] == ["baseline", "placement_micro5mm"]
+    assert len({c["--molmopoint-prompt-id"] for c in calls}) == 1
+    assert sum(r["metrics"]["planned"] for r in report["screen"]) == 24
+    assert all(r["metrics"]["terminal_cells"] == 12 for r in report["screen"])
+    assert report["finalists"] == []
+    assert report["status"] == "motion_probe_completed"
+
+
+def test_motion_probe_rejects_global_repair_gate(tmp_path):
+    with pytest.raises(SystemExit):
+        campaign.main(["--output-dir", str(tmp_path), "--motion-probe", "--repair-gate"])

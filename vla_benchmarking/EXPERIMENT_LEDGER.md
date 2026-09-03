@@ -1,6 +1,74 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
-## Experimental repair4 preparation — 2026-09-03
+## Placement motion probe preparation — 2026-09-03
+
+Implementation is validated, **not launched**. Parent source is repair4
+`d9c919c8e0c027554c381c0c93990465e339f251`. The current six-arm campaign remains
+unchanged. No new controller/frame defect is verified. The observed placement
+stalls motivate a paired response test using the existing micro-correction law.
+
+Two dense-agentview arms, `placement_control` and `placement_burst5mm`, use
+the same normal 12-cell prefix (tasks 4/6/9, seeds 1000/1001, both suites),
+same prompt/model/perception/geometry, and identical opt-in motion diagnostics.
+Only the latter enables correction in `preplace` and `descend_place`:
+10-step plateau window, 0.1 mm movement threshold, at most 5 mm added target
+bias, gain 1, eight-action bursts, one round per phase, at most 16 correction
+actions per cell across retries. Corrections remain inside the original
+160-step phase / 1,200-action cell budgets and workspace bounds. Success still
+requires the original waypoint tolerance and unchanged post-retreat evaluator.
+
+Question: does a small extra command cause progress toward the nominal target?
+No response plus increased measured load supports a physical constraint;
+without reliable load telemetry, nonresponse is inconclusive. This is a
+diagnostic ablation, not a validated fix. It is screen-only, never extends to
+60 automatically, and will use a new immutable SHA release after focused tests
+and one independent review. Root owns campaign/SBATCH wiring, ML worker owns
+profile/provenance, backend worker owns opt-in diagnostics and safety gates.
+Validation: 114 targeted tests passed, one skipped; independent real-helper
+smokes for open/hover/recovery with diagnostics enabled passed. One HIGH
+diagnostics keyword mismatch found in the focused review was fixed and covered
+by a regression test. Final independent review PASS, no remaining HIGH/BLOCKER.
+This approves the bounded diagnostic launch, not a claim that placement is fixed.
+
+## Experimental repair4 running — 2026-09-03
+
+Fresh audit: **2026-09-03 21:07:07 UTC**. Job **1919168** is **RUNNING** on
+compute-4-11, one NVIDIA A40, submitted 20:09:00 and started 20:09:20 UTC.
+Runtime GPU, package and exact-source checks passed. Source is immutable
+`d9c919c8e0c027554c381c0c93990465e339f251`, label
+`v9d_molmo_repair4_d9c919c`. Dense-agentview screen is terminal: **0/12
+successes**, with **4 explicitly passed retention heuristics**, four
+no-candidate outcomes, six grasp failures and two controller failures. Both
+suites scored 0/6. It ended with return code 2 after the second hover-translate
+160-step timeout, with all 12 planned cells recorded; this is not a fatal
+campaign-contract error. Reported actions: 3,387 (incomplete for pre-audit
+hover failures); perception time: 1,158.16 s; arm elapsed: 1,357.93 s.
+It cannot qualify for extension and is below both matching historical baseline
+prefixes (3/12 each, different historical source commits).
+
+Geometry-only and local agentview also finished **0/12 each**, with four and
+three passed retention heuristics respectively. Each stopped after the second
+hover-translate timeout on its final planned cell. The contact-prompt arm is
+running at **0/4 terminal trials of 12 planned**, one passed retention heuristic;
+vanilla task9 seed1000 is active. Clearance-prompt and wrist arms have not
+started. Across four arms: **40 terminal trials, zero successes, 12 passed
+retention heuristics**. The active release is unchanged while the separate
+placement probe is prepared; no duplicate of this campaign is launched.
+The frozen baseline and original checkout are untouched.
+
+Bounded read-only placement audit: vanilla T6 seed1000 passed a retention
+heuristic but timed out at preplace with 26.23 mm position residual. Vanilla
+T9 seed1000 reached preplace in 36 steps, then timed out during placement
+descent: release target Z 0.901941 m, last observed EEF Z 0.920164 m,
+21.56 mm total position residual. Shared transfer height is
+`max(source.z,target.z)+0.08 m`; the evidence does not establish insufficient
+preplace height or a frame bug. Contact-limited descent/controller convergence
+is a future hypothesis, not a verified cause. Keep this run unchanged and
+collect the remaining screens before choosing the next repair.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_repair4_d9c919c_1919168/results`.
+Archive target: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_repair4_d9c919c_1919168`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919168.out`.
 
 Repair4 tests **observed upper-rim contact selection**: use actual RGB-D support
 within 8 mm below its world-Z 90th percentile, with 15 mm metric neighborhoods
@@ -16,7 +84,12 @@ stop rules and immediate fatal-contract stopping. Only complete arms with at
 least one successful placement may advance to 60 cells (at most two).
 All-zero screens are archived for a new idea instead of extended. Targeted
 validation passes 44 tests plus independent focused testing and review.
-No new job has been submitted yet.
+Independent read-only audit of installed Robosuite 1.4.0 confirmed that
+`robot0_eef_pos` and OSC `ee_pos` use the same `grip_site`; the body quaternion
+is explicitly converted using the measured body-to-site rotation. No verified
+position-frame mismatch explains the residual motion errors. Do not treat that
+discarded hypothesis as a reason to change frames. Placement/transit dynamics
+and contact feasibility remain runtime questions.
 
 ## Experimental repair3 finished — 2026-09-03
 

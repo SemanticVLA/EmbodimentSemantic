@@ -1786,6 +1786,12 @@ def _motion_trace_entry(
     *,
     action_sent: bool,
     correction_active: bool,
+    experimental_motion_diagnostics: bool = False,
+    nominal_target: Any | None = None,
+    commanded_target: Any | None = None,
+    action: Any | None = None,
+    before_proprio: Mapping[str, Any] | None = None,
+    env: Any | None = None,
 ) -> dict[str, Any]:
     """Build one bounded, proprioception-only motion trace record."""
     observed = _proprioception(proprio)
@@ -1797,7 +1803,7 @@ def _motion_trace_entry(
         residual_array = np.asarray(target_pos, dtype=np.float64) - np.asarray(eef_pos, dtype=np.float64)
         residual = residual_array.tolist()
         residual_norm = float(np.linalg.norm(residual_array))
-    return {
+    result = {
         "phase": str(phase),
         "step": int(step),
         "action_sent": bool(action_sent),
@@ -1808,6 +1814,63 @@ def _motion_trace_entry(
         "residual_vector_m": residual,
         "residual_norm_m": residual_norm,
         "correction_active": bool(correction_active),
+    }
+    if experimental_motion_diagnostics:
+        before = _proprioception(before_proprio)
+        result.update({
+            "nominal_target_position_m": _diagnostic_array(_position(nominal_target), limit=3) if nominal_target is not None else None,
+            "commanded_target_position_m": _diagnostic_array(_position(commanded_target), limit=3) if commanded_target is not None else None,
+            "action_normalized": _diagnostic_array(action),
+            "eef_pos_before_m": _diagnostic_array(before.get("eef_pos"), limit=3),
+            "eef_pos_after_m": eef_pos,
+            "controller_telemetry": _experimental_controller_telemetry(env),
+        })
+    return result
+
+
+def _experimental_controller_telemetry(env: Any | None) -> dict[str, Any]:
+    """Read optional robot/controller telemetry without touching simulator state."""
+    unavailable = {"status": "unavailable", "reason": "not_exposed"}
+    sources: list[Any] = []
+    if env is not None:
+        sources.append(env)
+        for name in ("controller", "robot", "robots"):
+            try:
+                value = getattr(env, name, None)
+            except Exception:
+                value = None
+            if isinstance(value, (list, tuple)):
+                sources.extend(value[:2])
+            elif value is not None:
+                sources.append(value)
+        # Robosuite robots expose the controller below each robot wrapper.
+        for source in tuple(sources):
+            try:
+                controller = getattr(source, "controller", None)
+            except Exception:
+                controller = None
+            if controller is not None:
+                sources.append(controller)
+
+    def lookup(names: Sequence[str]) -> list[float] | dict[str, str]:
+        for source in sources:
+            for name in names:
+                try:
+                    value = getattr(source, name, None)
+                except Exception:
+                    value = None
+                converted = _diagnostic_array(value)
+                if converted is not None:
+                    return converted
+        return dict(unavailable)
+
+    return {
+        "controller_ee_pos_m": lookup(("ee_pos", "eef_pos", "ee_position", "eef_position")),
+        "controller_goal_pos_m": lookup(("goal_pos", "goal_position", "ee_goal_pos", "eef_goal_pos")),
+        "requested_torque": lookup(("requested_torque", "commanded_torque", "torque_command", "torque")),
+        "applied_torque": lookup(("applied_torque", "applied_joint_torque", "torque_applied")),
+        "eef_force": lookup(("eef_force", "ee_force", "force")),
+        "eef_torque": lookup(("eef_torque", "ee_torque", "wrench_torque")),
     }
 
 
@@ -1971,6 +2034,9 @@ def _run_motion(
     motion_trace_path: str | Path | None = None,
     motion_trace_state: list[dict[str, Any]] | None = None,
     motion_trace_segment: str = "initial",
+    experimental_motion_diagnostics: bool = False,
+    motion_workspace_bounds: Mapping[str, Sequence[float]] | None = None,
+    experimental_motion_correction: bool = False,
     failure_snapshot_callback: Callable[[str, int, Mapping[str, Any]], str | Path | None] | None = None,
     motion_frame_callback: Callable[[str, int], str | Path | None] | None = None,
     post_lift_retention_gate: Callable[[Mapping[str, Any], Mapping[str, np.ndarray]], Any] | None = None,
@@ -2133,6 +2199,7 @@ def _run_motion(
         correction_rounds = 0
         correction_actions = 0
         phase_correction_events: list[dict[str, Any]] = []
+        insufficient_budget_audited = False
         for step in range(required_steps):
             correction_was_active = correction_remaining > 0
             # Micro-correction changes only the positional target.  Preserve
@@ -2141,6 +2208,10 @@ def _run_motion(
             # would silently command the legacy held orientation while the
             # convergence check still waited for the learned one.
             action_waypoint: dict[str, Any] = {"position": correction_target}
+            if motion_workspace_bounds is not None:
+                validate_workspace_points(
+                    {"commanded_target": correction_target}, bounds=motion_workspace_bounds
+                )
             if waypoint_orientation is not None:
                 action_waypoint["orientation"] = waypoint_orientation
                 frame = _orientation_frame(waypoint)
@@ -2162,6 +2233,9 @@ def _run_motion(
                 append_motion_trace(_motion_trace_entry(
                     phase, step + 1, proprio, action_waypoint,
                     action_sent=False, correction_active=correction_was_active,
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    nominal_target=waypoint, commanded_target=action_waypoint,
+                    action=None, before_proprio=proprio, env=env,
                 ))
                 append_failure_record(record, phase)
                 raise
@@ -2183,6 +2257,9 @@ def _run_motion(
                 append_motion_trace(_motion_trace_entry(
                     phase, step + 1, proprio, action_waypoint,
                     action_sent=False, correction_active=correction_was_active,
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    nominal_target=waypoint, commanded_target=action_waypoint,
+                    action=action, before_proprio=proprio, env=env,
                 ))
                 append_failure_record(record, phase)
                 budget_limit = (
@@ -2209,6 +2286,9 @@ def _run_motion(
                 append_motion_trace(_motion_trace_entry(
                     phase, step + 1, proprio, action_waypoint,
                     action_sent=False, correction_active=correction_was_active,
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    nominal_target=waypoint, commanded_target=action_waypoint,
+                    action=action, before_proprio=proprio, env=env,
                 ))
                 # Preserve a partial gripper record so run_episode can offer a
                 # bounded, explicitly-approved RGB-D recovery.  This is the
@@ -2222,6 +2302,9 @@ def _run_motion(
             append_motion_trace(_motion_trace_entry(
                 phase, step + 1, observation, action_waypoint,
                 action_sent=True, correction_active=correction_was_active,
+                experimental_motion_diagnostics=experimental_motion_diagnostics,
+                nominal_target=waypoint, commanded_target=action_waypoint,
+                action=action, before_proprio=proprio, env=env,
             ))
             if motion_frame_callback is not None:
                 try:
@@ -2304,6 +2387,43 @@ def _run_motion(
                     residual = nominal - current
                     residual_norm = float(np.linalg.norm(residual))
                     if np.isfinite(residual_norm) and residual_norm > 0.0:
+                        requested_burst = int(correction_policy.burst_steps)
+                        if experimental_motion_correction:
+                            phase_remaining = int(required_steps - (step + 1))
+                            global_remaining = (
+                                int(action_budget.remaining)
+                                if isinstance(action_budget, _ActionBudget)
+                                else int(action_budget) - sent_actions
+                                if action_budget is not None
+                                else None
+                            )
+                            micro_remaining = (
+                                int(micro_action_budget.remaining)
+                                if micro_action_budget is not None else 0
+                            )
+                            insufficient = (
+                                phase_remaining < requested_burst
+                                or (global_remaining is not None and global_remaining < requested_burst)
+                                or micro_remaining < requested_burst
+                            )
+                            if insufficient:
+                                if not insufficient_budget_audited:
+                                    event = {
+                                        "phase": phase,
+                                        "trigger": "insufficient_remaining_budget",
+                                        "trigger_step": int(step + 1),
+                                        "status": "skipped",
+                                        "required_burst_actions": requested_burst,
+                                        "phase_remaining_steps": phase_remaining,
+                                        "global_remaining_actions": global_remaining,
+                                        "micro_remaining_actions": micro_remaining,
+                                        "reason": "experimental_correction_requires_full_burst_budget",
+                                    }
+                                    live_corrections.append(event)
+                                    phase_correction_events.append(event)
+                                    record.setdefault("micro_corrections", []).append(event)
+                                    insufficient_budget_audited = True
+                                continue
                         distance = min(
                             float(correction_policy.residual_max_m),
                             residual_norm * float(correction_policy.correction_gain),
@@ -2664,6 +2784,8 @@ def run_episode(
     experimental_candidate: Any | None = None,
     experimental_eef_orientation_transform: Sequence[Sequence[float]] | np.ndarray | None = None,
     experimental_gripper_opening_m: float | None = None,
+    experimental_motion_diagnostics: bool = False,
+    experimental_micro_correction: MicroCorrectionPolicy | None = None,
     retreat_completed_callback: Callable[[], None] | None = None,
     experimental_action_budget: _ActionBudget | None = None,
 ) -> dict[str, Any]:
@@ -2722,6 +2844,19 @@ def run_episode(
             experimental_action_budget = _ActionBudget(1200)
         elif not isinstance(experimental_action_budget, _ActionBudget):
             raise TypeError("experimental_action_budget must be an _ActionBudget")
+    elif experimental_micro_correction is not None:
+        raise ValueError("experimental_micro_correction requires an experimental candidate")
+    if experimental_micro_correction is not None and not isinstance(experimental_micro_correction, MicroCorrectionPolicy):
+        experimental_micro_correction = MicroCorrectionPolicy.from_value(experimental_micro_correction)
+    if experimental_candidate is not None and experimental_micro_correction is not None:
+        if experimental_micro_correction.enabled:
+            if not set(experimental_micro_correction.phases) <= {"preplace", "descend_place"}:
+                raise ValueError("experimental micro-correction is limited to placement phases")
+            if experimental_micro_correction.residual_max_m > 0.005:
+                raise ValueError("experimental micro-correction residual_max_m must be <= 0.005 m")
+            if experimental_micro_correction.burst_steps > 8 or experimental_micro_correction.max_rounds > 1 or experimental_micro_correction.max_actions > 16:
+                raise ValueError("experimental micro-correction exceeds bounded placement profile")
+        variant = replace(variant, micro_correction=experimental_micro_correction)
     endpoint_depth_statistic = variant.endpoint_depth_statistic
     endpoint_depth_quantile = float(variant.endpoint_depth_quantile)
     max_mask_fraction_for_motion = (
@@ -2737,6 +2872,11 @@ def run_episode(
             else WORKSPACE_BOUNDS_M.items()
         )
     }
+    experimental_correction_bounds = (
+        workspace_bounds
+        if experimental_micro_correction is not None and experimental_micro_correction.enabled
+        else None
+    )
     if resolution <= 0:
         raise ValueError("resolution must be positive")
     if gripper_dwell_steps <= 0:
@@ -3273,11 +3413,21 @@ def run_episode(
     recovery_audit: list[dict[str, Any]] = []
     grasp_search_audit: list[dict[str, Any]] = []
     micro_correction_audit: list[dict[str, Any]] = []
-    micro_action_budget = (
-        _ActionBudget(variant.micro_correction.max_actions)
-        if variant.micro_correction is not None and variant.micro_correction.enabled
-        else None
-    )
+    if (
+        experimental_micro_correction is not None
+        and experimental_micro_correction.enabled
+    ):
+        shared_micro_budget = getattr(env, "_arrow_experimental_micro_action_budget", None)
+        if not isinstance(shared_micro_budget, _ActionBudget) or shared_micro_budget.limit != experimental_micro_correction.max_actions:
+            shared_micro_budget = _ActionBudget(experimental_micro_correction.max_actions)
+            setattr(env, "_arrow_experimental_micro_action_budget", shared_micro_budget)
+        micro_action_budget = shared_micro_budget
+    else:
+        micro_action_budget = (
+            _ActionBudget(variant.micro_correction.max_actions)
+            if variant.micro_correction is not None and variant.micro_correction.enabled
+            else None
+        )
     setattr(env, "_arrow_grasp_search_audit", grasp_search_audit)
     setattr(env, "_arrow_micro_correction_audit", micro_correction_audit)
 
@@ -3342,6 +3492,9 @@ def run_episode(
             eef_orientation_transform=experimental_eef_orientation_transform,
             motion_trace_max_steps=motion_trace_max_steps,
             motion_trace_path=output_root / "motion_trace.json",
+            experimental_motion_diagnostics=experimental_motion_diagnostics,
+            motion_workspace_bounds=experimental_correction_bounds,
+            experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
             failure_snapshot_callback=failure_snapshot_callback,
             motion_frame_callback=(canary_motion_frame_callback if canary_video_root is not None else None),
             post_lift_retention_gate=effective_retention_gate,
@@ -3531,6 +3684,9 @@ def run_episode(
                         micro_correction=None,
                         action_budget=search_policy.max_actions - search_actions,
                         motion_trace_path=output_root / "motion_trace.json",
+                        experimental_motion_diagnostics=experimental_motion_diagnostics,
+                        motion_workspace_bounds=experimental_correction_bounds,
+                        experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                         motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                         motion_trace_segment=f"attempt_{attempt_index}_reset",
                         failure_snapshot_callback=failure_snapshot_callback,
@@ -3558,6 +3714,9 @@ def run_episode(
                         micro_action_budget=micro_action_budget,
                         action_budget=search_policy.max_actions - search_actions,
                         motion_trace_path=output_root / "motion_trace.json",
+                        experimental_motion_diagnostics=experimental_motion_diagnostics,
+                        motion_workspace_bounds=experimental_correction_bounds,
+                        experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                         motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                         motion_trace_segment=f"attempt_{attempt_index}_grasp",
                         failure_snapshot_callback=failure_snapshot_callback,
@@ -3604,6 +3763,9 @@ def run_episode(
                         micro_action_budget=micro_action_budget,
                         action_budget=search_policy.max_actions - search_actions,
                         motion_trace_path=output_root / "motion_trace.json",
+                        experimental_motion_diagnostics=experimental_motion_diagnostics,
+                        motion_workspace_bounds=experimental_correction_bounds,
+                        experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                         motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                         motion_trace_segment=f"attempt_{attempt_index}_placement",
                         failure_snapshot_callback=failure_snapshot_callback,
@@ -3808,6 +3970,9 @@ def run_episode(
                     phase_policies=phase_policies,
                     osc_position_scale_m=variant.osc_position_scale_m,
                     motion_trace_path=output_root / "motion_trace.json",
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    motion_workspace_bounds=experimental_correction_bounds,
+                    experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                     motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                     motion_trace_segment=f"grasp_retry_{retry_index}",
                     failure_snapshot_callback=failure_snapshot_callback,
