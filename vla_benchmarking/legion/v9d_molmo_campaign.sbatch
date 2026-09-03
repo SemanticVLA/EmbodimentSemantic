@@ -19,6 +19,7 @@
 #   V9D_MOLMO_MOTION_PROBE    1 selects the paired 24-cell placement diagnostic
 #   V9D_MOLMO_ARMS            comma-separated existing screen arm names
 #   V9D_MOLMO_OBSERVATION_PROFILE baseline (default) or hover20mm
+#   V9D_MOLMO_MOTION_PROFILE  baseline (default), placement_micro5mm or release_plus20mm
 #   V9D_MOLMO_SCREEN_ONLY     1 disables any 60-cell extension
 
 #SBATCH --job-name=v9d_molmo_campaign
@@ -250,6 +251,7 @@ repair_gate=${V9D_MOLMO_REPAIR_GATE:-0}
 motion_probe=${V9D_MOLMO_MOTION_PROBE:-0}
 selected_arms=${V9D_MOLMO_ARMS:-all}
 observation_profile=${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}
+motion_profile=${V9D_MOLMO_MOTION_PROFILE:-baseline}
 screen_only=${V9D_MOLMO_SCREEN_ONLY:-0}
 EOF
 
@@ -277,5 +279,9 @@ case "${V9D_MOLMO_SCREEN_ONLY:-0}" in
   1) campaign_args+=(--screen-only) ;;
   0) ;;
   *) die 'V9D_MOLMO_SCREEN_ONLY must be 0 or 1' ;;
+esac
+case "${V9D_MOLMO_MOTION_PROFILE:-baseline}" in
+  baseline|placement_micro5mm|release_plus20mm) campaign_args+=(--motion-profile "${V9D_MOLMO_MOTION_PROFILE:-baseline}") ;;
+  *) die 'V9D_MOLMO_MOTION_PROFILE must be baseline, placement_micro5mm or release_plus20mm' ;;
 esac
 "$PYTHON" "$CAMPAIGN_SCRIPT" "${campaign_args[@]}"

@@ -32,11 +32,37 @@ class _Capture:
 def test_motion_profile_resolution_is_explicit_and_rgbd_gated():
     baseline = runner.resolve_motion_profile("baseline", region_backend="sam3")
     assert baseline["micro_correction"] is None
+    assert baseline["release_height_offset_m"] == 0.0
     treatment = runner.resolve_motion_profile("placement_micro5mm", region_backend="rgbd")
     assert treatment["micro_correction"]["phases"] == ("preplace", "descend_place")
     assert treatment["micro_correction"]["residual_max_m"] == pytest.approx(0.005)
+    assert treatment["release_height_offset_m"] == 0.0
+    release = runner.resolve_motion_profile("release_plus20mm", region_backend="rgbd")
+    assert release["micro_correction"] is None
+    assert release["release_height_offset_m"] == pytest.approx(0.020)
     with pytest.raises(ValueError, match="requires --region-backend rgbd"):
         runner.resolve_motion_profile("placement_micro5mm", region_backend="sam3")
+
+
+def test_release_profile_passes_only_bounded_height_offset_to_candidate_runner():
+    baseline = runner.resolve_motion_profile("baseline", region_backend="sam3")
+    micro = runner.resolve_motion_profile("placement_micro5mm", region_backend="rgbd")
+    release = runner.resolve_motion_profile("release_plus20mm", region_backend="rgbd")
+    marker = object()
+
+    seen = []
+
+    def fake_run_episode(**kwargs):
+        seen.append(kwargs)
+
+    fake_run_episode(**runner._candidate_motion_kwargs(baseline))
+    fake_run_episode(**runner._candidate_motion_kwargs(micro, experimental_micro_correction=marker))
+    fake_run_episode(**runner._candidate_motion_kwargs(release))
+
+    assert seen[0] == {}
+    assert seen[1] == {"experimental_micro_correction": marker}
+    assert seen[2] == {"experimental_release_height_offset_m": pytest.approx(0.020)}
+    assert release != baseline and release != micro
 
 
 def test_profile_manifest_records_provenance_and_configuration_hash(tmp_path):
@@ -71,6 +97,22 @@ def test_profile_manifest_records_provenance_and_configuration_hash(tmp_path):
     assert manifest["motion_profile_params"]["micro_correction"]["max_actions"] == 16
     assert manifest["motion_diagnostics"] is True
     assert manifest["experiment_config_hash"]
+
+    baseline_manifest = runner.run_canary_episode(
+        env=object(), task_id=4, seed=1000, output_dir=tmp_path / "baseline",
+        variant=runner.VARIANTS["rgbd_geometry_agentview"], worker=Worker(),
+        episode_runner=episode_runner, source_uv=(1.0, 1.0), capture_fn=capture_fn,
+        dry_run=True, region_backend="rgbd", motion_profile="baseline",
+        motion_profile_params=runner.resolve_motion_profile("baseline", region_backend="rgbd"),
+    )
+    release_manifest = runner.run_canary_episode(
+        env=object(), task_id=4, seed=1000, output_dir=tmp_path / "release",
+        variant=runner.VARIANTS["rgbd_geometry_agentview"], worker=Worker(),
+        episode_runner=episode_runner, source_uv=(1.0, 1.0), capture_fn=capture_fn,
+        dry_run=True, region_backend="rgbd", motion_profile="release_plus20mm",
+        motion_profile_params=runner.resolve_motion_profile("release_plus20mm", region_backend="rgbd"),
+    )
+    assert baseline_manifest["experiment_config_hash"] != release_manifest["experiment_config_hash"]
 
 
 def test_diagnostics_forward_to_helper_using_backend_keyword(tmp_path, monkeypatch):

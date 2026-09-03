@@ -260,6 +260,7 @@ def test_motion_probe_rejects_global_repair_gate(tmp_path):
     ["--arms", "dense_agentview,dense_agentview"],
     ["--motion-probe", "--arms", "dense_agentview"],
     ["--motion-probe", "--observation-profile", "hover20mm"],
+    ["--motion-probe", "--motion-profile", "placement_micro5mm"],
     ["--repair-gate", "--arms", "dense_agentview"],
 ])
 def test_selected_screen_rejects_invalid_or_confounded_arguments(tmp_path, extra):
@@ -268,7 +269,8 @@ def test_selected_screen_rejects_invalid_or_confounded_arguments(tmp_path, extra
     assert not (tmp_path / "campaign.json").exists()
 
 
-def test_selected_clearance_screen_records_hover_profile_without_extension(tmp_path, monkeypatch):
+@pytest.mark.parametrize("motion_profile", ["baseline", "release_plus20mm"])
+def test_selected_clearance_screen_records_hover_profile_without_extension(tmp_path, monkeypatch, motion_profile):
     calls = []
     monkeypatch.setattr(campaign, "MolmoPointRuntime", object)
 
@@ -286,14 +288,20 @@ def test_selected_clearance_screen_records_hover_profile_without_extension(tmp_p
 
     monkeypatch.setattr(campaign.canary, "main", fake_main)
     assert campaign.main(["--output-dir", str(tmp_path), "--arms", "dense_agentview_clearance",
-                          "--observation-profile", "hover20mm", "--screen-only"]) == 0
+                          "--observation-profile", "hover20mm", "--motion-profile", motion_profile,
+                          "--screen-only"]) == 0
     assert len(calls) == 1
     assert calls[0]["--molmopoint-prompt-id"] == "rim_clearance"
     assert calls[0]["--observation-profile"] == "hover20mm"
     assert calls[0]["--phase"] == "prefix"
-    assert "--motion-profile" not in calls[0]
+    if motion_profile == "baseline":
+        assert "--motion-profile" not in calls[0]
+    else:
+        assert calls[0]["--motion-profile"] == motion_profile
     report = json.loads((tmp_path / "campaign.json").read_text())
     assert report["observation_profile"] == "hover20mm"
+    assert report["motion_profile"] == motion_profile
+    assert report["arms"][0]["motion_profile"] == motion_profile
     assert [arm["name"] for arm in report["arms"]] == ["dense_agentview_clearance"]
     assert report["screen"][0]["metrics"]["planned"] == 12
     assert report["finalists"] == []

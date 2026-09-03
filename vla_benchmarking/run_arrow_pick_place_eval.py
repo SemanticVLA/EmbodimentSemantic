@@ -2784,12 +2784,23 @@ def run_episode(
     experimental_candidate: Any | None = None,
     experimental_eef_orientation_transform: Sequence[Sequence[float]] | np.ndarray | None = None,
     experimental_gripper_opening_m: float | None = None,
+    experimental_release_height_offset_m: float = 0.0,
     experimental_motion_diagnostics: bool = False,
     experimental_micro_correction: MicroCorrectionPolicy | None = None,
     retreat_completed_callback: Callable[[], None] | None = None,
     experimental_action_budget: _ActionBudget | None = None,
 ) -> dict[str, Any]:
     """Capture, decode, and optionally execute one bounded arrow episode."""
+    try:
+        release_height_offset = float(experimental_release_height_offset_m)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("experimental_release_height_offset_m must be finite") from exc
+    if not np.isfinite(release_height_offset) or release_height_offset < 0.0:
+        raise ValueError("experimental_release_height_offset_m must be finite and non-negative")
+    if release_height_offset != 0.0 and not np.isclose(release_height_offset, 0.020, atol=1e-9, rtol=0.0):
+        raise ValueError("experimental_release_height_offset_m only supports +0.020 m")
+    if release_height_offset != 0.0 and experimental_candidate is None:
+        raise ValueError("experimental_release_height_offset_m requires an experimental candidate")
     variant_suite_mode = (
         controller_variant.suite_mode
         if isinstance(controller_variant, ControllerVariantConfig)
@@ -3159,6 +3170,29 @@ def run_episode(
         initial_proprio.get("eef_quat"),
         {"lift_height_m": float(clearance_m)},
     )
+    release_height_audit: dict[str, Any] | None = None
+    if experimental_candidate_pose is not None:
+        try:
+            normal_waypoints = np.asarray(waypoints, dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("experimental release-height treatment requires sequence waypoints") from exc
+        if normal_waypoints.ndim != 2 or normal_waypoints.shape[0] <= 5 or normal_waypoints.shape[1] < 3:
+            raise ValueError("experimental release-height treatment requires six 3D waypoints")
+        nominal_release = normal_waypoints[4, :3].copy()
+        nominal_retreat = normal_waypoints[5, :3].copy()
+        shifted_waypoints = np.array(normal_waypoints, dtype=np.float64, copy=True)
+        shifted_waypoints[4, 2] += release_height_offset
+        shifted_waypoints[5, 2] += release_height_offset
+        waypoints = shifted_waypoints
+        release_height_audit = {
+            "offset_m": release_height_offset,
+            "nominal_release_world_m": nominal_release.tolist(),
+            "shifted_release_world_m": shifted_waypoints[4, :3].tolist(),
+            "nominal_retreat_world_m": nominal_retreat.tolist(),
+            "shifted_retreat_world_m": shifted_waypoints[5, :3].tolist(),
+            "rows_shifted": [4, 5],
+            "rows_unchanged": [0, 1, 2, 3],
+        }
     motion_phase_order: Sequence[str] | None = None
     motion_phase_limits: Mapping[str, int] | None = None
     motion_execution_timeout_steps = phase_timeout_steps
@@ -3218,6 +3252,8 @@ def run_episode(
             "clearance_z_m": safe_z,
             "phase_order": list(motion_phase_order),
         })
+        if release_height_audit is not None:
+            experimental_candidate_audit["release_height_treatment"] = dict(release_height_audit)
         experimental_record = getattr(env, "_arrow_experimental_candidate", None)
         if isinstance(experimental_record, Mapping):
             experimental_record = dict(experimental_record)

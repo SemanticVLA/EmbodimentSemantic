@@ -48,7 +48,7 @@ MOLMOPOINT_MODEL_ID = "allenai/MolmoPoint-8B"
 MOLMOPOINT_MODEL_REVISION = "188130f961c8e0888a34e11121a1423c461a01ba"
 MOLMOPOINT_PROMPT_IDS = ("rim_contact", "rim_downward_approach", "rim_clearance")
 
-MOTION_PROFILE_NAMES = ("baseline", "placement_micro5mm")
+MOTION_PROFILE_NAMES = ("baseline", "placement_micro5mm", "release_plus20mm")
 PLACEMENT_MICRO_CORRECTION_PARAMS = {
     "enabled": True,
     "phases": ("preplace", "descend_place"),
@@ -89,8 +89,30 @@ def resolve_motion_profile(name: str, *, region_backend: str) -> dict[str, Any]:
     return {
         "name": name,
         "region_backend": region_backend,
-        "micro_correction": None if name == "baseline" else dict(PLACEMENT_MICRO_CORRECTION_PARAMS),
+        "micro_correction": (
+            dict(PLACEMENT_MICRO_CORRECTION_PARAMS)
+            if name == "placement_micro5mm" else None
+        ),
+        "release_height_offset_m": 0.020 if name == "release_plus20mm" else 0.0,
     }
+
+
+def _candidate_motion_kwargs(
+    resolved_motion_profile: Mapping[str, Any],
+    *,
+    experimental_micro_correction: Any | None = None,
+    motion_diagnostics: bool = False,
+) -> dict[str, Any]:
+    """Build candidate-only experimental arguments from a resolved profile."""
+    kwargs: dict[str, Any] = {}
+    if experimental_micro_correction is not None:
+        kwargs["experimental_micro_correction"] = experimental_micro_correction
+    if motion_diagnostics:
+        kwargs["experimental_motion_diagnostics"] = True
+    release_offset = float(resolved_motion_profile.get("release_height_offset_m", 0.0))
+    if release_offset != 0.0:
+        kwargs["experimental_release_height_offset_m"] = release_offset
+    return kwargs
 
 
 def resolve_observation_profile(name: str) -> dict[str, Any]:
@@ -2250,7 +2272,7 @@ def main(
             }
         motion_settings["phase_policies"] = phase_policies
         motion_settings["motion_profile"] = resolved_motion_profile["name"]
-        motion_settings["motion_profile_params"] = _json_safe(resolved_motion_profile["micro_correction"] or {})
+        motion_settings["motion_profile_params"] = _json_safe(resolved_motion_profile)
         motion_settings["observation_profile"] = resolved_observation_profile
         bboxes = kwargs.get("bboxes")
         if not isinstance(bboxes, Mapping):
@@ -2358,11 +2380,11 @@ def main(
                         "retreat_complete": False, "total_actions": action_count_before,
                         "error": "live contact calibration unavailable before candidate"}
             try:
-                candidate_motion_kwargs: dict[str, Any] = {}
-                if experimental_micro_correction is not None:
-                    candidate_motion_kwargs["experimental_micro_correction"] = experimental_micro_correction
-                if args.motion_diagnostics:
-                    candidate_motion_kwargs["experimental_motion_diagnostics"] = True
+                candidate_motion_kwargs = _candidate_motion_kwargs(
+                    resolved_motion_profile,
+                    experimental_micro_correction=experimental_micro_correction,
+                    motion_diagnostics=bool(args.motion_diagnostics),
+                )
                 audit = episode.run_episode(
                     env=env, task_id=task_id, seed=seed, output_dir=attempt_output_dir,
                     arrow_rgb=arrow_state["rgb"], dry_run=dry_run, resolution=resolution,
