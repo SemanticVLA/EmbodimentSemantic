@@ -1,4 +1,37 @@
-# Project-local SAM3.1 runtime
+# Active campaign: v9d + MolmoPoint, without SAM
+
+The active `run_v9d_molmo_campaign.py` uses v9d's arrow-seeded RGB-D region
+as observed support for MolmoPoint and grasp geometry. It does not require,
+load, or call SAM or a Triton endpoint. The original SAM implementation below
+is retained as historical experimental source.
+
+Submit `legion/v9d_molmo_campaign.sbatch` with an isolated `REPO_ROOT`, its
+exact `CANARY_EXPECTED_COMMIT`, and a unique `CANARY_LABEL`. One A40 allocation
+runs the following arms sequentially using one persistent MolmoPoint model:
+
+- Dense agentview, downward-approach prompt (first live cell).
+- RGB-D geometry-only agentview (no Molmo inference).
+- Local Molmo regions, agentview.
+- Dense agentview, contact-location prompt.
+- Dense agentview, finger-clearance prompt.
+- Dense wrist, downward-approach prompt.
+
+Each screen uses tasks 4, 6, 9; seeds 1000 and 1001; vanilla and
+sealed_randomized (12 planned cells per arm). The best two executable arms
+extend to 60 cells each, preserving completed prefix cells and failures.
+Ranking uses successes/planned, retained lifts, actions, then perception time.
+Repeated operational failure on two distinct cells pauses that arm; coordinate,
+evaluator, or action-contract violations stop the campaign. Results and failures
+are preserved in `campaign.json` plus per-cell matrix and grasp audits.
+
+This is an exploratory comparison of the complete grasp pipeline. RGB-D region
+edges are depth-derived support boundaries, not guaranteed semantic bowl rims.
+The geometry control shares the treatment motion, observation hover, and retry
+limits. Frozen v9d remains at `fd24a4c5cf8da4991013ab18b15704523ad0836b`;
+historical baseline scores come from different code revisions. No result changes
+the default automatically. The original checkout's ledger edits are untouched.
+
+## Historical project-local SAM3.1 runtime
 
 This directory owns the SAM3 image-segmentation dependency for the Molmo/SAM3
 canary. It does **not** import, proxy, or share the Omnis SAM3 implementation.

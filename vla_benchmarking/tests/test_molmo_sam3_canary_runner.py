@@ -59,7 +59,7 @@ def test_default_isolation_and_variant_inventory(tmp_path: Path):
     assert runner.BASELINE_COMMIT.startswith("fd24a4c")
     assert set(runner.VARIANTS) == {
         "sam3_geometry_agentview", "molmo_local_agentview",
-        "molmo_dense_agentview", "molmo_dense_wrist",
+        "molmo_dense_agentview", "molmo_dense_wrist", "rgbd_geometry_agentview",
     }
     assert all(item.camera_name == runner.AGENTVIEW for name, item in runner.VARIANTS.items() if "wrist" not in name)
     assert runner.VARIANTS["molmo_dense_wrist"].camera_name == runner.WRIST_CAMERA

@@ -1102,6 +1102,7 @@ def _run_matrix_impl(
     retry_motion_began: bool = False,
     continue_on_motion_failure: bool = False,
     experiment_metadata: Mapping[str, Any] | None = None,
+    cell_completed_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
     suite_mode = parse_suite_mode(suite_mode)
@@ -1824,6 +1825,10 @@ def _run_matrix_impl(
                 and not continue_on_motion_failure
             ):
                 raise cell_exception
+            if cell_completed_callback is not None:
+                # Experimental campaign stop rules run only after the cell's
+                # result is durable and its environment has been closed.
+                cell_completed_callback(cell_record)
 
     completed = [record for record in records if record.get("status") == "completed"]
     failures = [record for record in records if record.get("status") != "completed"]

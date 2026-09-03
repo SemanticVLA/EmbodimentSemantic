@@ -38,26 +38,29 @@ DEFAULT_MAX_NEW_TOKENS = 200
 DEFAULT_MAX_POINTS = 64
 PROMPT_VARIANTS = {
     "rim_contact": (
+        "The target bowl region is highlighted in red. Select points only on that bowl. "
         "Point to multiple separated, visible locations on the outer rim or "
         "outer wall where a parallel-jaw gripper can make stable contact. "
         "Prefer broad, unobstructed contact patches and point at each contact "
         "center. Do not point to the bowl center, inside contents, thin edge "
         "tips, occluded pixels, or background. Return as many distinct "
-        "graspable contact points as possible."
+        "graspable contact points as possible, up to 16."
     ),
     "rim_downward_approach": (
+        "The target bowl region is highlighted in red. Select points only on that bowl. "
         "For a parallel-jaw gripper approaching the bowl from above, point to multiple "
         "separated visible outer-rim contact locations that leave clearance "
         "for both fingers. Choose robust fingertip contact centers on the "
         "outside wall, not the bowl center, interior, silhouette-only edge, "
-        "occluded regions, or background. Return distinct candidate points."
+        "occluded regions, or background. Return up to 16 distinct candidate points."
     ),
     "rim_clearance": (
+        "The target bowl region is highlighted in red. Select points only on that bowl. "
         "Point to multiple separated visible grasp-contact centers around the "
         "bowl's outer rim. Favor points with visible depth support and room "
         "for a parallel-jaw gripper; avoid thin/occluded edges, the interior "
         "or center, nearby objects, and background. Give distinct alternatives "
-        "rather than repeating one location."
+        "rather than repeating one location, up to 16 points."
     ),
 }
 DEFAULT_PROMPT_ID = "rim_downward_approach"
@@ -141,7 +144,7 @@ def _validate_rgb(rgb: Any) -> np.ndarray:
 
 
 def build_mask_highlight(rgb: np.ndarray, mask: np.ndarray, *, alpha: float = 0.35, color: Sequence[int] = (255, 32, 32)) -> np.ndarray:
-    """Overlay a SAM mask without changing image resolution or pixel frame."""
+    """Overlay an observed region without changing resolution or pixel frame."""
 
     image = _validate_rgb(rgb)
     mask_array = np.asarray(mask)

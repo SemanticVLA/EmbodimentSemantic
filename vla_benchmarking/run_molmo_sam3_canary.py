@@ -22,14 +22,17 @@ import math
 import re
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+import traceback
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import numpy as np
 
 BASELINE_COMMIT = "fd24a4c5cf8da4991013ab18b15704523ad0836b"
-EXPERIMENT_SCHEMA = "molmo_sam3_canary.v1"
+SAM_EXPERIMENT_SCHEMA = "molmo_sam3_canary.v1"
+RGBD_EXPERIMENT_SCHEMA = "molmo_rgbd_region_canary.v1"
+EXPERIMENT_SCHEMA = SAM_EXPERIMENT_SCHEMA
 AGENTVIEW = "agentview"
 WRIST_CAMERA = "robot0_eye_in_hand"
 MAX_CANDIDATES = 128
@@ -51,6 +54,7 @@ class CanaryVariant:
     camera_name: str
     policy: str
     uses_molmo: bool
+    region_backend: str = "sam3"
 
     def __post_init__(self) -> None:
         if not self.name or "/" in self.name or "\\" in self.name:
@@ -59,6 +63,8 @@ class CanaryVariant:
             raise ValueError(f"unsupported canary camera {self.camera_name!r}")
         if self.policy not in {"geometry_only", "molmo_local", "molmo_dense"}:
             raise ValueError(f"unsupported canary policy {self.policy!r}")
+        if self.region_backend not in {"sam3", "rgbd"}:
+            raise ValueError(f"unsupported region backend {self.region_backend!r}")
 
 
 VARIANTS: dict[str, CanaryVariant] = {
@@ -66,6 +72,7 @@ VARIANTS: dict[str, CanaryVariant] = {
     "molmo_local_agentview": CanaryVariant("molmo_local_agentview", AGENTVIEW, "molmo_local", True),
     "molmo_dense_agentview": CanaryVariant("molmo_dense_agentview", AGENTVIEW, "molmo_dense", True),
     "molmo_dense_wrist": CanaryVariant("molmo_dense_wrist", WRIST_CAMERA, "molmo_dense", True),
+    "rgbd_geometry_agentview": CanaryVariant("rgbd_geometry_agentview", AGENTVIEW, "geometry_only", False, "rgbd"),
 }
 
 
@@ -323,7 +330,9 @@ def expand_grasp_candidates(
 
 
 def _worker_candidates(worker: PerceptionWorker, request: PerceptionRequest) -> tuple[list[GraspCandidate], Mapping[str, Any]]:
+    started = time.perf_counter()
     raw = worker.propose(request)
+    perception_latency_s = float(time.perf_counter() - started)
     diagnostics: Mapping[str, Any] = {}
     if hasattr(raw, "candidates"):
         diagnostics = getattr(raw, "audit", {}) if isinstance(getattr(raw, "audit", {}), Mapping) else {}
@@ -339,6 +348,7 @@ def _worker_candidates(worker: PerceptionWorker, request: PerceptionRequest) -> 
     if attempted:
         candidates = [candidate for candidate in candidates if candidate.candidate_id not in attempted]
         diagnostics = {**dict(diagnostics), "filtered_attempted_candidates": len(values) - len(candidates)}
+    diagnostics = {**dict(diagnostics), "perception_latency_s": perception_latency_s}
     return rank_candidates(candidates), diagnostics
 
 
@@ -375,6 +385,8 @@ def run_canary_episode(
     dry_run: bool = True,
     arrow_rgb: np.ndarray | None = None,
     arrow_refresh_fn: Callable[[Any], tuple[np.ndarray, Sequence[float], Sequence[float] | None]] | None = None,
+    experiment_schema: str = SAM_EXPERIMENT_SCHEMA,
+    region_backend: str = "sam3",
 ) -> dict[str, Any]:
     """Run one bounded canary episode, regenerating candidates after failure."""
     selected_variant = VARIANTS[variant] if isinstance(variant, str) else variant
@@ -499,7 +511,7 @@ def run_canary_episode(
         attempt_record["status"] = "candidate_failed"
         attempts.append(attempt_record)
     manifest = {
-        "schema_version": EXPERIMENT_SCHEMA,
+        "schema_version": str(experiment_schema),
         "experiment_id": f"{selected_variant.name}__task{int(task_id)}__seed{int(seed)}",
         "baseline_commit": BASELINE_COMMIT,
         "frozen_controller": "v9d",
@@ -510,7 +522,11 @@ def run_canary_episode(
         "placement_displacement_world_m": displacement,
         "attempts": attempts,
         "final_result": final_result,
+        "total_actions": (int(final_result["total_actions"]) if isinstance(final_result, Mapping) and final_result.get("total_actions") is not None else None),
         "evaluator_timing": "after_retreat_only",
+        "region_backend": str(region_backend),
+        "backend": "v9d_rgbd_region" if region_backend == "rgbd" else "sam3",
+        "sam3_used": bool(region_backend == "sam3"),
     }
     digest = hashlib.sha256(json.dumps(_json_safe(manifest), sort_keys=True).encode()).hexdigest()
     manifest["experiment_config_hash"] = digest
@@ -585,6 +601,53 @@ def preflight_local_model_runtimes(sam3: Any, molmo: Any, *, load_models: bool =
         "molmopoint_prompt": str(getattr(molmo.config, "prompt", "")),
         "models_loaded": bool(load_models),
     }
+
+
+def build_local_molmo_runtime(
+    *,
+    molmopoint_model: str = MOLMOPOINT_MODEL_ID,
+    molmopoint_revision: str = MOLMOPOINT_MODEL_REVISION,
+    molmopoint_prompt_id: str = "rim_downward_approach",
+    device: str = "cuda",
+) -> Any:
+    """Construct the persistent Molmo runtime without touching SAM assets."""
+    if str(molmopoint_model) != MOLMOPOINT_MODEL_ID:
+        raise ValueError("MolmoPoint model must be the pinned canary model")
+    if str(molmopoint_revision).lower() != MOLMOPOINT_MODEL_REVISION:
+        raise ValueError("MolmoPoint revision does not match the pinned canary artifact")
+    try:
+        from .molmo_sam3.molmopoint import MolmoPointRuntime, MolmoPointRuntimeConfig, PROMPT_VARIANTS
+    except ImportError:  # pragma: no cover - direct script use
+        from molmo_sam3.molmopoint import MolmoPointRuntime, MolmoPointRuntimeConfig, PROMPT_VARIANTS
+    if str(molmopoint_prompt_id) not in PROMPT_VARIANTS:
+        raise ValueError(f"unknown MolmoPoint prompt id: {molmopoint_prompt_id}")
+    return MolmoPointRuntime(MolmoPointRuntimeConfig(
+        model_id=str(molmopoint_model), model_revision=str(molmopoint_revision), device=device,
+        prompt_id=str(molmopoint_prompt_id), prompt=PROMPT_VARIANTS[str(molmopoint_prompt_id)],
+    ))
+
+
+def preflight_local_molmo_runtime(molmo: Any, *, load_models: bool = False) -> dict[str, Any]:
+    """Validate/load Molmo only; importantly, this performs no SAM preflight."""
+    config = getattr(molmo, "config", None)
+    if config is None:
+        raise RuntimeError("Molmo runtime is missing config provenance")
+    if str(getattr(config, "model_id", "")) != MOLMOPOINT_MODEL_ID:
+        raise ValueError("MolmoPoint model must be the pinned canary model")
+    if str(getattr(config, "model_revision", "")).lower() != MOLMOPOINT_MODEL_REVISION:
+        raise ValueError("MolmoPoint revision does not match the pinned canary artifact")
+    if load_models and not bool(getattr(molmo, "loaded", False)):
+        try:
+            getattr(molmo, "_load")()
+        except Exception as exc:
+            raise RuntimeError(f"local MolmoPoint model load failed: {exc}") from exc
+    provenance = config.provenance() if callable(getattr(config, "provenance", None)) else {
+        "model_id": str(config.model_id), "model_revision": str(config.model_revision),
+        "prompt_id": str(getattr(config, "prompt_id", "unknown")),
+        "prompt": str(getattr(config, "prompt", "")),
+    }
+    provenance["models_loaded"] = bool(getattr(molmo, "loaded", False))
+    return provenance
 
 
 def _capture_calibration(capture: Any) -> Any:
@@ -745,12 +808,17 @@ def _select_detection(
 
 
 class ModelPerceptionWorker:
-    """Persistent project-local SAM3/MolmoPoint worker for matrix cells."""
+    """Persistent perception worker for SAM3 compatibility and RGB-D canaries."""
 
-    def __init__(self, sam3: Any, molmo: Any, robot_calibration: Any) -> None:
+    def __init__(self, sam3: Any, molmo: Any, robot_calibration: Any, *, region_backend: str = "sam3") -> None:
+        if region_backend not in {"sam3", "rgbd"}:
+            raise ValueError("region_backend must be sam3 or rgbd")
+        if region_backend == "sam3" and sam3 is None:
+            raise ValueError("SAM3 runtime is required for the sam3 backend")
         self.sam3 = sam3
         self.molmo = molmo
         self.robot_calibration = robot_calibration
+        self.region_backend = region_backend
 
     @staticmethod
     def _write_overlay(
@@ -793,6 +861,8 @@ class ModelPerceptionWorker:
         return {"status": "saved", "path": path.as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
     def propose(self, request: PerceptionRequest) -> Any:
+        if self.region_backend == "rgbd":
+            return self._propose_rgbd(request)
         try:
             from .molmo_sam3.grasp_candidates import (
                 CandidatePolicy, MolmoPoint, RGBDObservation, generate_grasp_candidates,
@@ -866,6 +936,94 @@ class ModelPerceptionWorker:
         }
         diagnostics["candidate_overlay"] = self._write_overlay(
             request, mask=np.asarray(detection.mask, dtype=np.bool_), source_uv=source_uv,
+            molmo_points=molmo_points,
+            selected_candidate_uv=(result.candidates[0].source_pixel_uv if result.candidates else None),
+        )
+        return {"candidates": result.candidates, "diagnostics": diagnostics}
+
+    def _propose_rgbd(self, request: PerceptionRequest) -> Any:
+        """Generate candidates from arrow-seeded RGB-D support only."""
+        try:
+            from .molmo_sam3.grasp_candidates import CandidatePolicy, MolmoPoint, generate_grasp_candidates
+            from .rgbd_region import derive_observed_region_mask, project_observed_region_to_wrist
+            from .molmo_sam3.molmopoint import MolmoPointRequest
+        except ImportError:  # pragma: no cover - direct script use
+            from molmo_sam3.grasp_candidates import CandidatePolicy, MolmoPoint, generate_grasp_candidates
+            from rgbd_region import derive_observed_region_mask, project_observed_region_to_wrist
+            from molmo_sam3.molmopoint import MolmoPointRequest
+        started = time.perf_counter()
+        # The destination arrow endpoint is an observed profile hint; when it
+        # is unavailable, the source point remains a valid deterministic axis.
+        profile_world = _deproject_capture(request.agentview_capture, request.destination_uv or request.source_uv)
+        region_mask, region_audit = derive_observed_region_mask(
+            request.agentview_capture, request.source_uv, profile_target_world=profile_world,
+        )
+        source_capture = request.source_capture
+        source_uv = tuple(float(v) for v in request.source_uv)
+        association_audit: dict[str, Any] = {}
+        if request.variant.camera_name == WRIST_CAMERA:
+            projected_support, association_audit = project_observed_region_to_wrist(
+                request.agentview_capture, source_capture, region_mask,
+                depth_tolerance_m=float(region_audit.get("depth_tolerance_m", 0.025)),
+            )
+            # The observed source support must be projected into the current
+            # wrist frame; stale agentview coordinates are never reused.
+            seed_world = _deproject_capture(request.agentview_capture, request.source_uv)
+            source_uv = _project_capture(source_capture, seed_world)
+            profile_world = _deproject_capture(source_capture, source_uv)
+            # Projection is used only for strict camera identity.  Candidate
+            # geometry consumes a dense component grown from current wrist
+            # RGB-D, gated by overlap with the projected observed support.
+            wrist_region, wrist_audit = derive_observed_region_mask(
+                source_capture, source_uv, profile_target_world=profile_world,
+            )
+            overlap = int(np.count_nonzero(wrist_region & projected_support))
+            projected_area = max(1, int(np.count_nonzero(projected_support)))
+            overlap_fraction = float(overlap / projected_area)
+            if overlap < 4 or overlap_fraction < 0.20:
+                raise ValueError("current wrist RGB-D region does not overlap projected agentview support")
+            region_mask = wrist_region
+            association_audit = {
+                **association_audit,
+                "current_wrist_region_area_px": int(np.count_nonzero(wrist_region)),
+                "current_wrist_region_audit": wrist_audit,
+                "projected_current_overlap_px": overlap,
+                "projected_current_overlap_fraction": overlap_fraction,
+            }
+        molmo_points: list[Any] = []
+        molmo_provenance: Mapping[str, Any] | None = None
+        if request.variant.uses_molmo:
+            molmo_result = self.molmo.predict(MolmoPointRequest(
+                np.asarray(source_capture.rgb, dtype=np.uint8), mask=np.asarray(region_mask, dtype=np.bool_)
+            ))
+            molmo_points = [MolmoPoint(float(point.x), float(point.y), label="molmo_rim") for point in molmo_result.points]
+            molmo_provenance = dict(molmo_result.provenance)
+        policy = CandidatePolicy(name=request.variant.policy, obstruction_clearance_m=0.006)
+        result = generate_grasp_candidates(
+            rgb=np.asarray(source_capture.rgb, dtype=np.uint8),
+            metric_depth_m=np.asarray(source_capture.metric_depth, dtype=np.float64),
+            sam_mask=np.asarray(region_mask, dtype=np.bool_),
+            molmo_points=molmo_points,
+            calibration=_capture_calibration(source_capture),
+            robot_calibration=self.robot_calibration,
+            policy=policy,
+        )
+        diagnostics = {
+            "backend": "v9d_rgbd_region", "region_backend": "rgbd", "sam3_used": False,
+            "source_camera": request.variant.camera_name, "source_uv": list(source_uv),
+            "molmopoint_count": len(molmo_points), "molmopoint_provenance": molmo_provenance,
+            "returned_candidate_count": len(result.candidates), "rejection_count": len(result.rejected),
+            "latency_s": float(time.perf_counter() - started),
+            "region_audit": region_audit, "wrist_association_audit": association_audit,
+            "geometry_audit": result.audit,
+            "rejections": [
+                {"seed_index": item.seed_index, "yaw_deg": item.yaw_deg,
+                 "insertion_depth_m": item.insertion_depth_m, "reason": item.reason}
+                for item in result.rejected
+            ],
+        }
+        diagnostics["candidate_overlay"] = self._write_overlay(
+            request, mask=np.asarray(region_mask, dtype=np.bool_), source_uv=source_uv,
             molmo_points=molmo_points,
             selected_candidate_uv=(result.candidates[0].source_pixel_uv if result.candidates else None),
         )
@@ -1155,7 +1313,12 @@ def _perform_observation_hover(
         raise
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    molmo_runtime: Any | None = None,
+    cell_completed_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=sorted(VARIANTS), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -1166,12 +1329,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed-base", type=int, default=1000)
     parser.add_argument("--suite-modes", default="vanilla,sealed_randomized")
     parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument("--sam3-source", type=Path, required=True)
-    parser.add_argument("--sam3-checkpoint", type=Path, required=True)
-    parser.add_argument("--sam3-source-commit", required=True)
-    parser.add_argument("--sam3-checkpoint-sha256", required=True)
+    parser.add_argument("--region-backend", choices=("sam3", "rgbd"), default="sam3")
+    parser.add_argument("--sam3-source", type=Path, required=False)
+    parser.add_argument("--sam3-checkpoint", type=Path, required=False)
+    parser.add_argument("--sam3-source-commit", required=False)
+    parser.add_argument("--sam3-checkpoint-sha256", required=False)
     parser.add_argument("--molmopoint-model", default="allenai/MolmoPoint-8B")
-    parser.add_argument("--molmopoint-revision", required=True)
+    parser.add_argument("--molmopoint-revision", default=MOLMOPOINT_MODEL_REVISION)
     parser.add_argument("--molmopoint-prompt-id", choices=MOLMOPOINT_PROMPT_IDS, default="rim_downward_approach")
     parser.add_argument("--runtime-root", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true", help="validate local model assets without motion")
@@ -1181,6 +1345,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.episodes_per_task <= 0:
         parser.error("--episodes-per-task must be positive")
     try:
+        if VARIANTS[args.variant].region_backend == "rgbd" and args.region_backend != "rgbd":
+            raise ValueError("rgbd_geometry_agentview requires --region-backend rgbd")
         tasks = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
         suites = tuple(item.strip() for item in str(args.suite_modes).split(",") if item.strip())
         if tasks != (4, 6, 9):
@@ -1189,34 +1355,80 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("canary suite modes must be exactly vanilla,sealed_randomized")
         if args.seed_base != 1000:
             raise ValueError("canary seed base must be 1000")
-        if args.sam3_source_commit != SAM3_SOURCE_COMMIT:
-            raise ValueError("SAM3 source revision does not match the pinned project-local revision")
-        if str(args.sam3_checkpoint_sha256).lower() != SAM3_CHECKPOINT_SHA256:
-            raise ValueError("SAM3 checkpoint digest does not match the pinned canary artifact")
         if args.molmopoint_model != MOLMOPOINT_MODEL_ID:
             raise ValueError("MolmoPoint model must be the pinned canary model")
         if args.molmopoint_revision != MOLMOPOINT_MODEL_REVISION:
             raise ValueError("MolmoPoint revision does not match the pinned canary artifact")
         if args.config is not None and not args.config.is_file():
             raise ValueError(f"canary config is unavailable: {args.config}")
-        sam3, molmo = build_local_model_runtimes(
-            sam3_source=args.sam3_source, sam3_checkpoint=args.sam3_checkpoint,
-            sam3_checkpoint_sha256=args.sam3_checkpoint_sha256,
-            molmopoint_model=args.molmopoint_model, molmopoint_revision=args.molmopoint_revision,
-            molmopoint_prompt_id=args.molmopoint_prompt_id,
-        )
-        model_provenance = preflight_local_model_runtimes(sam3, molmo, load_models=not args.dry_run)
+        if args.region_backend == "rgbd":
+            # Campaigns inject one runtime and reuse its loaded weights across
+            # sequential arms.  Prompt text remains an explicit per-arm config.
+            uses_molmo = bool(VARIANTS[args.variant].uses_molmo)
+            if not uses_molmo:
+                # The geometry control is intentionally model-free, even when
+                # a campaign has a runtime available for neighboring arms.
+                sam3 = None
+                molmo_runtime = None
+                molmo = None
+                model_provenance = {
+                    "model_id": None, "model_revision": None,
+                    "prompt_id": None, "prompt": None, "models_loaded": False,
+                }
+            else:
+                if molmo_runtime is None:
+                    molmo_runtime = build_local_molmo_runtime(
+                        molmopoint_model=args.molmopoint_model,
+                        molmopoint_revision=args.molmopoint_revision,
+                        molmopoint_prompt_id=args.molmopoint_prompt_id,
+                    )
+                try:
+                    try:
+                        from .molmo_sam3.molmopoint import PROMPT_VARIANTS
+                    except ImportError:  # pragma: no cover - direct script use
+                        from molmo_sam3.molmopoint import PROMPT_VARIANTS
+                    config = getattr(molmo_runtime, "config", None)
+                    if config is None:
+                        raise RuntimeError("injected Molmo runtime is missing config")
+                    molmo_runtime.config = replace(
+                        config, prompt_id=args.molmopoint_prompt_id,
+                        prompt=PROMPT_VARIANTS[args.molmopoint_prompt_id],
+                    )
+                except (KeyError, TypeError, AttributeError) as exc:
+                    raise RuntimeError("injected Molmo runtime cannot update prompt config") from exc
+                sam3 = None
+                model_provenance = preflight_local_molmo_runtime(molmo_runtime, load_models=not args.dry_run)
+            molmo = molmo_runtime
+        else:
+            missing = [name for name in ("sam3_source", "sam3_checkpoint", "sam3_source_commit", "sam3_checkpoint_sha256") if getattr(args, name) is None]
+            if missing:
+                raise ValueError(f"SAM3 backend requires: {', '.join('--' + name.replace('_', '-') for name in missing)}")
+            if args.sam3_source_commit != SAM3_SOURCE_COMMIT:
+                raise ValueError("SAM3 source revision does not match the pinned project-local revision")
+            if str(args.sam3_checkpoint_sha256).lower() != SAM3_CHECKPOINT_SHA256:
+                raise ValueError("SAM3 checkpoint digest does not match the pinned canary artifact")
+            sam3, molmo = build_local_model_runtimes(
+                sam3_source=args.sam3_source, sam3_checkpoint=args.sam3_checkpoint,
+                sam3_checkpoint_sha256=args.sam3_checkpoint_sha256,
+                molmopoint_model=args.molmopoint_model, molmopoint_revision=args.molmopoint_revision,
+                molmopoint_prompt_id=args.molmopoint_prompt_id,
+            )
+            model_provenance = preflight_local_model_runtimes(sam3, molmo, load_models=not args.dry_run)
     except Exception as exc:
         print(f"molmo/sam3 canary preflight failed: {exc}", file=sys.stderr)
+        traceback.print_exc()
         return 2
     manifest = {
-        "schema_version": EXPERIMENT_SCHEMA,
+        "schema_version": RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA,
         "experiment_id": str(args.label), "baseline_commit": BASELINE_COMMIT,
-        "variant": asdict(VARIANTS[args.variant]), "phase": args.phase,
+        "variant": asdict(replace(VARIANTS[args.variant], region_backend=args.region_backend)), "phase": args.phase,
         "task_ids": list(tasks), "episodes_per_task": int(args.episodes_per_task),
         "seed_base": int(args.seed_base), "suite_modes": list(suites),
         "output_dir": args.output_dir.expanduser().resolve().as_posix(),
         "model_provenance": model_provenance,
+        "region_backend": args.region_backend,
+        "backend": "v9d_rgbd_region" if args.region_backend == "rgbd" else "sam3",
+        "sam3_used": bool(args.region_backend == "sam3"),
         "molmopoint_prompt_id": args.molmopoint_prompt_id,
         "dry_run": bool(args.dry_run),
     }
@@ -1265,7 +1477,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         )
         if worker_state["worker"] is None:
-            worker_state["worker"] = ModelPerceptionWorker(sam3, molmo, calibration)
+            worker_state["worker"] = ModelPerceptionWorker(
+                sam3, molmo, calibration, region_backend=args.region_backend,
+            )
         else:
             worker_state["worker"].robot_calibration = calibration
         setattr(env, "_molmo_sam3_model_provenance", model_provenance)
@@ -1290,6 +1504,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         suite_mode = kwargs.get("suite_mode") or "vanilla"
         variant_name = args.variant
         variant = VARIANTS[variant_name]
+        # CLI backend selection is part of the experimental identity and is
+        # reflected in every cell, including legacy variant names.
+        variant = replace(variant, region_backend=args.region_backend)
         bboxes = kwargs.get("bboxes")
         if not isinstance(bboxes, Mapping):
             raise ValueError("canary episode requires existing arrow input-generation bboxes")
@@ -1346,7 +1563,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 setattr(env, "_molmo_sam3_action_budget", budget)
 
             if action_count_before >= 1200:
-                return {"status": "recovery_failed", "grasp_retained": False, "retreat_complete": False, "error": "1200-action retry budget exhausted before candidate"}
+                return {"status": "recovery_failed", "grasp_retained": False, "retreat_complete": False,
+                        "total_actions": action_count_before,
+                        "error": "1200-action retry budget exhausted before candidate"}
             try:
                 # Re-probe the no-motion contact geometry for every candidate;
                 # retries must not reuse an aperture measured before recovery.
@@ -1365,6 +1584,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return {
                     "status": "recovery_failed", "grasp_retained": False,
                     "retreat_complete": False, "error_type": type(exc).__name__,
+                    "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
                     "error": f"live contact calibration failed closed: {exc}",
                 }
             try:
@@ -1394,6 +1614,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return {
                     "status": "placed" if audit.get("evaluator_success") is not False else "task_failure",
                     "grasp_retained": True, "retreat_complete": True,
+                    "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
                     "evaluator_called": bool(evaluator is not None),
                     "evaluator_success": audit.get("evaluator_success"),
                     "audit": audit,
@@ -1410,6 +1631,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return {
                     "status": "grasp_failed" if recovery.get("retreat_complete") else "recovery_failed",
                     "grasp_retained": False, "retreat_complete": bool(recovery.get("retreat_complete")),
+                    "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
                     "error_type": type(exc).__name__, "error": str(exc), "recovery": recovery,
                 }
 
@@ -1420,15 +1642,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             evaluator=kwargs.get("evaluator"), capture_fn=capture_fn,
             resolution=resolution, dry_run=dry_run, arrow_rgb=arrow_state["rgb"],
             arrow_refresh_fn=refresh_arrow,
+            experiment_schema=(RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),
+            region_backend=args.region_backend,
         )
         final = result.get("final_result") if isinstance(result.get("final_result"), Mapping) else {}
         audit = final.get("audit") if isinstance(final, Mapping) else None
         return {
             "audit_path": (output_dir / "molmo_sam3_canary_manifest.json").as_posix(),
             "evaluator_success": final.get("evaluator_success") if isinstance(final, Mapping) else None,
+            "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
             "phases": audit.get("phases", []) if isinstance(audit, Mapping) else [],
             "grasp_search": [], "canary_manifest": result,
-            "experimental_identity": EXPERIMENT_SCHEMA,
+            "experimental_identity": (RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),
         }
 
     suite_summaries: dict[str, Any] = {}
@@ -1446,17 +1671,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 continue_on_motion_failure=True,
                 resume=bool(args.phase == "full60" and suite_root.exists()),
                 resume_terminal=bool(args.phase == "full60" and suite_root.exists()),
+                cell_completed_callback=cell_completed_callback,
                 experiment_metadata={
-                    "schema_version": EXPERIMENT_SCHEMA,
+                    "schema_version": (RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),
                     "variant": args.variant,
+                    "region_backend": args.region_backend,
+                    "backend": "v9d_rgbd_region" if args.region_backend == "rgbd" else "sam3",
+                    "sam3_used": bool(args.region_backend == "sam3"),
                     "baseline_commit": BASELINE_COMMIT,
-                    "sam3_source_commit": args.sam3_source_commit,
-                    "sam3_checkpoint_sha256": args.sam3_checkpoint_sha256,
                     "molmopoint_model": args.molmopoint_model,
                     "molmopoint_revision": args.molmopoint_revision,
                     "molmopoint_prompt_id": args.molmopoint_prompt_id,
                     "candidate_policy": VARIANTS[args.variant].policy,
                     "source_camera": VARIANTS[args.variant].camera_name,
+                    **({
+                        "sam3_source_commit": args.sam3_source_commit,
+                        "sam3_checkpoint_sha256": args.sam3_checkpoint_sha256,
+                    } if args.region_backend == "sam3" else {}),
                 },
             )
     except Exception as exc:
