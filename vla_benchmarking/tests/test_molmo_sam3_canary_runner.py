@@ -263,3 +263,108 @@ def test_gripper_open_preflight_runs_before_reprobe_and_counts_shared_actions(tm
     assert np.allclose(calls[0][0], np.tile((0.1, 0.2, 0.3), (6, 1)))
     assert audit["total_actions"] == 20
     assert env._molmo_sam3_action_count == 20
+
+
+def test_observation_hover_uses_observed_region_q90_and_staged_motion(tmp_path, monkeypatch):
+    fake_episode = ModuleType("run_arrow_pick_place_eval")
+    fake_episode._raw_observation = lambda _env: {
+        "eef_pos": np.asarray((0.20, 0.20, 0.80)),
+        "eef_quat": np.asarray((0.0, 0.0, 0.0, 1.0)),
+    }
+    fake_episode._proprioception = lambda observation: observation
+    fake_episode._pose_waypoint = lambda position, orientation=None: {
+        "position": np.asarray(position, dtype=np.float64), "orientation": np.asarray(orientation, dtype=np.float64),
+    }
+    fake_episode.validate_workspace_points = lambda points: None
+    calls = []
+
+    def run_motion(_env, waypoints, _observation, **kwargs):
+        calls.append((waypoints, kwargs))
+        return [{"phase": phase, "steps": 1, "status": "reached"} for phase in kwargs["phase_order"]]
+
+    fake_episode._run_motion = run_motion
+    monkeypatch.setitem(sys.modules, "run_arrow_pick_place_eval", fake_episode)
+
+    @dataclass
+    class HoverCalibration:
+        intrinsic: list[list[float]]
+        world_from_camera: list[list[float]]
+
+    capture = SimpleNamespace(
+        rgb=np.zeros((64, 64, 3), dtype=np.uint8),
+        metric_depth=np.ones((64, 64), dtype=np.float64),
+        calibration=HoverCalibration(
+            intrinsic=((20.0, 0.0, 32.0), (0.0, 20.0, 32.0), (0.0, 0.0, 1.0)),
+            world_from_camera=np.eye(4).tolist(),
+        ),
+    )
+    env = SimpleNamespace(_molmo_sam3_action_count=0)
+    audit = runner._perform_observation_hover(env, capture, (32, 32), output_dir=tmp_path)
+    assert audit["region_q90_world_z_m"] == pytest.approx(1.0)
+    assert audit["hover_world_m"][2] == pytest.approx(1.10)
+    waypoints, kwargs = calls[0]
+    assert kwargs["phase_order"] == ("hover_raise", "hover_translate", "hover_lower")
+    assert kwargs["phase_timeout_steps_by_phase"] == {name: 160 for name in kwargs["phase_order"]}
+    assert np.allclose(waypoints["hover_raise"]["position"], (0.20, 0.20, 1.10))
+    assert np.allclose(waypoints["hover_translate"]["position"], (0.0, 0.0, 1.10))
+    assert np.allclose(waypoints["hover_lower"]["position"], (0.0, 0.0, 1.10))
+
+
+def test_robot_probe_emits_nonzero_center_rotated_mesh_collision_box(monkeypatch):
+    probe_module = importlib.import_module("sanity_checks.probe_panda_grip_site_frame")
+    monkeypatch.setattr(probe_module, "probe_grip_site_frame", lambda _sim: {
+        "passed": True, "site_id": 0, "body_id": 0, "resolved_body_name": "right_hand",
+        "observed_body_to_site_rotation_matrix": np.eye(3).tolist(),
+    })
+
+    class Model:
+        names = {
+            "site": ["grip_site"],
+            "body": ["right_hand", "leftfinger", "rightfinger", "gripper0_right_gripper"],
+            "geom": ["gripper0_finger1_pad_collision", "gripper0_finger2_pad_collision", "gripper0_hand_collision"],
+        }
+        geom_size = np.asarray(((0.0, 0.01, 0.01), (0.0, 0.01, 0.01), (0.1, 0.1, 0.1)))
+        geom_type = np.asarray((6, 6, 7))
+        geom_dataid = np.asarray((-1, -1, 0))
+        geom_bodyid = np.asarray((1, 2, 3))
+        geom_rbound = np.asarray((0.01, 0.01, 0.06))
+        geom_contype = np.asarray((1, 1, 1))
+        geom_conaffinity = np.asarray((1, 1, 1))
+        mesh_vertadr = np.asarray((0,))
+        mesh_vertnum = np.asarray((2,))
+        mesh_vert = np.asarray(((-0.01, -0.02, -0.03), (0.03, 0.04, 0.05)))
+
+        def __getattr__(self, name):
+            if name.endswith("_name2id"):
+                kind = name[:-8]
+                return lambda value: self.names[kind].index(value)
+            raise AttributeError(name)
+
+    hand_rotation = np.asarray(((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    data = SimpleNamespace(
+        site_xmat=np.asarray((runner.np.asarray(((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0))),)),
+        body_xmat=np.asarray((np.eye(3), np.eye(3), np.eye(3), np.eye(3))),
+        body_xpos=np.zeros((4, 3)), xpos=np.zeros((4, 3)),
+        site_xpos=np.asarray(((0.0, 0.0, 0.1),)),
+        geom_xpos=np.asarray(((0.0, 0.0, 0.1), (0.04, 0.0, 0.1), (0.01, 0.02, 0.11))),
+        geom_xmat=np.asarray((np.eye(3), np.eye(3), hand_rotation)),
+    )
+    env = SimpleNamespace(sim=SimpleNamespace(model=Model(), data=data))
+    calibration, _transform, record = runner.probe_robot_calibration(env)
+    boxes = calibration.hand_collision_boxes_grasp
+    hand_box = next(item for item in boxes if item["geom_name"] == "gripper0_hand_collision")
+    # Mesh local center=(.01,.01,.01), rotated by Rz(+90deg), gives world
+    # center=(0,.03,.12); subtract contact midpoint=(.02,0,.10), then apply
+    # the probe's measured site/grasp bases to obtain this grasp-frame center.
+    site_rotation = np.asarray(((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    jaw_axis = np.asarray((1.0, 0.0, 0.0))
+    approach = np.asarray((0.02, 0.0, 0.10))
+    approach -= jaw_axis * np.dot(approach, jaw_axis)
+    approach /= np.linalg.norm(approach)
+    grasp_to_site = np.column_stack((site_rotation.T @ approach, site_rotation.T @ jaw_axis, np.cross(site_rotation.T @ approach, site_rotation.T @ jaw_axis))).T
+    expected_center = grasp_to_site @ site_rotation.T @ (np.asarray((0.0, 0.03, 0.12)) - np.asarray((0.02, 0.0, 0.10)))
+    assert np.allclose(hand_box["center_grasp_m"], expected_center)
+    assert not np.allclose(hand_box["rotation_grasp_box"], np.eye(3))
+    assert np.allclose(hand_box["half_extents_m"], (0.02, 0.03, 0.04))
+    assert hand_box["source"] == "compiled_mesh_vertices_aabb"
+    assert record["gripper_geometry"]["hand_collision_box_count"] == 3

@@ -1,5 +1,72 @@
 {
   "schema_version": 2,
+  "v9d_molmo_candidate_campaigns": {
+    "audited_at_utc": "2026-09-03T19:33:31Z",
+    "frozen_baseline_commit": "fd24a4c5cf8da4991013ab18b15704523ad0836b",
+    "next_revision": {
+      "name": "repair3",
+      "status": "implementing",
+      "local_targeted_tests": "39 passed across geometry, runner, campaign and frozen-controller isolation; independent direct checks passed",
+      "hypothesis": "Staged observation travel and measured oriented collision bounds restore executable grasps without weakening clearance or action limits",
+      "changed_factors": ["observation route and upper observed-support hover height", "collision bounding spheres replaced by robot-geometry enclosing oriented boxes"],
+      "held_constant": ["Molmo model and prompts", "RGB-D region backend without SAM", "candidate policies", "160 steps per phase", "1200 total actions", "four grasps", "task/seed/suite cells", "simulator and evaluator"],
+      "decision": "First four vanilla T4/T6 cells must pass motion repair gate before the existing six-arm screen proceeds; compare matching baseline cells, then complete eligible finalists to 60 cells",
+      "continuation": "User authorized continued fixes and launches; thread heartbeat continue-v9d-molmo-canary-repairs every ten minutes",
+      "comparison_limit": "Exploratory combined integration repair; historical baselines are different commits; no default promotion"
+    },
+    "historical_matching_prefix": {
+      "tasks": [4, 6, 9],
+      "seeds": [1000, 1001],
+      "suites": ["vanilla", "sealed_randomized"],
+      "config_hash": "60f4f5f9ecfde7b4830f376ab06cfc706e2ef175d86817c42a0adb7cddd46c0c",
+      "1914768": {"source_commit": "06aa8fe7e520549b550ee5f7507237968001776c", "prefix_successes": 3, "prefix_planned": 12, "vanilla_successes": 1, "sealed_randomized_successes": 2, "gate_successes": 0, "gate_planned": 4, "full_successes": 15, "full_planned": 60},
+      "1917528": {"source_commit": "d32e72ffbe0b905af1e1dc14b6afe53aaa487472", "prefix_successes": 3, "prefix_planned": 12, "vanilla_successes": 1, "sealed_randomized_successes": 2, "gate_successes": 0, "gate_planned": 4, "full_successes": 14, "full_planned": 60},
+      "evidence": "/home/hjaber/EmbodimentSemantic_archive/runs/{arrow_v9d_canary_1914768,arrow_v9d_sealed_compare_1917528}/run/results/{vanilla,sealed_randomized}/arrow_pick_place_matrix_status.json"
+    },
+    "active": {
+      "job_id": "1919010",
+      "source_commit": "709a29bdf473e2a7edb255da5cd33430a119cfe0",
+      "label": "v9d_molmo_repair2_709a29b",
+      "status": "stopped_repair_gate",
+      "node": "compute-3-12",
+      "stage": "Final: stopped after four dense-agentview trial cells; no other arm or finalist ran",
+      "finished_at_utc": "2026-09-03T16:02:43.930850Z",
+      "job_exit_code": 2,
+      "archive_status": "VERIFIED",
+      "sam3_used": false,
+      "region_backend": "v9d_rgbd_region",
+      "model": "allenai/MolmoPoint-8B",
+      "model_revision": "188130f961c8e0888a34e11121a1423c461a01ba",
+      "repair_gate_enabled": true,
+      "repair_gate": "First four vanilla T4/T6 seeds 1000/1001: all hovers complete; completed close/lift for at least one seed of each task; then continue the same six-arm screen and two eligible finalists without duplicate cells.",
+      "terminal_cells": 4,
+      "successes": 0,
+      "retained_lifts": 0,
+      "executed_grasp_candidates": 0,
+      "failure_categories": {"no_candidates": 2, "controller_failure": 2},
+      "failure_details": {
+        "task4_seed1000": "Hover completed; Molmo 4 points; 90 obstruction and 54 aperture rejections; zero accepted candidates",
+        "task4_seed1001": "Hover completed; Molmo 3 points; 36 obstruction and 108 aperture rejections; zero accepted candidates",
+        "task6_seed1000": "Observation hover exceeded 160 steps, final positional residual 0.0349274 m",
+        "task6_seed1001": "Observation hover exceeded 160 steps, final positional residual 0.0586830 m"
+      },
+      "local_targeted_tests": "34 passed; independent focused review approved gated launch",
+      "source_release": "/home/hjaber/EmbodimentSemantic_runtime/checkouts/v9d_molmo_709a29bdf473e2a7edb255da5cd33430a119cfe0",
+      "output_root": "/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_repair2_709a29b_1919010/results",
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_repair2_709a29b_1919010",
+      "stdout": "/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919010.out"
+    },
+    "previous_failed": {
+      "job_id": "1918783",
+      "source_commit": "1a42f70ac1270dcb949b161a9e7e517238699f93",
+      "status": "no_executable_arm",
+      "terminal_cells": 24,
+      "screen_planned_cells": 72,
+      "successes": 0,
+      "retained_lifts": 0,
+      "interpretation": "Shared hover/motion integration failures prevented meaningful prompt comparison. Historical failures are retained; this is a new code identity."
+    }
+  },
   "audited_at_utc": "2026-09-02T02:52:11Z",
   "purpose": "Unambiguous ledger separating what a model was trained on from what it received during evaluation.",
   "persistent_update_rule": ".cursor/rules/smolvla-experiment-updates.mdc",

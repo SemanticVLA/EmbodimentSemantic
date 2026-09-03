@@ -9,6 +9,7 @@ from vla_benchmarking.molmo_sam3.grasp_candidates import (
     CameraCalibration,
     CandidatePolicy,
     RobotGraspCalibration,
+    _hand_volume_obstruction,
     generate_grasp_candidates,
 )
 
@@ -39,6 +40,17 @@ def _scene(*, focal: float = 400.0, radius: int = 10, depth_value: float = 1.0):
         min_depth_support_pixels=2,
     )
     return rgb, depth, mask, calibration, robot, policy
+
+
+def _single_world_point_scene(world_point):
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    x, y, z = np.asarray(world_point, dtype=float)
+    u = int(round(calibration.intrinsic[0][0] * x / z + calibration.intrinsic[0][2]))
+    v = int(round(calibration.intrinsic[1][1] * y / z + calibration.intrinsic[1][2]))
+    mask[:] = False
+    depth[:] = np.nan
+    depth[v, u] = z
+    return rgb, depth, mask, calibration, robot, (u, v)
 
 
 def test_known_pixel_deprojects_using_signed_fy_and_returns_original_uv():
@@ -308,3 +320,66 @@ def test_terminal_target_contact_allowance_does_not_lower_successful_clearance()
     for candidate in result.candidates:
         assert candidate.audit["obstruction"]["status"] == "ok"
         assert candidate.clearance_m >= 0.0
+
+
+def test_oriented_box_accepts_point_inside_legacy_large_sphere_but_outside_obb():
+    point = np.array((0.03, 0.0, 1.0))
+    rgb, depth, mask, calibration, _, pixel = _single_world_point_scene(point)
+    assert np.linalg.norm(point - np.array((0.0, 0.0, 1.0))) < 0.05
+    details = _hand_volume_obstruction(
+        depth=depth, mask=mask, K=np.asarray(calibration.intrinsic), T=np.asarray(calibration.world_from_camera),
+        contact=np.array((0.0, 0.0, 1.0)), grip_site=np.array((0.0, 0.0, 1.0)),
+        pregrasp=np.array((0.0, 0.0, 1.05)), rotation_world_grasp=np.eye(3), spheres=(),
+        boxes=({
+            "center_grasp_m": np.zeros(3), "rotation_grasp_box": np.eye(3),
+            "half_extents_m": np.full(3, 0.002), "geom_id": 7, "geom_name": "finger", "source": "test",
+        },),
+        clearance=0.006, terminal_allowance_m=0.012, required_aperture_m=0.04,
+    )
+    assert details["status"] == "ok"
+    assert details["observed_point_count"] == 1
+    assert pixel == (44, 32)
+
+
+def test_oriented_box_rejects_point_inside_box_with_full_primitive_audit():
+    point = np.array((0.03, 0.0, 1.0))
+    rgb, depth, mask, calibration, _, pixel = _single_world_point_scene(point)
+    details = _hand_volume_obstruction(
+        depth=depth, mask=mask, K=np.asarray(calibration.intrinsic), T=np.asarray(calibration.world_from_camera),
+        contact=np.array((0.0, 0.0, 1.0)), grip_site=np.array((0.0, 0.0, 1.0)),
+        pregrasp=np.array((0.0, 0.0, 1.05)), rotation_world_grasp=np.eye(3), spheres=(),
+        boxes=({
+            "center_grasp_m": np.array((0.03, 0.0, 0.0)), "rotation_grasp_box": np.eye(3),
+            "half_extents_m": np.array((0.01, 0.01, 0.01)), "geom_id": 8, "geom_name": "palm", "source": "test",
+        },),
+        clearance=0.006, terminal_allowance_m=0.012, required_aperture_m=0.04,
+    )
+    assert details["status"] == "collision"
+    assert details["closest_pixel_uv"] == list(pixel)
+    assert details["primitive_type"] == "box"
+    assert details["geom_id"] == 8
+    assert details["primitive_half_extents_m"] == [0.01, 0.01, 0.01]
+    assert details["primitive_rotation_world_box"] == np.eye(3).tolist()
+
+
+def test_rotated_nonzero_center_box_and_current_robot_filter_are_applied():
+    angle = np.deg2rad(45.0)
+    box_rotation = np.array(((np.cos(angle), -np.sin(angle), 0.0), (np.sin(angle), np.cos(angle), 0.0), (0.0, 0.0, 1.0)))
+    point = np.array((0.025, 0.02, 1.0))
+    rgb, depth, mask, calibration, _, pixel = _single_world_point_scene(point)
+    box = {
+        "center_grasp_m": np.array((0.025, 0.02, 0.0)), "rotation_grasp_box": box_rotation,
+        "half_extents_m": np.array((0.01, 0.004, 0.01)), "geom_id": 9, "geom_name": "rotated", "source": "test",
+    }
+    kwargs = dict(
+        depth=depth, mask=mask, K=np.asarray(calibration.intrinsic), T=np.asarray(calibration.world_from_camera),
+        contact=np.array((0.0, 0.0, 1.0)), grip_site=np.array((0.0, 0.0, 1.0)),
+        pregrasp=np.array((0.0, 0.0, 1.05)), rotation_world_grasp=np.eye(3), spheres=(), boxes=(box,),
+        clearance=0.006, terminal_allowance_m=0.012, required_aperture_m=0.04,
+    )
+    collision = _hand_volume_obstruction(**kwargs)
+    assert collision["status"] == "collision"
+    assert collision["closest_pixel_uv"] == list(pixel)
+    current_box = {**box, "center_world_m": point, "rotation_world_box": box_rotation}
+    filtered = _hand_volume_obstruction(**kwargs, ignored_robot_boxes=(current_box,))
+    assert filtered["status"] == "no_observed_scene_after_robot_exclusion"

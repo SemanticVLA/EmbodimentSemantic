@@ -1235,6 +1235,7 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
     geom_sizes = getattr(model, "geom_size", None)
     geom_rbounds = getattr(model, "geom_rbound", None)
     collision_spheres: list[dict[str, Any]] = []
+    collision_boxes: list[dict[str, Any]] = []
     candidate_geom_ids = {int(left_pad_id), int(right_pad_id)}
     for geom_names in (
         ("gripper0_hand_collision", "hand_collision"),
@@ -1249,6 +1250,86 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
             candidate_geom_ids.add(int(resolved[0]))
     geom_name_resolver = getattr(model, "geom_id2name", None)
     model_geom_names = getattr(model, "names", {}).get("geom", ()) if isinstance(getattr(model, "names", {}), Mapping) else ()
+    unrepresented_collision_geoms: list[str] = []
+    collision_geom_ids: set[int] = set()
+    has_live_geom_metadata = (
+        geom_body_ids is not None and getattr(model, "geom_type", None) is not None
+    )
+
+    def geom_name_for(geom_id: int) -> str:
+        if callable(geom_name_resolver):
+            try:
+                return str(geom_name_resolver(int(geom_id)))
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
+        if int(geom_id) < len(model_geom_names):
+            return str(model_geom_names[int(geom_id)])
+        return str(geom_id)
+
+    def local_bounds_for_geom(geom_id: int) -> tuple[np.ndarray, np.ndarray, str] | None:
+        """Return compiled local center/half-extents for one live collision geom."""
+        sizes = np.asarray(geom_sizes, dtype=np.float64) if geom_sizes is not None else None
+        geom_type_values = getattr(model, "geom_type", None)
+        geom_data_values = getattr(model, "geom_dataid", None)
+        # MuJoCo's compiled mesh vertices are already in geom-local units.
+        # Use the mesh's enclosing AABB, retaining a non-zero extent even for
+        # a degenerate axis so the downstream box validator remains strict.
+        if geom_type_values is not None and geom_data_values is not None:
+            try:
+                geom_type = int(np.asarray(geom_type_values).reshape(-1)[geom_id])
+                mesh_id = int(np.asarray(geom_data_values).reshape(-1)[geom_id])
+            except (IndexError, TypeError, ValueError):
+                geom_type, mesh_id = -1, -1
+            mesh_vertices = getattr(model, "mesh_vert", None)
+            mesh_adrs = getattr(model, "mesh_vertadr", None)
+            mesh_counts = getattr(model, "mesh_vertnum", None)
+            if geom_type == 7 and mesh_vertices is not None and mesh_adrs is not None and mesh_counts is not None and mesh_id >= 0:
+                try:
+                    start = int(np.asarray(mesh_adrs).reshape(-1)[mesh_id])
+                    count = int(np.asarray(mesh_counts).reshape(-1)[mesh_id])
+                    all_vertices = np.asarray(mesh_vertices, dtype=np.float64).reshape(-1, 3)
+                    if start < 0 or count <= 0 or start + count > len(all_vertices):
+                        raise ValueError("compiled mesh vertex range is invalid")
+                    vertices = all_vertices[start:start + count]
+                except (IndexError, TypeError, ValueError):
+                    vertices = np.empty((0, 3), dtype=np.float64)
+                if len(vertices) and np.isfinite(vertices).all():
+                    local_center = (vertices.min(axis=0) + vertices.max(axis=0)) * 0.5
+                    half_extents = (vertices.max(axis=0) - vertices.min(axis=0)) * 0.5
+                    half_extents = np.maximum(half_extents, 1e-6)
+                    return local_center, half_extents, "compiled_mesh_vertices_aabb"
+            # A mesh must be represented by its compiled vertices (or by the
+            # explicit geom_rbound fallback below); do not silently infer a
+            # mesh box from geom_size, whose meaning is model-dependent.
+            if geom_type == 7:
+                return None
+            if sizes is not None:
+                try:
+                    size = sizes[geom_id].reshape(-1)
+                    if size.size >= 3 and np.isfinite(size[:3]).all():
+                        # MuJoCo primitive geom sizes are local half-extents
+                        # (sphere/capsule/cylinder use radius and half-length).
+                        if geom_type == 2:       # sphere
+                            extents = np.repeat(abs(float(size[0])), 3)
+                        elif geom_type == 3:     # capsule, local Z axis
+                            radius, half_length = abs(float(size[0])), abs(float(size[1]))
+                            extents = np.asarray((radius, radius, radius + half_length))
+                        elif geom_type == 4:     # ellipsoid
+                            extents = np.abs(size[:3])
+                        elif geom_type == 5:     # cylinder, local Z axis
+                            extents = np.asarray((abs(float(size[0])), abs(float(size[0])), abs(float(size[1]))))
+                        elif geom_type == 6:     # box
+                            extents = np.abs(size[:3])
+                        else:
+                            return None
+                        if np.all(np.isfinite(extents)) and np.all(extents > 0.0):
+                            return np.zeros(3, dtype=np.float64), extents, "mujoco_geom_size"
+                except (IndexError, TypeError, ValueError):
+                    pass
+        # If type metadata is unavailable, retain an explicit conservative
+        # sphere in the legacy sphere audit; no fabricated box is emitted.
+        return None
+
     if geom_body_ids is not None and geom_positions is not None:
         body_ids = np.asarray(geom_body_ids).reshape(-1)
         for geom_id, body_id in enumerate(body_ids):
@@ -1266,6 +1347,7 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
                 conaffinity = int(np.asarray(conaffinities).reshape(-1)[geom_id])
                 if contype == 0 and conaffinity == 0:
                     continue
+            collision_geom_ids.add(int(geom_id))
             center_world = np.asarray(geom_positions[geom_id], dtype=np.float64).reshape(-1)
             if center_world.shape != (3,) or not np.isfinite(center_world).all():
                 continue
@@ -1276,29 +1358,75 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
                 radius = float(np.linalg.norm(size[:3])) if size.size >= 3 else float("nan")
             else:
                 radius = float("nan")
-            if not np.isfinite(radius) or radius < 0.0:
-                continue
+            radius_valid = bool(np.isfinite(radius) and radius >= 0.0)
             center_site = site_rotation.T @ (center_world - midpoint)
             center_grasp = grasp_to_grip_site @ center_site
-            if callable(geom_name_resolver):
+            geom_name = geom_name_for(geom_id)
+            if radius_valid:
+                collision_spheres.append({
+                    "center_grasp_m": center_grasp.tolist(),
+                    "radius_m": radius,
+                    "geom_id": int(geom_id),
+                    "geom_name": geom_name,
+                })
+            geom_rotation_values = getattr(data, "geom_xmat", None)
+            if geom_rotation_values is not None:
                 try:
-                    geom_name = str(geom_name_resolver(int(geom_id)))
-                except (KeyError, IndexError, TypeError, ValueError):
-                    geom_name = str(geom_id)
-            elif int(geom_id) < len(model_geom_names):
-                geom_name = str(model_geom_names[int(geom_id)])
-            else:
-                geom_name = str(geom_id)
-            collision_spheres.append({
-                "center_grasp_m": center_grasp.tolist(),
-                "radius_m": radius,
-                "geom_id": int(geom_id),
-                "geom_name": geom_name,
-            })
+                    geom_rotation = np.asarray(geom_rotation_values[geom_id], dtype=np.float64).reshape(3, 3)
+                except (IndexError, TypeError, ValueError):
+                    geom_rotation = None
+                if geom_rotation is not None and np.all(np.isfinite(geom_rotation)) and np.allclose(geom_rotation.T @ geom_rotation, np.eye(3), atol=1e-5) and np.isclose(np.linalg.det(geom_rotation), 1.0, atol=1e-5):
+                    bounds = local_bounds_for_geom(geom_id)
+                    if bounds is not None:
+                        local_center, half_extents, bounds_source = bounds
+                        center_with_local_offset = center_world + geom_rotation @ local_center
+                        box_center = grasp_to_grip_site @ (site_rotation.T @ (center_with_local_offset - midpoint))
+                        box_rotation = grasp_to_grip_site @ (site_rotation.T @ geom_rotation)
+                        collision_boxes.append({
+                            "center_grasp_m": box_center.tolist(),
+                            "rotation_grasp_box": box_rotation.tolist(),
+                            "half_extents_m": half_extents.tolist(),
+                            "geom_id": int(geom_id),
+                            "geom_name": geom_name,
+                            "source": bounds_source,
+                        })
+                    elif has_live_geom_metadata:
+                        # The sphere audit is retained for diagnostics, but
+                        # live consumers prefer complete AABB coverage.  A
+                        # verified MuJoCo rbound is a conservative fallback;
+                        # otherwise fail closed below instead of dropping a
+                        # palm/finger collision piece silently.
+                        if geom_rbounds is not None:
+                            try:
+                                fallback_radius = float(np.asarray(geom_rbounds).reshape(-1)[geom_id])
+                            except (IndexError, TypeError, ValueError):
+                                fallback_radius = float("nan")
+                            if np.isfinite(fallback_radius) and fallback_radius > 0.0:
+                                collision_boxes.append({
+                                    "center_grasp_m": center_grasp.tolist(),
+                                    "rotation_grasp_box": (grasp_to_grip_site @ (site_rotation.T @ geom_rotation)).tolist(),
+                                    "half_extents_m": np.repeat(fallback_radius, 3).tolist(),
+                                    "geom_id": int(geom_id),
+                                    "geom_name": geom_name,
+                                    "source": "verified_geom_rbound_sphere_box",
+                                })
+                            else:
+                                unrepresented_collision_geoms.append(geom_name)
+                        else:
+                            unrepresented_collision_geoms.append(geom_name)
         except (IndexError, TypeError, ValueError):
             continue
     if not collision_spheres:
         raise RuntimeError("Panda calibration probe found no finite hand collision geometry")
+    if has_live_geom_metadata:
+        represented_box_ids = {int(item["geom_id"]) for item in collision_boxes}
+        missing_box_ids = sorted(collision_geom_ids - represented_box_ids)
+        unrepresented_collision_geoms.extend(geom_name_for(geom_id) for geom_id in missing_box_ids)
+    if unrepresented_collision_geoms:
+        raise RuntimeError(
+            "Panda calibration probe could not conservatively represent collision geoms: "
+            + ", ".join(sorted(set(unrepresented_collision_geoms)))
+        )
     record = dict(record)
     record["gripper_geometry"] = {
         "left_body": left_name, "right_body": right_name,
@@ -1322,18 +1450,22 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
         "current_grip_site_world_m": site.tolist(),
         "current_rotation_world_grip_site": site_rotation.tolist(),
         "hand_collision_spheres_grasp": collision_spheres,
+        "hand_collision_boxes_grasp": collision_boxes,
         "hand_collision_geom_count": len(collision_spheres),
         "hand_collision_geom_names": [item["geom_name"] for item in collision_spheres],
+        "hand_collision_box_count": len(collision_boxes),
+        "hand_collision_box_names": [item["geom_name"] for item in collision_boxes],
         "source": "no_motion_mujoco_contact_pad_geom_probe",
     }
     calibration = RobotGraspCalibration(
         grasp_to_grip_site=grasp_to_grip_site, contact_to_grip_site_m=contact_offset_grasp,
          max_aperture_m=max(0.005, usable_aperture * 0.98),
-        calibration_source="panda_grip_site_frame_and_contact_pad_probe_no_motion",
-        calibration_sha256=str(record.get("calibration_sha256") or ""),
-        current_grip_site_world_m=site,
-        current_rotation_world_grip_site=site_rotation,
-        hand_collision_spheres_grasp=collision_spheres,
+         calibration_source="panda_grip_site_frame_and_contact_pad_probe_no_motion",
+         calibration_sha256=str(record.get("calibration_sha256") or ""),
+         current_grip_site_world_m=site,
+         current_rotation_world_grip_site=site_rotation,
+         hand_collision_spheres_grasp=collision_spheres,
+         hand_collision_boxes_grasp=collision_boxes,
     )
     setattr(env, "_molmo_sam3_robot_calibration_probe", record)
     return calibration, transform, record
@@ -1497,24 +1629,81 @@ def _perform_observation_hover(
         except ImportError:  # pragma: no cover - direct script use
             import run_arrow_pick_place_eval as episode
         observed_world = _deproject_capture(capture, source_uv)
-        hover = observed_world + np.asarray((0.0, 0.0, OBSERVATION_HOVER_OFFSET_M), dtype=np.float64)
+        # Derive the same arrow-seeded RGB-D support used by the experimental
+        # worker and use its observed world-Z upper quantile for clearance.
+        # This remains image/depth/calibration evidence only; no simulator or
+        # object pose is consulted.
+        try:
+            from .rgbd_region import derive_observed_region_mask
+        except ImportError:  # pragma: no cover - direct script use
+            from rgbd_region import derive_observed_region_mask
+        region_mask, region_audit = derive_observed_region_mask(
+            capture, source_uv, profile_target_world=observed_world,
+        )
+        depth = np.asarray(capture.metric_depth, dtype=np.float64)
+        calibration = capture.calibration
+        K = np.asarray(calibration.intrinsic, dtype=np.float64)
+        T = np.asarray(calibration.world_from_camera, dtype=np.float64)
+        ys, xs = np.nonzero(np.asarray(region_mask, dtype=bool))
+        if len(xs) == 0:
+            raise RuntimeError("observation hover region has no RGB-D support")
+        depths = depth[ys, xs]
+        valid = np.isfinite(depths) & (depths > 0.0)
+        if not np.any(valid):
+            raise RuntimeError("observation hover region has no valid metric depth")
+        xs_valid, ys_valid, z_valid = xs[valid].astype(np.float64), ys[valid].astype(np.float64), depths[valid]
+        camera_points = np.column_stack(((xs_valid - K[0, 2]) * z_valid / K[0, 0],
+                                         (ys_valid - K[1, 2]) * z_valid / K[1, 1], z_valid))
+        world_points = (T[:3, :3] @ camera_points.T).T + T[:3, 3]
+        world_z = world_points[:, 2]
+        world_z = world_z[np.isfinite(world_z)]
+        if world_z.size == 0:
+            raise RuntimeError("observation hover region has no finite world-Z support")
+        region_q90_world_z = float(np.percentile(world_z, 90.0))
+        anchor_z = float(observed_world[2])
+        hover_z = max(anchor_z, region_q90_world_z) + OBSERVATION_HOVER_OFFSET_M
+        hover = np.asarray((observed_world[0], observed_world[1], hover_z), dtype=np.float64)
+        observation = episode._raw_observation(env)
+        proprio = episode._proprioception(observation)
+        current = np.asarray(proprio.get("eef_pos"), dtype=np.float64).reshape(-1)
+        held_rotation = np.asarray(proprio.get("eef_quat"), dtype=np.float64).reshape(-1)
+        if current.shape != (3,) or not np.all(np.isfinite(current)):
+            raise RuntimeError("observation hover lacks finite current EEF position")
+        if held_rotation.size not in (3, 4, 9) or not np.all(np.isfinite(held_rotation)):
+            raise RuntimeError("observation hover lacks finite EEF orientation proprioception")
+        clearance_z = max(float(current[2]), hover_z)
+        raise_waypoint = episode._pose_waypoint((current[0], current[1], clearance_z), held_rotation)
+        translate_waypoint = episode._pose_waypoint((observed_world[0], observed_world[1], clearance_z), held_rotation)
+        lower_waypoint = episode._pose_waypoint(hover, held_rotation)
+        episode.validate_workspace_points({
+            "hover_raise": raise_waypoint["position"],
+            "hover_translate": translate_waypoint["position"],
+            "hover_lower": lower_waypoint["position"],
+        })
         if not np.all(np.isfinite(hover)) or hover[2] > 1.75:
             raise RuntimeError("observation hover lies outside the calibrated workspace")
-        observation = episode._raw_observation(env)
-        waypoints = np.tile(hover, (6, 1))
+        waypoints = {
+            "hover_raise": raise_waypoint,
+            "hover_translate": translate_waypoint,
+            "hover_lower": lower_waypoint,
+        }
         budget = getattr(env, "_molmo_sam3_action_budget", None)
         prior_actions = int(getattr(env, "_molmo_sam3_action_count", 0))
-        hover_budget = min(160, max(0, 1200 - prior_actions))
-        if budget is not None:
-            hover_budget = min(160, int(budget.remaining))
-        if hover_budget <= 0:
+        remaining = int(budget.remaining) if budget is not None else max(0, 1200 - prior_actions)
+        if remaining <= 0:
             raise RuntimeError("1200-action budget exhausted before observation hover")
+        policies = {name: dict(policy) for name, policy in (motion_settings or {}).get("phase_policies", {}).items()}
+        staging_policy = policies.get("pregrasp", {"tolerance_m": 0.015})
+        for name in ("hover_raise", "hover_translate", "hover_lower"):
+            policies[name] = {"role": "experimental_hover", "tolerance_m": float(staging_policy.get("tolerance_m", 0.015))}
         phases = episode._run_motion(
             env, waypoints, observation,
             phase_timeout_steps=int((motion_settings or {}).get("phase_timeout_steps", 160)),
             gripper_dwell_steps=int((motion_settings or {}).get("gripper_dwell_steps", 20)),
-            stop_after_phase="pregrasp", dry_run=False,
-            action_budget=budget if budget is not None else hover_budget,
+            stop_after_phase="hover_lower", start_phase="hover_raise", dry_run=False,
+            phase_order=("hover_raise", "hover_translate", "hover_lower"),
+            phase_timeout_steps_by_phase={name: 160 for name in ("hover_raise", "hover_translate", "hover_lower")},
+            action_budget=budget if budget is not None else remaining,
             motion_started_callback=motion_started_callback,
             motion_trace_path=output_dir / "observation_hover_trace.json",
             motion_trace_segment="observation_hover",
@@ -1523,12 +1712,17 @@ def _perform_observation_hover(
             stall_window_steps=0,
             stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
             osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
-            phase_policies=(motion_settings or {}).get("phase_policies"),
+            phase_policies=policies,
         )
         audit = {
             "status": "completed",
             "hover_world_m": hover.tolist(),
             "source_world_m": observed_world.tolist(),
+            "anchor_world_z_m": anchor_z,
+            "region_q90_world_z_m": region_q90_world_z,
+            "region_area_px": int(np.count_nonzero(region_mask)),
+            "region_audit": region_audit,
+            "clearance_z_m": clearance_z,
             "steps": int(sum(int(item.get("steps", 0)) for item in phases)),
             "phase_statuses": [{"phase": item.get("phase"), "status": item.get("status")} for item in phases],
             "fixed_offset_m": OBSERVATION_HOVER_OFFSET_M,

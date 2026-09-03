@@ -1,5 +1,79 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Experimental repair3 preparation — 2026-09-03
+
+Fresh scheduler audit: **2026-09-03 19:33:31 UTC**. No Molmo campaign is
+running; unrelated job 1918812 is pending and is outside this experiment.
+The user authorized continued evidence-driven fixes and Legion relaunches
+without further confirmation until improvement. A thread follow-up checks
+every ten minutes and continues work; it must not duplicate active jobs.
+
+Repair3 changes only the shared observation route/height and robot hand-volume
+representation: rise, translate, then lower above upper observed RGB-D support;
+replace coarse collision spheres with oriented bounds enclosing the actual
+robot collision geometry. Clearance, aperture, action limits, candidate policy,
+model, seeds, evaluator and simulator remain unchanged. This is an exploratory
+combined integration repair, not a prompt-effect estimate. Use the four-cell
+repair gate before allowing the existing six-arm screen and finalist extension.
+Pre-launch targeted validation: **39 passed** across geometry, episode adapter,
+campaign and frozen-controller isolation tests. Independent tester confirmed
+rotated-box rejection, malformed geometry rejection, staged hover execution and
+phase bounds. An existing timeout-message discrepancy is diagnostic only; the
+configured action bound is enforced and both limits are 160 in this campaign.
+
+Historical matching-cell comparison was verified from archived matrix files:
+both jobs **1914768 and 1917528 scored 3/12** on tasks 4/6/9, seeds 1000/1001,
+both suites (vanilla 1/6, sealed_randomized 2/6). Both had zero successes on
+the four vanilla T4/T6 repair-gate cells. Historical source identities are
+`06aa8fe7e520549b550ee5f7507237968001776c` and
+`d32e72ffbe0b905af1e1dc14b6afe53aaa487472` respectively, with the same canonical
+v9d configuration hash `60f4f5f9ecfde7b4830f376ab06cfc706e2ef175d86817c42a0adb7cddd46c0c`.
+The complete historical scores remain 15/60 and 14/60. None is a same-commit
+comparison with the experimental treatments. Every failed revision remains
+in the records below and in its immutable archive.
+
+## Experimental v9d + Molmo repair campaign — 2026-09-03
+
+Scoped status audit: **2026-09-03 16:51:05 UTC**. Legion job **1919010** is
+**finished, `stopped_repair_gate`, exit 2**; it ended at 16:02:43 UTC on
+compute-3-12 (one NVIDIA A40). The first dense-agentview arm recorded **zero
+successes and retained lifts in four terminal trial cells**. No grasp candidate
+was executed. T4 seeds 1000/1001 completed hover, but all 144 candidates per cell
+were rejected (90/36 obstruction rejections and 54/108 aperture rejections).
+Molmo returned 4/3 points respectively. Both T6 hovers exceeded 160 steps,
+ending 34.9/58.7 mm from their targets. The remaining five arms and finalist
+extensions did not run. Archival is VERIFIED. Runtime CUDA/package/exact-commit
+checks passed, but usable physical motion remains unproven.
+Executed source is immutable commit
+`709a29bdf473e2a7edb255da5cd33430a119cfe0`, label
+`v9d_molmo_repair2_709a29b`. It uses the v9d RGB-D region backend and pinned
+`allenai/MolmoPoint-8B` revision `188130f961c8e0888a34e11121a1423c461a01ba`,
+without SAM. The frozen baseline remains
+`fd24a4c5cf8da4991013ab18b15704523ad0836b`.
+
+Repairs preserve explicit candidate pregrasp, forward v9d motion settings,
+stage rotation at clearance, restore immediate empty-close detection, refresh
+robot calibration before proposals, rank using live pose with stable jaw-symmetry
+identities, and check observed hand volumes. **34 targeted tests passed** and
+the focused independent review approved the gated launch.
+
+The single A40 job first runs the existing four vanilla T4/T6 cells (seeds
+1000/1001). It continues only when all observation hovers complete and each task
+has at least one completed close/lift. It then completes the same six-arm
+12-cell screens and extends the best two eligible arms to 60 cells each without
+repeating matching cells. This is a runtime integration gate, not evidence of
+task success. No default promotion is authorized.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_repair2_709a29b_1919010/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_repair2_709a29b_1919010`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919010.out`.
+
+Previous job `1918783` at `1a42f70ac1270dcb949b161a9e7e517238699f93` ended
+`no_executable_arm`: 24 terminal cells out of 72 planned screen cells, zero
+successes and retained lifts. Its shared motion failures cannot rank prompts.
+Its raw results remain archived. These records exist only in the experimental
+worktree; the original checkout's user-edited ledgers were not changed.
+
 This is the human-readable source of truth for the active SmolVLA LoRA
 experiments. Its machine-readable companion is
 `evaluation_results_tracker.json`. **Both files must always describe the same

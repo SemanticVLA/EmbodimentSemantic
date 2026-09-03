@@ -122,6 +122,7 @@ class RobotGraspCalibration:
     current_grip_site_world_m: ArrayLike | None = None
     current_rotation_world_grip_site: ArrayLike | None = None
     hand_collision_spheres_grasp: Sequence[Any] | None = None
+    hand_collision_boxes_grasp: Sequence[Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -251,7 +252,7 @@ def _validate_robot(robot: RobotGraspCalibration) -> tuple[np.ndarray, np.ndarra
 
 def _validate_live_robot_geometry(
     robot: RobotGraspCalibration,
-) -> tuple[np.ndarray | None, np.ndarray | None, tuple[tuple[np.ndarray, float], ...]]:
+) -> tuple[np.ndarray | None, np.ndarray | None, tuple[tuple[np.ndarray, float], ...], tuple[dict[str, Any], ...]]:
     """Validate optional live-pose and contact-relative hand primitives."""
     current_position = None
     current_rotation = None
@@ -292,7 +293,29 @@ def _validate_live_robot_geometry(
         if not np.isfinite(radius) or radius < 0:
             raise ValueError(f"hand_collision_spheres_grasp[{index}].radius must be finite and non-negative")
         spheres.append((center, radius))
-    return current_position, current_rotation, tuple(spheres)
+    boxes: list[dict[str, Any]] = []
+    raw_boxes = robot.hand_collision_boxes_grasp
+    for index, item in enumerate(() if raw_boxes is None else raw_boxes):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"hand_collision_boxes_grasp[{index}] must be a mapping")
+        center = _finite_vector(item.get("center_grasp_m"), 3, f"hand_collision_boxes_grasp[{index}].center_grasp_m")
+        rotation_value = np.asarray(item.get("rotation_grasp_box"), dtype=np.float64)
+        if rotation_value.shape != (3, 3) or not np.all(np.isfinite(rotation_value)):
+            raise ValueError(f"hand_collision_boxes_grasp[{index}].rotation_grasp_box must be a finite 3x3 matrix")
+        if not np.allclose(rotation_value.T @ rotation_value, np.eye(3), atol=1e-5) or not np.isclose(np.linalg.det(rotation_value), 1.0, atol=1e-5):
+            raise ValueError(f"hand_collision_boxes_grasp[{index}].rotation_grasp_box must be proper orthonormal")
+        half_extents = _finite_vector(item.get("half_extents_m"), 3, f"hand_collision_boxes_grasp[{index}].half_extents_m")
+        if np.any(half_extents <= 0):
+            raise ValueError(f"hand_collision_boxes_grasp[{index}].half_extents_m must be strictly positive")
+        boxes.append({
+            "center_grasp_m": center,
+            "rotation_grasp_box": rotation_value,
+            "half_extents_m": half_extents,
+            "geom_id": item.get("geom_id"),
+            "geom_name": item.get("geom_name"),
+            "source": item.get("source"),
+        })
+    return current_position, current_rotation, tuple(spheres), tuple(boxes)
 
 
 def _boundary(mask: np.ndarray) -> np.ndarray:
@@ -551,6 +574,57 @@ def _current_hand_world_spheres(
     return tuple((current_contact + current_grasp @ center, radius) for center, radius in spheres)
 
 
+def _hand_world_boxes(
+    contact: np.ndarray,
+    rotation_world_grasp: np.ndarray,
+    boxes: tuple[dict[str, Any], ...],
+) -> tuple[dict[str, Any], ...]:
+    """Transform contact-relative oriented boxes into world coordinates."""
+    result: list[dict[str, Any]] = []
+    for box in boxes:
+        result.append({
+            **box,
+            "center_world_m": contact + rotation_world_grasp @ box["center_grasp_m"],
+            "rotation_world_box": rotation_world_grasp @ box["rotation_grasp_box"],
+        })
+    return tuple(result)
+
+
+def _current_hand_world_boxes(
+    current_grip: np.ndarray,
+    current_rotation_grip: np.ndarray,
+    grasp_to_grip: np.ndarray,
+    contact_offset: np.ndarray,
+    boxes: tuple[dict[str, Any], ...],
+) -> tuple[dict[str, Any], ...]:
+    current_grasp = current_rotation_grip @ grasp_to_grip.T
+    current_contact = current_grip - current_grasp @ contact_offset
+    return _hand_world_boxes(current_contact, current_grasp, boxes)
+
+
+def _point_box_signed_clearance(
+    point_world: np.ndarray,
+    center_world: np.ndarray,
+    rotation_world_box: np.ndarray,
+    half_extents: np.ndarray,
+) -> float:
+    """Signed distance to an OBB: positive outside, negative inside."""
+    return float(_points_box_signed_clearance(point_world[None, :], center_world, rotation_world_box, half_extents)[0])
+
+
+def _points_box_signed_clearance(
+    points_world: np.ndarray,
+    center_world: np.ndarray,
+    rotation_world_box: np.ndarray,
+    half_extents: np.ndarray,
+) -> np.ndarray:
+    """Vectorized signed distances for points against one oriented box."""
+    local = (points_world - center_world[None, :]) @ rotation_world_box
+    delta = np.abs(local) - half_extents[None, :]
+    outside = np.maximum(delta, 0.0)
+    return np.linalg.norm(outside, axis=1) + np.minimum(np.max(delta, axis=1), 0.0)
+
+
 def _hand_volume_obstruction(
     *,
     depth: np.ndarray,
@@ -565,7 +639,11 @@ def _hand_volume_obstruction(
     clearance: float,
     terminal_allowance_m: float,
     required_aperture_m: float,
+    boxes: tuple[dict[str, Any], ...] = (),
     ignored_robot_spheres: tuple[tuple[np.ndarray, float], ...] = (),
+    ignored_robot_boxes: tuple[dict[str, Any], ...] = (),
+    observed_worlds: np.ndarray | None = None,
+    observed_pixels_vu: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Check a swept, contact-relative hand envelope against observed RGB-D.
 
@@ -573,8 +651,11 @@ def _hand_volume_obstruction(
     ``terminal_allowance_m`` of the selected contact and at the terminal end
     of the approach are allowed; this preserves bowl/scene collision checks.
     """
-    pixels = np.column_stack(np.nonzero(_valid_depth(depth)))
-    worlds, kept = _support_points(pixels, depth, K, T)
+    if observed_worlds is None or observed_pixels_vu is None:
+        pixels = np.column_stack(np.nonzero(_valid_depth(depth)))
+        worlds, kept = _support_points(pixels, depth, K, T)
+    else:
+        worlds, kept = observed_worlds, observed_pixels_vu
     if len(worlds) == 0:
         return {
             "status": "no_observed_scene",
@@ -590,6 +671,10 @@ def _hand_volume_obstruction(
     keep = np.ones(len(worlds), dtype=bool)
     for center, radius in ignored_robot_spheres:
         keep &= np.linalg.norm(worlds - center[None, :], axis=1) > radius + clearance
+    for box in ignored_robot_boxes:
+        keep &= _points_box_signed_clearance(
+            worlds, box["center_world_m"], box["rotation_world_box"], box["half_extents_m"]
+        ) > clearance
     worlds = worlds[keep]
     kept = kept[keep]
     if len(worlds) == 0:
@@ -607,47 +692,68 @@ def _hand_volume_obstruction(
     sample_count = max(2, int(np.ceil(path_length / 0.01)) + 1)
     nearest: dict[str, Any] | None = None
     nearest_gap = float("inf")
+    primitives: list[tuple[str, Any]] = [("sphere", sphere) for sphere in spheres]
+    primitives.extend(("box", box) for box in _hand_world_boxes(contact, rotation_world_grasp, boxes))
     for sample_index, t in enumerate(np.linspace(0.0, 1.0, sample_count)):
         # At t=1 the hand is in its contact-relative terminal pose.  The
         # selected pregrasp is the same orientation translated along approach.
         translation = direction * (1.0 - float(t))
-        for primitive_index, (center_grasp, radius) in enumerate(spheres):
-            center = contact + rotation_world_grasp @ center_grasp + translation
-            distances = np.linalg.norm(worlds - center[None, :], axis=1)
-            order = np.argsort(distances)
-            for point_index in order:
-                point_index = int(point_index)
+        for primitive_index, (primitive_type, primitive) in enumerate(primitives):
+            if primitive_type == "sphere":
+                center_grasp, radius = primitive
+                center = contact + rotation_world_grasp @ center_grasp + translation
+                distances = np.linalg.norm(worlds - center[None, :], axis=1)
+                signed_clearances = distances - radius
+                rotation_box = None
+                half_extents = None
+            else:
+                box = primitive
+                center = box["center_world_m"] + translation
+                rotation_box = box["rotation_world_box"]
+                half_extents = box["half_extents_m"]
+                signed_clearances = _points_box_signed_clearance(
+                    worlds, center, rotation_box, half_extents
+                )
+                distances = signed_clearances
+            target_allowance = (
+                mask[kept[:, 0], kept[:, 1]]
+                & (t >= 0.75)
+                & (np.linalg.norm(worlds - contact[None, :], axis=1) <= terminal_allowance_m)
+            )
+            eligible_gap = np.where(target_allowance, np.inf, signed_clearances)
+            nearest_index = int(np.argmin(eligible_gap))
+            if np.isfinite(eligible_gap[nearest_index]) and float(eligible_gap[nearest_index]) < nearest_gap:
+                nearest_gap = float(eligible_gap[nearest_index])
+                nearest = {
+                    "closest_distance_m": float(distances[nearest_index]),
+                    "clearance_m": nearest_gap,
+                    "distance_m": float(distances[nearest_index]),
+                    "closest_world_m": worlds[nearest_index].tolist(),
+                    "closest_offending_world_m": worlds[nearest_index].tolist(),
+                    "closest_pixel_uv": [int(kept[nearest_index, 1]), int(kept[nearest_index, 0])],
+                    "closest_offending_pixel_uv": [int(kept[nearest_index, 1]), int(kept[nearest_index, 0])],
+                    "primitive_index": primitive_index,
+                    "primitive_center_world_m": center.tolist(),
+                    "primitive_radius_m": (float(radius) if primitive_type == "sphere" else None),
+                    "primitive_type": primitive_type,
+                    "primitive_half_extents_m": (half_extents.tolist() if primitive_type == "box" else None),
+                    "primitive_rotation_world_box": (rotation_box.tolist() if primitive_type == "box" else None),
+                    "primitive_rotation_grasp_box": (primitive.get("rotation_grasp_box").tolist() if primitive_type == "box" else None),
+                    "geom_id": (primitive.get("geom_id") if primitive_type == "box" else None),
+                    "geom_name": (primitive.get("geom_name") if primitive_type == "box" else None),
+                    "source": (primitive.get("source") if primitive_type == "box" else None),
+                    "segment": "pregrasp_to_contact",
+                    "segment_sample_index": sample_index,
+                    "segment_sample_count": sample_count,
+                    "segment_fraction": float(t),
+                    "threshold_m": float(clearance),
+                    "aperture_m": float(required_aperture_m),
+                }
+            collision_indices = np.flatnonzero((signed_clearances <= clearance) & ~target_allowance)
+            if len(collision_indices):
+                point_index = int(collision_indices[np.argmin(signed_clearances[collision_indices])])
                 distance = float(distances[point_index])
-                gap = distance - radius
-                v, u = kept[point_index]
-                target_allowance = bool(mask[int(v), int(u)] and t >= 0.75 and np.linalg.norm(worlds[point_index] - contact) <= terminal_allowance_m)
-                if target_allowance:
-                    # An intended terminal contact is not an obstruction and
-                    # must not lower the successful candidate's clearance.
-                    continue
-                if gap < nearest_gap:
-                    nearest_gap = gap
-                    nearest = {
-                        "closest_distance_m": distance,
-                        "clearance_m": gap,
-                        "distance_m": distance,
-                        "closest_world_m": worlds[point_index].tolist(),
-                        "closest_offending_world_m": worlds[point_index].tolist(),
-                        "closest_pixel_uv": [int(kept[point_index, 1]), int(kept[point_index, 0])],
-                        "closest_offending_pixel_uv": [int(kept[point_index, 1]), int(kept[point_index, 0])],
-                        "primitive_index": primitive_index,
-                        "primitive_center_world_m": center.tolist(),
-                        "primitive_radius_m": float(radius),
-                        "segment": "pregrasp_to_contact",
-                        "segment_sample_index": sample_index,
-                        "segment_sample_count": sample_count,
-                        "segment_fraction": float(t),
-                        "threshold_m": float(clearance),
-                        "aperture_m": float(required_aperture_m),
-                    }
-                if distance > radius + clearance:
-                    # Remaining points are farther from this primitive.
-                    break
+                gap = float(signed_clearances[point_index])
                 # Report this actual blocking point, rather than an earlier
                 # target-mask point that was allowed at terminal contact.
                 details = {
@@ -660,21 +766,26 @@ def _hand_volume_obstruction(
                     "closest_offending_pixel_uv": [int(kept[point_index, 1]), int(kept[point_index, 0])],
                     "primitive_index": primitive_index,
                     "primitive_center_world_m": center.tolist(),
-                    "primitive_radius_m": float(radius),
+                    "primitive_radius_m": (float(radius) if primitive_type == "sphere" else None),
+                    "primitive_type": primitive_type,
+                    "primitive_half_extents_m": (half_extents.tolist() if primitive_type == "box" else None),
+                    "primitive_rotation_world_box": (rotation_box.tolist() if primitive_type == "box" else None),
+                    "primitive_rotation_grasp_box": (primitive.get("rotation_grasp_box").tolist() if primitive_type == "box" else None),
+                    "geom_id": (primitive.get("geom_id") if primitive_type == "box" else None),
+                    "geom_name": (primitive.get("geom_name") if primitive_type == "box" else None),
+                    "source": (primitive.get("source") if primitive_type == "box" else None),
                     "segment": "pregrasp_to_contact",
                     "segment_sample_index": sample_index,
                     "segment_sample_count": sample_count,
                     "segment_fraction": float(t),
                     "threshold_m": float(clearance),
                     "aperture_m": float(required_aperture_m),
-                }
-                details.update({
                     "status": "collision",
                     "target_mask_terminal_allowance_m": float(terminal_allowance_m),
                     "target_mask_allowed": False,
                     "observed_point_count": int(len(worlds)),
                     "ignored_robot_point_count": int(np.count_nonzero(~keep)),
-                })
+                }
                 return details
     details = dict(nearest or {})
     details.update({
@@ -725,11 +836,22 @@ def generate_grasp_candidates(
             raise ValueError("rgb and RGB-D depth must share original image height and width")
     K, T = _validate_camera(calibration, depth.shape)
     R_ge, contact_offset, approach, workspace_min, workspace_max = _validate_robot(robot_calibration)
-    current_grip, current_rotation, hand_spheres = _validate_live_robot_geometry(robot_calibration)
+    current_grip, current_rotation, hand_spheres, hand_boxes = _validate_live_robot_geometry(robot_calibration)
     live_motion_available = current_grip is not None and current_rotation is not None
     ignored_robot_spheres: tuple[tuple[np.ndarray, float], ...] = ()
-    if live_motion_available and hand_spheres:
-        ignored_robot_spheres = _current_hand_world_spheres(current_grip, current_rotation, R_ge, contact_offset, hand_spheres)
+    ignored_robot_boxes: tuple[dict[str, Any], ...] = ()
+    # Live oriented boxes are preferred over spheres, never unioned with them.
+    collision_boxes = hand_boxes
+    collision_spheres = () if collision_boxes else hand_spheres
+    observed_worlds: np.ndarray | None = None
+    observed_pixels_vu: np.ndarray | None = None
+    if config.obstruction_clearance_m is not None and (collision_spheres or collision_boxes):
+        observed_pixels_vu = np.column_stack(np.nonzero(_valid_depth(depth)))
+        observed_worlds, observed_pixels_vu = _support_points(observed_pixels_vu, depth, K, T)
+    if live_motion_available and collision_spheres:
+        ignored_robot_spheres = _current_hand_world_spheres(current_grip, current_rotation, R_ge, contact_offset, collision_spheres)
+    if live_motion_available and collision_boxes:
+        ignored_robot_boxes = _current_hand_world_boxes(current_grip, current_rotation, R_ge, contact_offset, collision_boxes)
     if not np.isfinite(config.terminal_contact_allowance_m) or config.terminal_contact_allowance_m < 0:
         raise ValueError("terminal_contact_allowance_m must be finite and non-negative")
     valid = _valid_depth(depth)
@@ -840,7 +962,7 @@ def generate_grasp_candidates(
                     if config.obstruction_clearance_m is not None:
                         if config.obstruction_clearance_m < 0 or not np.isfinite(config.obstruction_clearance_m):
                             raise ValueError("obstruction_clearance_m must be finite and non-negative")
-                        if hand_spheres:
+                        if collision_spheres or collision_boxes:
                             obstruction_details = _hand_volume_obstruction(
                                 depth=depth,
                                 mask=mask,
@@ -850,11 +972,15 @@ def generate_grasp_candidates(
                                 grip_site=grip_site,
                                 pregrasp=pregrasp,
                                 rotation_world_grasp=grasp_frame,
-                                spheres=hand_spheres,
+                                spheres=collision_spheres,
+                                boxes=collision_boxes,
                                 clearance=float(config.obstruction_clearance_m),
                                 terminal_allowance_m=float(config.terminal_contact_allowance_m),
                                 required_aperture_m=required_aperture,
                                 ignored_robot_spheres=ignored_robot_spheres,
+                                ignored_robot_boxes=ignored_robot_boxes,
+                                observed_worlds=observed_worlds,
+                                observed_pixels_vu=observed_pixels_vu,
                             )
                         else:
                             obstruction_details = _obstruction_clearance(depth, mask, K, T, pregrasp, grip_site, float(config.obstruction_clearance_m))
@@ -967,7 +1093,8 @@ def generate_grasp_candidates(
             "candidate_grid_size": len(seeds) * len(config.yaw_offsets_deg) * len(config.insertion_depths_m),
             "returned_count": len(candidates),
             "current_pose_available": live_motion_available,
-            "hand_collision_sphere_count": len(hand_spheres),
+            "hand_collision_sphere_count": len(collision_spheres),
+            "hand_collision_box_count": len(collision_boxes),
             "terminal_contact_allowance_m": float(config.terminal_contact_allowance_m),
         },
     )
