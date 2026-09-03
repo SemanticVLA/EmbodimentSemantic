@@ -17,6 +17,9 @@
 #   V9D_MOLMO_RUNTIME_ROOT    persistent runtime root under $HOME by default
 #   V9D_MOLMO_ARCHIVE_ROOT    persistent archive root under $HOME by default
 #   V9D_MOLMO_MOTION_PROBE    1 selects the paired 24-cell placement diagnostic
+#   V9D_MOLMO_ARMS            comma-separated existing screen arm names
+#   V9D_MOLMO_OBSERVATION_PROFILE baseline (default) or hover20mm
+#   V9D_MOLMO_SCREEN_ONLY     1 disables any 60-cell extension
 
 #SBATCH --job-name=v9d_molmo_campaign
 #SBATCH --partition=gpu_a40
@@ -245,6 +248,9 @@ model_load_owner=run_v9d_molmo_campaign.py
 model_load_count_expected=1
 repair_gate=${V9D_MOLMO_REPAIR_GATE:-0}
 motion_probe=${V9D_MOLMO_MOTION_PROBE:-0}
+selected_arms=${V9D_MOLMO_ARMS:-all}
+observation_profile=${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}
+screen_only=${V9D_MOLMO_SCREEN_ONLY:-0}
 EOF
 
 campaign_args=(--output-dir "$OUTPUT_ROOT" --label "$CANARY_LABEL")
@@ -258,5 +264,18 @@ case "${V9D_MOLMO_MOTION_PROBE:-0}" in
      campaign_args+=(--motion-probe) ;;
   0) ;;
   *) die 'V9D_MOLMO_MOTION_PROBE must be 0 or 1' ;;
+esac
+if [[ -n "${V9D_MOLMO_ARMS:-}" ]]; then
+  [[ "$V9D_MOLMO_ARMS" =~ ^[a-z0-9_]+(,[a-z0-9_]+)*$ ]] || die 'V9D_MOLMO_ARMS contains unsafe characters'
+  campaign_args+=(--arms "$V9D_MOLMO_ARMS")
+fi
+case "${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}" in
+  baseline|hover20mm) campaign_args+=(--observation-profile "${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}") ;;
+  *) die 'V9D_MOLMO_OBSERVATION_PROFILE must be baseline or hover20mm' ;;
+esac
+case "${V9D_MOLMO_SCREEN_ONLY:-0}" in
+  1) campaign_args+=(--screen-only) ;;
+  0) ;;
+  *) die 'V9D_MOLMO_SCREEN_ONLY must be 0 or 1' ;;
 esac
 "$PYTHON" "$CAMPAIGN_SCRIPT" "${campaign_args[@]}"

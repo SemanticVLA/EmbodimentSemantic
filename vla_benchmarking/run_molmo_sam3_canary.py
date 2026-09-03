@@ -61,6 +61,24 @@ PLACEMENT_MICRO_CORRECTION_PARAMS = {
     "max_actions": 16,
 }
 
+OBSERVATION_PROFILE_NAMES = ("baseline", "hover20mm")
+OBSERVATION_PROFILE_PARAMS = {
+    "baseline": {
+        "phase_tolerance_m": 0.015,
+        "orientation_tolerance_rad": 0.12,
+        "target_offset_m": OBSERVATION_HOVER_OFFSET_M,
+        "min_actual_height_margin_m": None,
+        "require_actual_height_margin": False,
+    },
+    "hover20mm": {
+        "phase_tolerance_m": 0.020,
+        "orientation_tolerance_rad": 0.12,
+        "target_offset_m": OBSERVATION_HOVER_OFFSET_M,
+        "min_actual_height_margin_m": 0.080,
+        "require_actual_height_margin": True,
+    },
+}
+
 
 def resolve_motion_profile(name: str, *, region_backend: str) -> dict[str, Any]:
     """Resolve the bounded motion treatment without changing baseline knobs."""
@@ -73,6 +91,13 @@ def resolve_motion_profile(name: str, *, region_backend: str) -> dict[str, Any]:
         "region_backend": region_backend,
         "micro_correction": None if name == "baseline" else dict(PLACEMENT_MICRO_CORRECTION_PARAMS),
     }
+
+
+def resolve_observation_profile(name: str) -> dict[str, Any]:
+    """Resolve the bounded observation-hover policy independently of grasp motion."""
+    if name not in OBSERVATION_PROFILE_NAMES:
+        raise ValueError(f"observation profile must be one of {OBSERVATION_PROFILE_NAMES}")
+    return {"name": name, **dict(OBSERVATION_PROFILE_PARAMS[name])}
 
 
 @dataclass(frozen=True)
@@ -253,6 +278,70 @@ def _capture_provenance(capture: Any) -> dict[str, Any]:
         "extrinsic_direction": getattr(calibration, "extrinsic_direction", None),
         "rgb_depth_alignment": getattr(calibration, "rgb_depth_alignment", None),
     }
+
+
+def _observation_capture_provenance(capture: Any) -> dict[str, Any]:
+    """Record the observed capture and the exact world-from-camera transform."""
+    calibration = getattr(capture, "calibration", None)
+    if calibration is None:
+        raise ValueError("observation capture is missing calibration")
+    K = np.asarray(getattr(calibration, "intrinsic", None), dtype=np.float64)
+    T = np.asarray(getattr(calibration, "world_from_camera", None), dtype=np.float64)
+    if K.shape != (3, 3) or T.shape != (4, 4) or not np.all(np.isfinite(K)) or not np.all(np.isfinite(T)):
+        raise ValueError("observation capture calibration has invalid K/T")
+    rgb = np.asarray(getattr(capture, "rgb", None))
+    depth = np.asarray(getattr(capture, "metric_depth", None))
+    if rgb.ndim != 3 or depth.ndim != 2 or rgb.shape[:2] != depth.shape:
+        raise ValueError("observation capture RGB and metric depth are not aligned")
+    return {
+        "camera_name": getattr(calibration, "camera_name", None),
+        "resolution": [int(rgb.shape[1]), int(rgb.shape[0])],
+        "pixel_origin": getattr(calibration, "pixel_origin", None),
+        "camera_frame": getattr(calibration, "camera_frame", None),
+        "world_frame": getattr(calibration, "world_frame", None),
+        "extrinsic_direction": getattr(calibration, "extrinsic_direction", "world_from_camera"),
+        "rgb_depth_alignment": getattr(calibration, "rgb_depth_alignment", None),
+        "intrinsic_matrix": K.tolist(),
+        "world_from_camera": T.tolist(),
+        "transform_contract": {
+            "source_frame": "camera",
+            "destination_frame": "world",
+            "direction": "world_from_camera",
+            "units": "meters",
+            "pixel_origin": getattr(calibration, "pixel_origin", "top_left"),
+        },
+    }
+
+
+def _rotation_matrix(value: Any) -> np.ndarray:
+    """Convert a proprioceptive quaternion or rotation matrix to SO(3)."""
+    array = np.asarray(value, dtype=np.float64)
+    if array.shape == (3, 3):
+        matrix = array
+    elif array.size == 9:
+        matrix = array.reshape(3, 3)
+    else:
+        flat = array.reshape(-1)
+        if flat.size != 4:
+            raise ValueError("orientation must be a quaternion or 3x3 rotation")
+        norm = float(np.linalg.norm(flat))
+        if not np.isfinite(norm) or norm <= 1e-9:
+            raise ValueError("orientation quaternion is non-finite or zero")
+        x, y, z, w = flat / norm
+        matrix = np.asarray(((1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+                             (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+                             (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y))), dtype=np.float64)
+    if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+        raise ValueError("orientation rotation is non-finite")
+    if not np.allclose(matrix.T @ matrix, np.eye(3), atol=1e-4) or not np.isclose(np.linalg.det(matrix), 1.0, atol=1e-4):
+        raise ValueError("orientation must be a proper rotation")
+    return matrix
+
+
+def _orientation_error_rad(actual: Any, target: Any) -> float:
+    relative = _rotation_matrix(actual).T @ _rotation_matrix(target)
+    cosine = float(np.clip((np.trace(relative) - 1.0) * 0.5, -1.0, 1.0))
+    return float(np.arccos(cosine))
 
 
 def _normalise_candidate(value: Any, index: int) -> GraspCandidate:
@@ -450,6 +539,8 @@ def run_canary_episode(
     motion_profile: str = "baseline",
     motion_profile_params: Mapping[str, Any] | None = None,
     motion_diagnostics: bool = False,
+    observation_profile: str = "baseline",
+    observation_profile_params: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one bounded canary episode, regenerating candidates after failure."""
     selected_variant = VARIANTS[variant] if isinstance(variant, str) else variant
@@ -606,6 +697,8 @@ def run_canary_episode(
         "motion_profile": motion_profile,
         "motion_profile_params": _json_safe(motion_profile_params or {}),
         "motion_diagnostics": bool(motion_diagnostics),
+        "observation_profile": observation_profile,
+        "observation_profile_params": _json_safe(observation_profile_params or {}),
     }
     digest = hashlib.sha256(json.dumps(_json_safe(manifest), sort_keys=True).encode()).hexdigest()
     manifest["experiment_config_hash"] = digest
@@ -1659,6 +1752,13 @@ def _perform_observation_hover(
     motion_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Move to the fixed 10-cm observation hover used by every source arm."""
+    requested_profile = (motion_settings or {}).get("observation_profile", "baseline")
+    requested_name = requested_profile.get("name", "baseline") if isinstance(requested_profile, Mapping) else requested_profile
+    observation_policy = resolve_observation_profile(str(requested_name))
+    profile_audit: dict[str, Any] = {
+        "observation_profile": observation_policy["name"],
+        "observation_profile_params": observation_policy,
+    }
     try:
         try:
             from . import run_arrow_pick_place_eval as episode
@@ -1680,6 +1780,7 @@ def _perform_observation_hover(
         calibration = capture.calibration
         K = np.asarray(calibration.intrinsic, dtype=np.float64)
         T = np.asarray(calibration.world_from_camera, dtype=np.float64)
+        capture_provenance = _observation_capture_provenance(capture)
         ys, xs = np.nonzero(np.asarray(region_mask, dtype=bool))
         if len(xs) == 0:
             raise RuntimeError("observation hover region has no RGB-D support")
@@ -1697,7 +1798,8 @@ def _perform_observation_hover(
             raise RuntimeError("observation hover region has no finite world-Z support")
         region_q90_world_z = float(np.percentile(world_z, 90.0))
         anchor_z = float(observed_world[2])
-        hover_z = max(anchor_z, region_q90_world_z) + OBSERVATION_HOVER_OFFSET_M
+        target_offset_m = float(observation_policy["target_offset_m"])
+        hover_z = max(anchor_z, region_q90_world_z) + target_offset_m
         hover = np.asarray((observed_world[0], observed_world[1], hover_z), dtype=np.float64)
         observation = episode._raw_observation(env)
         proprio = episode._proprioception(observation)
@@ -1730,8 +1832,13 @@ def _perform_observation_hover(
             raise RuntimeError("1200-action budget exhausted before observation hover")
         policies = {name: dict(policy) for name, policy in (motion_settings or {}).get("phase_policies", {}).items()}
         staging_policy = policies.get("pregrasp", {"tolerance_m": 0.015})
+        phase_tolerance_m = (
+            float(observation_policy["phase_tolerance_m"])
+            if observation_policy["name"] == "hover20mm"
+            else float(staging_policy.get("tolerance_m", 0.015))
+        )
         for name in ("hover_raise", "hover_translate", "hover_lower"):
-            policies[name] = {"role": "experimental_hover", "tolerance_m": float(staging_policy.get("tolerance_m", 0.015))}
+            policies[name] = {"role": "experimental_hover", "tolerance_m": phase_tolerance_m}
         motion_diag_kwargs = {"experimental_motion_diagnostics": True} if (motion_settings or {}).get("motion_diagnostics") else {}
         phases = episode._run_motion(
             env, waypoints, observation,
@@ -1750,8 +1857,112 @@ def _perform_observation_hover(
             stall_delta_m=float((motion_settings or {}).get("stall_delta_m", DEFAULT_STALL_DELTA_M)),
             osc_position_scale_m=(motion_settings or {}).get("osc_position_scale_m"),
             phase_policies=policies,
+            orientation_tolerance_rad=float(observation_policy["orientation_tolerance_rad"]),
             **motion_diag_kwargs,
         )
+        phase_records: list[dict[str, Any]] = []
+        required_height_margin_m = observation_policy["min_actual_height_margin_m"]
+        require_height = bool(observation_policy["require_actual_height_margin"])
+        motion_trace = list(getattr(env, "_arrow_motion_trace", []) or [])
+        for phase_name in ("hover_raise", "hover_translate", "hover_lower"):
+            matches = [item for item in phases if isinstance(item, Mapping) and item.get("phase") == phase_name]
+            record = matches[-1] if matches else None
+            commanded = np.asarray(waypoints[phase_name]["position"], dtype=np.float64).reshape(-1)
+            if commanded.shape != (3,) or not np.all(np.isfinite(commanded)):
+                raise RuntimeError(f"observation hover {phase_name} has invalid commanded position")
+            actual_value = None if record is None else record.get("eef_pos_m")
+            actual = np.asarray(actual_value, dtype=np.float64).reshape(-1) if actual_value is not None else np.asarray([], dtype=np.float64)
+            position_error = None if record is None else record.get("position_error_norm_m")
+            if position_error is None and actual.shape == (3,) and np.all(np.isfinite(actual)):
+                position_error = float(np.linalg.norm(commanded - actual))
+            orientation_error = None if record is None else record.get("orientation_error_rad")
+            if orientation_error is None:
+                trace_records = [
+                    item for item in motion_trace
+                    if isinstance(item, Mapping) and item.get("phase") == phase_name
+                ]
+                if trace_records:
+                    trace_orientation = trace_records[-1].get("eef_quat_xyzw")
+                    if trace_orientation is not None:
+                        try:
+                            orientation_error = _orientation_error_rad(trace_orientation, held_rotation)
+                        except (TypeError, ValueError, FloatingPointError):
+                            orientation_error = None
+            if orientation_error is not None:
+                try:
+                    orientation_error = float(orientation_error)
+                except (TypeError, ValueError):
+                    raise RuntimeError(f"observation hover {phase_name} has invalid orientation error")
+                if not np.isfinite(orientation_error):
+                    raise RuntimeError(f"observation hover {phase_name} has non-finite orientation error")
+            detail = {
+                "phase": phase_name,
+                "status": None if record is None else record.get("status"),
+                "commanded_position_m": commanded.tolist(),
+                "actual_position_m": actual.tolist() if actual.shape == (3,) and np.all(np.isfinite(actual)) else None,
+                "position_error_norm_m": float(position_error) if position_error is not None and np.isfinite(position_error) else None,
+                "orientation_error_rad": float(orientation_error) if orientation_error is not None and np.isfinite(orientation_error) else None,
+            }
+            phase_records.append(detail)
+            if require_height:
+                if record is None or detail["status"] not in {"reached", "stop"}:
+                    raise RuntimeError(f"observation hover {phase_name} did not complete: {detail}")
+                if detail["actual_position_m"] is None:
+                    raise RuntimeError(f"observation hover {phase_name} has no finite completed EEF position: {detail}")
+                if detail["position_error_norm_m"] is None or detail["position_error_norm_m"] > phase_tolerance_m:
+                    raise RuntimeError(
+                        f"observation hover {phase_name} position error exceeds {phase_tolerance_m:.6f} m: {detail}"
+                    )
+                if detail["orientation_error_rad"] is not None and detail["orientation_error_rad"] > float(observation_policy["orientation_tolerance_rad"]):
+                    raise RuntimeError(
+                        f"observation hover {phase_name} orientation error exceeds "
+                        f"{float(observation_policy['orientation_tolerance_rad']):.6f} rad: {detail}"
+                    )
+                height_margin = float(actual[2] - region_q90_world_z)
+                detail["actual_height_margin_m"] = height_margin
+                if height_margin < float(required_height_margin_m):
+                    raise RuntimeError(
+                        f"observation hover {phase_name} actual height margin {height_margin:.6f} m "
+                        f"below {float(required_height_margin_m):.6f} m: {detail}"
+                    )
+        fresh_proprio_detail: dict[str, Any] | None = None
+        if require_height:
+            fresh_observation = episode._raw_observation(env)
+            fresh_proprio = episode._proprioception(fresh_observation)
+            fresh_position = np.asarray(fresh_proprio.get("eef_pos"), dtype=np.float64).reshape(-1)
+            fresh_orientation = np.asarray(fresh_proprio.get("eef_quat"), dtype=np.float64).reshape(-1)
+            if fresh_position.shape != (3,) or not np.all(np.isfinite(fresh_position)):
+                raise RuntimeError("observation hover final fresh proprioception lacks finite EEF position")
+            if fresh_orientation.size not in (3, 4, 9) or not np.all(np.isfinite(fresh_orientation)):
+                raise RuntimeError("observation hover final fresh proprioception lacks finite EEF orientation")
+            try:
+                final_orientation_error = _orientation_error_rad(fresh_orientation, held_rotation)
+            except (TypeError, ValueError, FloatingPointError) as exc:
+                raise RuntimeError("observation hover final fresh proprioception has invalid orientation") from exc
+            final_height_margin = float(fresh_position[2] - region_q90_world_z)
+            final_position_error = float(np.linalg.norm(fresh_position - hover))
+            if final_position_error > phase_tolerance_m:
+                raise RuntimeError(
+                    f"observation hover final EEF position error {final_position_error:.6f} m "
+                    f"exceeds {phase_tolerance_m:.6f} m"
+                )
+            if final_orientation_error > float(observation_policy["orientation_tolerance_rad"]):
+                raise RuntimeError(
+                    f"observation hover final orientation error {final_orientation_error:.6f} rad "
+                    f"exceeds {float(observation_policy['orientation_tolerance_rad']):.6f} rad"
+                )
+            if final_height_margin < float(required_height_margin_m):
+                raise RuntimeError(
+                    f"observation hover final EEF height margin {final_height_margin:.6f} m "
+                    f"below {float(required_height_margin_m):.6f} m"
+                )
+            fresh_proprio_detail = {
+                "eef_pos_m": fresh_position.tolist(),
+                "eef_orientation": fresh_orientation.tolist(),
+                "orientation_error_rad": final_orientation_error,
+                "position_error_norm_m": final_position_error,
+                "actual_height_margin_m": final_height_margin,
+            }
         audit = {
             "status": "completed",
             "hover_world_m": hover.tolist(),
@@ -1763,7 +1974,17 @@ def _perform_observation_hover(
             "clearance_z_m": clearance_z,
             "steps": int(sum(int(item.get("steps", 0)) for item in phases)),
             "phase_statuses": [{"phase": item.get("phase"), "status": item.get("status")} for item in phases],
-            "fixed_offset_m": OBSERVATION_HOVER_OFFSET_M,
+            "fixed_offset_m": target_offset_m,
+            "observation_profile": observation_policy["name"],
+            "observation_profile_params": observation_policy,
+            "phase_tolerance_m": phase_tolerance_m,
+            "orientation_tolerance_rad": float(observation_policy["orientation_tolerance_rad"]),
+            "commanded_positions_m": {item["phase"]: item["commanded_position_m"] for item in phase_records},
+            "actual_positions_m": {item["phase"]: item["actual_position_m"] for item in phase_records},
+            "phase_motion_audit": phase_records,
+            "capture_provenance": capture_provenance,
+            "height_margin_threshold_m": required_height_margin_m,
+            "final_fresh_proprio": fresh_proprio_detail,
         }
         if budget is not None:
             setattr(env, "_molmo_sam3_action_count", int(budget.used))
@@ -1772,7 +1993,7 @@ def _perform_observation_hover(
         setattr(env, "_molmo_sam3_observation_hover", audit)
         return audit
     except Exception as exc:
-        audit = {"status": "failed", "error_type": type(exc).__name__, "error": str(exc)}
+        audit = {"status": "failed", **profile_audit, "error_type": type(exc).__name__, "error": str(exc)}
         setattr(env, "_molmo_sam3_observation_hover", audit)
         raise
 
@@ -1796,6 +2017,7 @@ def main(
     parser.add_argument("--region-backend", choices=("sam3", "rgbd"), default="sam3")
     parser.add_argument("--motion-profile", choices=MOTION_PROFILE_NAMES, default="baseline")
     parser.add_argument("--motion-diagnostics", action="store_true", help="record bounded motion diagnostics")
+    parser.add_argument("--observation-profile", choices=OBSERVATION_PROFILE_NAMES, default="baseline")
     parser.add_argument("--sam3-source", type=Path, required=False)
     parser.add_argument("--sam3-checkpoint", type=Path, required=False)
     parser.add_argument("--sam3-source-commit", required=False)
@@ -1812,6 +2034,7 @@ def main(
         parser.error("--episodes-per-task must be positive")
     try:
         resolved_motion_profile = resolve_motion_profile(args.motion_profile, region_backend=args.region_backend)
+        resolved_observation_profile = resolve_observation_profile(args.observation_profile)
         if VARIANTS[args.variant].region_backend == "rgbd" and args.region_backend != "rgbd":
             raise ValueError("rgbd_geometry_agentview requires --region-backend rgbd")
         tasks = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
@@ -1901,6 +2124,8 @@ def main(
         "motion_profile": resolved_motion_profile["name"],
         "motion_profile_params": _json_safe(resolved_motion_profile),
         "motion_diagnostics": bool(args.motion_diagnostics),
+        "observation_profile": resolved_observation_profile["name"],
+        "observation_profile_params": _json_safe(resolved_observation_profile),
     }
     manifest["experiment_configuration_hash"] = hashlib.sha256(
         json.dumps(
@@ -1908,6 +2133,7 @@ def main(
                 "manifest": manifest,
                 "motion_profile": resolved_motion_profile,
                 "motion_diagnostics": bool(args.motion_diagnostics),
+                "observation_profile": resolved_observation_profile,
             }),
             sort_keys=True,
         ).encode()
@@ -2025,6 +2251,7 @@ def main(
         motion_settings["phase_policies"] = phase_policies
         motion_settings["motion_profile"] = resolved_motion_profile["name"]
         motion_settings["motion_profile_params"] = _json_safe(resolved_motion_profile["micro_correction"] or {})
+        motion_settings["observation_profile"] = resolved_observation_profile
         bboxes = kwargs.get("bboxes")
         if not isinstance(bboxes, Mapping):
             raise ValueError("canary episode requires existing arrow input-generation bboxes")
@@ -2061,6 +2288,9 @@ def main(
             motion_settings=motion_settings,
         )
         fresh = episode.capture_agentview(env, resolution=resolution, camera_name=AGENTVIEW)
+        hover_audit = getattr(env, "_molmo_sam3_observation_hover", None)
+        if isinstance(hover_audit, dict):
+            hover_audit["fresh_capture_provenance"] = _observation_capture_provenance(fresh)
         arrow_state: dict[str, Any] = {"rgb": None, "source_uv": None, "destination_uv": None}
         first_capture: dict[str, Any] = {AGENTVIEW: fresh}
 
@@ -2202,6 +2432,8 @@ def main(
             motion_profile=resolved_motion_profile["name"],
             motion_profile_params=resolved_motion_profile,
             motion_diagnostics=bool(args.motion_diagnostics),
+            observation_profile=resolved_observation_profile["name"],
+            observation_profile_params=resolved_observation_profile,
         )
         final = result.get("final_result") if isinstance(result.get("final_result"), Mapping) else {}
         audit = final.get("audit") if isinstance(final, Mapping) else None
@@ -2249,6 +2481,8 @@ def main(
                     "motion_profile_params": _json_safe(resolved_motion_profile),
                     "motion_diagnostics": bool(args.motion_diagnostics),
                     "experiment_configuration_hash": manifest["experiment_configuration_hash"],
+                    "observation_profile": resolved_observation_profile["name"],
+                    "observation_profile_params": _json_safe(resolved_observation_profile),
                     **({
                         "sam3_source_commit": args.sam3_source_commit,
                         "sam3_checkpoint_sha256": args.sam3_checkpoint_sha256,

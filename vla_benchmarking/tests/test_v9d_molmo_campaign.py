@@ -253,3 +253,47 @@ def test_motion_probe_has_two_matched_prefixes_one_runtime_and_no_extension(tmp_
 def test_motion_probe_rejects_global_repair_gate(tmp_path):
     with pytest.raises(SystemExit):
         campaign.main(["--output-dir", str(tmp_path), "--motion-probe", "--repair-gate"])
+
+
+@pytest.mark.parametrize("extra", [
+    ["--arms", "unknown"], ["--arms", ""],
+    ["--arms", "dense_agentview,dense_agentview"],
+    ["--motion-probe", "--arms", "dense_agentview"],
+    ["--motion-probe", "--observation-profile", "hover20mm"],
+    ["--repair-gate", "--arms", "dense_agentview"],
+])
+def test_selected_screen_rejects_invalid_or_confounded_arguments(tmp_path, extra):
+    with pytest.raises(SystemExit):
+        campaign.main(["--output-dir", str(tmp_path), *extra])
+    assert not (tmp_path / "campaign.json").exists()
+
+
+def test_selected_clearance_screen_records_hover_profile_without_extension(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(campaign, "MolmoPointRuntime", object)
+
+    def fake_main(argv, **kwargs):
+        args = dict(zip(argv[::2], argv[1::2]))
+        calls.append(args)
+        output = __import__("pathlib").Path(args["--output-dir"])
+        for suite in ("vanilla", "sealed_randomized"):
+            campaign.write_json(output / suite / "arrow_pick_place_matrix_status.json", {"cells": [
+                {"status": "completed", "evaluator_result": True, "suite_mode": suite,
+                 "task_id": task, "seed": seed}
+                for task in (4, 6, 9) for seed in (1000, 1001)
+            ]})
+        return 0
+
+    monkeypatch.setattr(campaign.canary, "main", fake_main)
+    assert campaign.main(["--output-dir", str(tmp_path), "--arms", "dense_agentview_clearance",
+                          "--observation-profile", "hover20mm", "--screen-only"]) == 0
+    assert len(calls) == 1
+    assert calls[0]["--molmopoint-prompt-id"] == "rim_clearance"
+    assert calls[0]["--observation-profile"] == "hover20mm"
+    assert calls[0]["--phase"] == "prefix"
+    assert "--motion-profile" not in calls[0]
+    report = json.loads((tmp_path / "campaign.json").read_text())
+    assert report["observation_profile"] == "hover20mm"
+    assert [arm["name"] for arm in report["arms"]] == ["dense_agentview_clearance"]
+    assert report["screen"][0]["metrics"]["planned"] == 12
+    assert report["finalists"] == []

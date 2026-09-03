@@ -1,8 +1,40 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
-## Placement motion probe preparation — 2026-09-03
+## Observation-only hover repair preparation — 2026-09-03
 
-Implementation is validated, **not launched**. Parent source is repair4
+New `hover20mm` observation profile is implemented and tested in the
+experimental worktree, parent `00a3b983f02984f2f92dc6cb3bdb30b11414755c`.
+Hypothesis: a 20 mm observation-only positioning tolerance can avoid the
+observed 15.699 mm hover stall while using the actual synchronized capture
+transform. This is not a relaxation of grasp, placement, or evaluator success.
+Require measured EEF height at least 80 mm above observed upper-support q90,
+unchanged 0.12 rad orientation tolerance, 160 steps/phase and 1,200 actions/cell.
+All three hover phases and all tasks/seeds/suites use the same policy.
+
+Run only `dense_agentview_clearance` with unchanged `rim_clearance` prompt,
+baseline placement motion, fixed model and RGB-D geometry. Use a new immutable
+release and fresh complete 12-cell prefix; never combine old-policy successes
+with new-policy cells. Initially screen-only, with no automatic extension.
+Both current allocations remain untouched; wait for a slot under the two-job
+cap. Validation: 125 tests passed, one skipped; independent actual hover/motion
+helper smoke reached all phases using 3/1200 actions, 100 mm measured clearance
+and zero orientation residual. Independent focused review APPROVE with no
+blocking defects; 39 tests also passed under review. Python compilation,
+launcher syntax and diff checks passed. Frozen v9d config diff is empty.
+This establishes launch readiness, not physical improvement.
+
+## Placement motion probe running — 2026-09-03
+
+Job **1919194** was submitted at **21:10:39 UTC**. Fresh scheduler audit at
+**21:48:02 UTC**: **RUNNING on compute-3-14**, started 21:11:21 UTC.
+New immutable source is
+`00a3b983f02984f2f92dc6cb3bdb30b11414755c`, label
+`v9d_molmo_placement_probe_00a3b98`. Bundle SHA-256
+`3a45f86c2fb3ad14cf961ab7fa99918f80d3d7b803c9f2773a3d3b04c97ac117`
+and clean exact release were verified on Legion. One A40 / eight CPUs / 64 GB;
+runtime GPU/package/exact-SHA checks passed. The control arm has **0/10 terminal
+cells of 12 planned**, three passed retention heuristics; sealed T9 seed1000 is
+running. Treatment arm has not started. Parent source is repair4
 `d9c919c8e0c027554c381c0c93990465e339f251`. The current six-arm campaign remains
 unchanged. No new controller/frame defect is verified. The observed placement
 stalls motivate a paired response test using the existing micro-correction law.
@@ -30,9 +62,31 @@ diagnostics keyword mismatch found in the focused review was fixed and covered
 by a regression test. Final independent review PASS, no remaining HIGH/BLOCKER.
 This approves the bounded diagnostic launch, not a claim that placement is fixed.
 
+Expected results: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_placement_probe_00a3b98_1919194/results`.
+Expected archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_placement_probe_00a3b98_1919194`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919194.out`.
+The ten-minute continuation now tracks both jobs and requires examining the
+probe's actual response/load evidence before the next repair. Do not duplicate
+either queued or running job. No default change or automatic probe extension.
+
+First diagnostic evidence: control vanilla T6 seed1000 preplace timed out at
+160 actions with 26.229 mm residual. The recorded controller goal agrees with
+the nominal target ([0.044548, 0.252117, 1.034205] m) while nonzero position
+commands continue. Controller EEF/goal and EEF force/torque readings are
+available; requested/applied joint torque is not exposed. Terminal force was
+[-0.2122, -0.5419, -5.1231] in the exposed sensor convention. This is not yet
+evidence selecting a controller-vs-contact cause; await the matched pulse arm.
+
+Observation-only failure evidence: control vanilla T9 seed1001 hover-translate
+timed out at 160 steps with 15.699 mm residual against a 15 mm tolerance.
+Target [0.087130, -0.236302, 1.276899] m, actual EEF
+[0.077091, -0.233433, 1.265175] m. The controller goal agrees with the nominal
+target. Assess a separately versioned observation acceptance/servo repair;
+grasp/placement convergence must not be loosened and active releases stay fixed.
+
 ## Experimental repair4 running — 2026-09-03
 
-Fresh audit: **2026-09-03 21:07:07 UTC**. Job **1919168** is **RUNNING** on
+Fresh audit: **2026-09-03 21:48:02 UTC**. Job **1919168** is **RUNNING** on
 compute-4-11, one NVIDIA A40, submitted 20:09:00 and started 20:09:20 UTC.
 Runtime GPU, package and exact-source checks passed. Source is immutable
 `d9c919c8e0c027554c381c0c93990465e339f251`, label
@@ -46,14 +100,27 @@ hover failures); perception time: 1,158.16 s; arm elapsed: 1,357.93 s.
 It cannot qualify for extension and is below both matching historical baseline
 prefixes (3/12 each, different historical source commits).
 
-Geometry-only and local agentview also finished **0/12 each**, with four and
-three passed retention heuristics respectively. Each stopped after the second
-hover-translate timeout on its final planned cell. The contact-prompt arm is
-running at **0/4 terminal trials of 12 planned**, one passed retention heuristic;
-vanilla task9 seed1000 is active. Clearance-prompt and wrist arms have not
-started. Across four arms: **40 terminal trials, zero successes, 12 passed
-retention heuristics**. The active release is unchanged while the separate
-placement probe is prepared; no duplicate of this campaign is launched.
+Geometry-only, local and contact agentview also finished **0/12 each**, with
+four, three and four retention-evidence cells respectively. Each stopped after
+the second hover-translate timeout on its final planned cell. Contact arm had
+one completed placement/retreat sequence with an unsuccessful evaluator result.
+The clearance-prompt arm has the first **two evaluator-confirmed successes**:
+**2/12 terminal trials, 12 planned**. Both
+successes completed placement and retreat before evaluation:
+
+- Vanilla task6 seed1001: 606 total actions, third candidate
+  `seed02_yaw-15.0_ins00.0mm`; yaw+15 and yaw+00 had timed out during translation.
+- Sealed task6 seed1000: 208 actions, first candidate
+  `seed01_yaw+15.0_ins00.0mm`.
+
+Both are cells where both historical baselines failed. This is meaningful
+candidate/retry execution evidence, **not aggregate improvement over v9d**:
+the matching historical full prefix is 3/12 and this arm finished 2/12.
+Do not bypass its repeated-hover operational stop rule for extension.
+Wrist has 0/3 terminal cells, with vanilla T6 seed1001 running. Across six arms:
+**63 terminal trials, two successes, 19 retention-evidence cells**.
+The active release is unchanged while the
+separate placement probe runs.
 The frozen baseline and original checkout are untouched.
 
 Bounded read-only placement audit: vanilla T6 seed1000 passed a retention

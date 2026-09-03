@@ -217,12 +217,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--label", default="v9d_molmo_rgbd")
     parser.add_argument("--screen-only", action="store_true")
+    parser.add_argument("--arms", help="comma-separated subset of existing screen arms; fresh run identity required")
+    parser.add_argument("--observation-profile", choices=("baseline", "hover20mm"), default="baseline")
     parser.add_argument("--motion-probe", action="store_true", help="paired 12-cell placement-control/bounded-correction diagnostic; never extends to 60")
     parser.add_argument("--repair-gate", action="store_true", help="require the first T4/T6 cells to clear hover and contact before continuing the campaign")
     args = parser.parse_args(argv)
     if args.motion_probe and args.repair_gate:
         parser.error("--motion-probe cannot enable the obsolete global repair gate")
+    if args.motion_probe and (args.arms is not None or args.observation_profile != "baseline"):
+        parser.error("--motion-probe fixes its paired arms and baseline observation profile")
+    if args.arms is not None and args.repair_gate:
+        parser.error("--arms cannot enable the obsolete global repair gate")
     arms = MOTION_PROBE_ARMS if args.motion_probe else ARMS
+    if args.arms is not None:
+        names = args.arms.split(",")
+        available = {arm.name: arm for arm in ARMS}
+        if len(names) != len(set(names)) or any(name not in available for name in names):
+            parser.error("--arms must contain unique existing screen arm names")
+        arms = tuple(available[name] for name in names)
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
     report_path = root / "campaign.json"
@@ -234,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         "region_backend": "v9d_rgbd_region", "arms": [asdict(a) for a in arms],
         "mode": "placement_motion_probe" if args.motion_probe else "candidate_screen",
         "motion_diagnostics": bool(args.motion_probe),
+        "observation_profile": args.observation_profile,
         "screen_planned_per_arm": 12, "screen": [], "finalists": [],
         "status": "running", "started_unix": time.time(),
         "comparison": "exploratory grasp pipeline comparison; geometry control shares motion and hover",
@@ -275,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if args.motion_probe:
             canary_args.extend(["--motion-profile", arm.motion_profile, "--motion-diagnostics"])
+        if args.observation_profile != "baseline":
+            canary_args.extend(["--observation-profile", args.observation_profile])
         rc = canary.main(canary_args, molmo_runtime=runtime, cell_completed_callback=on_cell)
         result = {"arm": asdict(arm), "phase": phase, "returncode": rc,
                   "stop_reason": rules.reason, "fatal": rules.fatal,
