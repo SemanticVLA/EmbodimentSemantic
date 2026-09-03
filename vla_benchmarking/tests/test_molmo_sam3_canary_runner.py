@@ -14,6 +14,27 @@ import pytest
 runner = importlib.import_module("run_molmo_sam3_canary")
 
 
+def test_rgbd_main_passes_frozen_v9d_matrix_selection(tmp_path, monkeypatch):
+    matrix = importlib.import_module("run_arrow_pick_place_matrix")
+    selected = []
+
+    def validate_selection(**kwargs):
+        label, _, _ = matrix._resolve_controller_selection(
+            controller_variant=kwargs["controller_variant"],
+            controller_config=kwargs["controller_config"],
+            suite_mode=kwargs["suite_mode"],
+        )
+        selected.append(label)
+        return {"successes": 0}
+
+    monkeypatch.setattr(matrix, "run_matrix", validate_selection)
+    assert runner.main([
+        "--region-backend", "rgbd", "--variant", "rgbd_geometry_agentview",
+        "--output-dir", str(tmp_path),
+    ]) == 0
+    assert selected == [matrix.DEFAULT_CONTROLLER_VARIANT] * 2
+
+
 @dataclass
 class Calibration:
     camera_name: str

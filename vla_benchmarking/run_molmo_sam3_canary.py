@@ -1664,7 +1664,7 @@ def main(
                 output_root=suite_root, task_ids=tasks,
                 episodes_per_task=int(args.episodes_per_task), seed_base=int(args.seed_base),
                 resolution=256, suite_mode=suite_mode,
-                controller_variant="default", controller_config=controller_config,
+                controller_variant=matrix.DEFAULT_CONTROLLER_VARIANT, controller_config=controller_config,
                 dry_run=False, execute_motion=True, allow_unvalidated_profile=True,
                 env_builder=env_builder, episode_runner=episode_runner,
                 arrow_input_builder=matrix._default_arrow_inputs,
