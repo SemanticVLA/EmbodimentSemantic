@@ -31,6 +31,14 @@ limits. Frozen v9d remains at `fd24a4c5cf8da4991013ab18b15704523ad0836b`;
 historical baseline scores come from different code revisions. No result changes
 the default automatically. The original checkout's ledger edits are untouched.
 
+The first live SAM-free screen (`1918740`) produced no feasible grasps and hit
+the 20-cm observation-hover limit on task 9. Its results remain separate. The
+targeted repair opens the gripper at its current pose before measuring the
+usable aperture, uses a matched 10-cm hover for all arms, and simplifies the
+three pointing prompts. Opening, hovering, retries, and recovery all count
+toward the same 1,200-action budget. Each Molmo response now records the exact
+prompt, generated text, and decoded point count for diagnosing empty outputs.
+
 ## Historical project-local SAM3.1 runtime
 
 This directory owns the SAM3 image-segmentation dependency for the Molmo/SAM3

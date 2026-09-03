@@ -112,6 +112,8 @@ def test_lazy_load_uses_official_contract_and_original_pixels():
     assert calls["generate"][0]["max_new_tokens"] == 200
     assert calls["generate"][0]["do_sample"] is False
     assert calls["generate"][0]["num_beams"] == 1
+    assert result.provenance["generated_text"] == "<point>"
+    assert result.provenance["decoded_point_count"] == 1
 
 
 def test_mask_highlight_is_original_size_and_sent_to_processor():

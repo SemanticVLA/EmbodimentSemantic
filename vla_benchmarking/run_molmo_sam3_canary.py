@@ -39,6 +39,8 @@ MAX_CANDIDATES = 128
 MAX_ATTEMPTS = 4
 YAW_OFFSETS_DEG = (-15.0, 0.0, 15.0)
 INSERTION_OFFSETS_M = (0.0, 0.004, 0.008)
+OBSERVATION_HOVER_OFFSET_M = 0.10
+GRIPPER_OPEN_TIMEOUT_STEPS = 160
 SAM3_SOURCE_COMMIT = "96914d2425f90a64f45ca977c2b5165418099543"
 SAM3_CHECKPOINT_SHA256 = "0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6"
 MOLMOPOINT_MODEL_ID = "allenai/MolmoPoint-8B"
@@ -1258,6 +1260,57 @@ def _newly_sent_actions(env: Any, trace_before: Any) -> int:
     ))
 
 
+def _perform_gripper_open(
+    env: Any,
+    *,
+    output_dir: Path,
+    motion_started_callback: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Open at the current EEF pose before measuring contact-pad geometry."""
+    try:
+        try:
+            from . import run_arrow_pick_place_eval as episode
+        except ImportError:  # pragma: no cover - direct script use
+            import run_arrow_pick_place_eval as episode
+        observation = episode._raw_observation(env)
+        proprio = episode._proprioception(observation)
+        current = np.asarray(proprio.get("eef_pos"), dtype=np.float64).reshape(-1)
+        if current.shape != (3,) or not np.all(np.isfinite(current)):
+            raise RuntimeError("gripper-open preflight lacks finite EEF position")
+        budget = getattr(env, "_molmo_sam3_action_budget", None)
+        prior_actions = int(getattr(env, "_molmo_sam3_action_count", 0))
+        remaining = int(budget.remaining) if budget is not None else max(0, 1200 - prior_actions)
+        if remaining <= 0:
+            raise RuntimeError("1200-action budget exhausted before gripper open")
+        waypoints = np.tile(current, (6, 1))
+        phases = episode._run_motion(
+            env, waypoints, observation,
+            phase_timeout_steps=GRIPPER_OPEN_TIMEOUT_STEPS,
+            gripper_dwell_steps=20, stop_after_phase="open", start_phase="open",
+            dry_run=False, action_budget=budget if budget is not None else remaining,
+            motion_started_callback=motion_started_callback,
+            motion_trace_path=output_dir / "gripper_open_trace.json",
+            motion_trace_segment="gripper_open_preflight",
+        )
+        steps = int(sum(int(item.get("steps", 0)) for item in phases))
+        total_actions = int(budget.used) if budget is not None else prior_actions + steps
+        if total_actions > 1200:
+            raise RuntimeError("gripper-open preflight exceeded 1200-action budget")
+        setattr(env, "_molmo_sam3_action_count", total_actions)
+        audit = {
+            "status": "completed", "eef_world_m": current.tolist(),
+            "steps": steps, "total_actions": total_actions,
+            "phase_statuses": [{"phase": item.get("phase"), "status": item.get("status")} for item in phases],
+            "stop_after_phase": "open", "gripper_command": -1.0,
+        }
+        setattr(env, "_molmo_sam3_gripper_open", audit)
+        return audit
+    except Exception as exc:
+        audit = {"status": "failed", "error_type": type(exc).__name__, "error": str(exc)}
+        setattr(env, "_molmo_sam3_gripper_open", audit)
+        raise
+
+
 def _perform_observation_hover(
     env: Any,
     capture: Any,
@@ -1266,14 +1319,14 @@ def _perform_observation_hover(
     output_dir: Path,
     motion_started_callback: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Move to the fixed 20-cm observation hover used by every source arm."""
+    """Move to the fixed 10-cm observation hover used by every source arm."""
     try:
         try:
             from . import run_arrow_pick_place_eval as episode
         except ImportError:  # pragma: no cover - direct script use
             import run_arrow_pick_place_eval as episode
         observed_world = _deproject_capture(capture, source_uv)
-        hover = observed_world + np.asarray((0.0, 0.0, 0.20), dtype=np.float64)
+        hover = observed_world + np.asarray((0.0, 0.0, OBSERVATION_HOVER_OFFSET_M), dtype=np.float64)
         if not np.all(np.isfinite(hover)) or hover[2] > 1.75:
             raise RuntimeError("observation hover lies outside the calibrated workspace")
         observation = episode._raw_observation(env)
@@ -1299,7 +1352,7 @@ def _perform_observation_hover(
             "source_world_m": observed_world.tolist(),
             "steps": int(sum(int(item.get("steps", 0)) for item in phases)),
             "phase_statuses": [{"phase": item.get("phase"), "status": item.get("status")} for item in phases],
-            "fixed_offset_m": 0.20,
+            "fixed_offset_m": OBSERVATION_HOVER_OFFSET_M,
         }
         if budget is not None:
             setattr(env, "_molmo_sam3_action_count", int(budget.used))
@@ -1518,6 +1571,24 @@ def main(
         provisional_source, _ = episode.decode_arrow_pixels(initial.rgb, provisional_arrow)
         hover_output = output_dir / "observation_hover"
         motion_callback = kwargs.get("motion_started_callback")
+        # Contact-pad aperture is measured only after a full open dwell.  The
+        # shared budget includes this preflight before any perception request.
+        _perform_gripper_open(
+            env, output_dir=output_dir / "gripper_open",
+            motion_started_callback=motion_callback,
+        )
+        calibration, transform, probe = probe_robot_calibration(env)
+        worker_state["robot_calibration"] = calibration
+        worker_state["transform"] = transform
+        geometry = probe.get("gripper_geometry") if isinstance(probe, Mapping) else None
+        worker_state["opening_m"] = (
+            float(geometry["measured_opening_m"])
+            if isinstance(geometry, Mapping) and geometry.get("measured_opening_m") is not None
+            else None
+        )
+        if worker_state.get("worker") is None:
+            raise RuntimeError("gripper-open preflight completed without an initialized perception worker")
+        worker_state["worker"].robot_calibration = calibration
         _perform_observation_hover(
             env, initial, provisional_source, output_dir=hover_output,
             motion_started_callback=motion_callback,
@@ -1651,6 +1722,7 @@ def main(
             "audit_path": (output_dir / "molmo_sam3_canary_manifest.json").as_posix(),
             "evaluator_success": final.get("evaluator_success") if isinstance(final, Mapping) else None,
             "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
+            "gripper_open_preflight": getattr(env, "_molmo_sam3_gripper_open", None),
             "phases": audit.get("phases", []) if isinstance(audit, Mapping) else [],
             "grasp_search": [], "canary_manifest": result,
             "experimental_identity": (RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),

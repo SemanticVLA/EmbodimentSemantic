@@ -38,29 +38,16 @@ DEFAULT_MAX_NEW_TOKENS = 200
 DEFAULT_MAX_POINTS = 64
 PROMPT_VARIANTS = {
     "rim_contact": (
-        "The target bowl region is highlighted in red. Select points only on that bowl. "
-        "Point to multiple separated, visible locations on the outer rim or "
-        "outer wall where a parallel-jaw gripper can make stable contact. "
-        "Prefer broad, unobstructed contact patches and point at each contact "
-        "center. Do not point to the bowl center, inside contents, thin edge "
-        "tips, occluded pixels, or background. Return as many distinct "
-        "graspable contact points as possible, up to 16."
+        "Point to the leftmost, rightmost, frontmost, and backmost visible tips "
+        "of the rim of the bowl highlighted in red."
     ),
     "rim_downward_approach": (
-        "The target bowl region is highlighted in red. Select points only on that bowl. "
-        "For a parallel-jaw gripper approaching the bowl from above, point to multiple "
-        "separated visible outer-rim contact locations that leave clearance "
-        "for both fingers. Choose robust fingertip contact centers on the "
-        "outside wall, not the bowl center, interior, silhouette-only edge, "
-        "occluded regions, or background. Return up to 16 distinct candidate points."
+        "Point to distinct contact locations on the visible rim of the bowl "
+        "highlighted in red. These are places a parallel-jaw gripper could pinch from above."
     ),
     "rim_clearance": (
-        "The target bowl region is highlighted in red. Select points only on that bowl. "
-        "Point to multiple separated visible grasp-contact centers around the "
-        "bowl's outer rim. Favor points with visible depth support and room "
-        "for a parallel-jaw gripper; avoid thin/occluded edges, the interior "
-        "or center, nearby objects, and background. Give distinct alternatives "
-        "rather than repeating one location, up to 16 points."
+        "Point to exposed parts of the rim of the bowl highlighted in red where "
+        "robot fingers could grasp it without touching nearby objects."
     ),
 }
 DEFAULT_PROMPT_ID = "rim_downward_approach"
@@ -425,7 +412,9 @@ class MolmoPointRuntime:
             raise
         except Exception as exc:
             raise MolmoPointRuntimeError("MolmoPoint inference or decoding failed") from exc
-        return MolmoPointResult(rgb.shape[0], rgb.shape[1], points, prompt, request.mask is not None, self.config.provenance())
+        provenance = {**self.config.provenance(), "effective_prompt": prompt,
+                      "generated_text": generated_text, "decoded_point_count": len(points)}
+        return MolmoPointResult(rgb.shape[0], rgb.shape[1], points, prompt, request.mask is not None, provenance)
 
     def close(self) -> None:
         """Release model and processor; the next prediction lazily reloads them."""

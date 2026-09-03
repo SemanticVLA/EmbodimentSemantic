@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -235,3 +237,29 @@ def test_pre_motion_validation_does_not_recount_hover_trace():
     assert runner._newly_sent_actions(env, before) == 0
     env._arrow_motion_trace = [{"action_sent": True}] * 2
     assert runner._newly_sent_actions(env, before) == 2
+
+
+def test_gripper_open_preflight_runs_before_reprobe_and_counts_shared_actions(tmp_path, monkeypatch):
+    calls = []
+    fake_episode = ModuleType("run_arrow_pick_place_eval")
+    fake_episode._raw_observation = lambda env: {"eef_pos": np.asarray((0.1, 0.2, 0.3))}
+    fake_episode._proprioception = lambda observation: observation
+
+    def run_motion(env, waypoints, observation, **kwargs):
+        calls.append((np.asarray(waypoints), kwargs))
+        return [{"phase": "open", "steps": 20, "status": "stop"}]
+
+    fake_episode._run_motion = run_motion
+    monkeypatch.setitem(sys.modules, "run_arrow_pick_place_eval", fake_episode)
+    env = SimpleNamespace(_molmo_sam3_action_count=0)
+    callback_calls = []
+    audit = runner._perform_gripper_open(
+        env, output_dir=tmp_path, motion_started_callback=lambda: callback_calls.append(True),
+    )
+    assert calls[0][1]["start_phase"] == "open"
+    assert calls[0][1]["stop_after_phase"] == "open"
+    assert calls[0][1]["action_budget"] == 1200
+    assert calls[0][1]["motion_started_callback"] is not None
+    assert np.allclose(calls[0][0], np.tile((0.1, 0.2, 0.3), (6, 1)))
+    assert audit["total_actions"] == 20
+    assert env._molmo_sam3_action_count == 20
