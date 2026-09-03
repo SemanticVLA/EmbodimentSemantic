@@ -376,13 +376,21 @@ if Path(data.get("checkpoint_root", "")).resolve() != Path(checkpoint_root).reso
     raise SystemExit("stage marker checkpoint root differs from this run")
 manifest_path = Path(data.get("checkpoint_manifest", "")).resolve()
 stage_root = Path(checkpoint_root).resolve() / expected_stage
-if manifest_path.parent != stage_root or manifest_path.name != "manifest.json":
+update_dir = manifest_path.parent
+if (
+    update_dir.parent != stage_root
+    or manifest_path.name != "manifest.json"
+    or not update_dir.name.startswith("update_")
+    or not update_dir.name[7:].isdigit()
+):
     raise SystemExit("stage marker checkpoint manifest is outside its stage directory")
 if not manifest_path.is_file():
     raise SystemExit("stage marker checkpoint manifest is missing")
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 if manifest.get("stage") != expected_stage or int(manifest.get("update", -1)) < target_updates:
     raise SystemExit("stage marker checkpoint has the wrong stage or insufficient updates")
+if update_dir.name != f"update_{int(manifest['update']):07d}":
+    raise SystemExit("stage marker update directory does not match checkpoint manifest")
 files = manifest.get("files")
 if not isinstance(files, dict) or not files:
     raise SystemExit("stage checkpoint manifest has no file hashes")
