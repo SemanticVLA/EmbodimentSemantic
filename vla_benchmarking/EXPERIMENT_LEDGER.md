@@ -1,9 +1,47 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
-## Experimental repair3 preparation — 2026-09-03
+## Experimental repair4 preparation — 2026-09-03
 
-Fresh scheduler audit: **2026-09-03 19:33:31 UTC**. No Molmo campaign is
-running; unrelated job 1918812 is pending and is outside this experiment.
+Repair4 tests **observed upper-rim contact selection**: use actual RGB-D support
+within 8 mm below its world-Z 90th percentile, with 15 mm metric neighborhoods
+for tangent and per-yaw opening. Do not lift low image-boundary points to an
+invented height. Preserve the repair3 hover, collision boxes, motion limits,
+model/prompt input, seeds, suites and evaluator. A separate reporting correction
+preserves an explicitly passed lift-retention heuristic when placement later
+fails; it does not change motion or task-success accounting. The temporary
+global four-cell gate is disabled: shared motion executed successfully in
+repair3, and a physical no-candidate outcome must not block other camera/prompt
+arms. All six 12-cell screens run sequentially, retaining per-arm operational
+stop rules and immediate fatal-contract stopping. Only complete arms with at
+least one successful placement may advance to 60 cells (at most two).
+All-zero screens are archived for a new idea instead of extended. Targeted
+validation passes 44 tests plus independent focused testing and review.
+No new job has been submitted yet.
+
+## Experimental repair3 finished — 2026-09-03
+
+Fresh scheduler audit: **2026-09-03 19:57:05 UTC**. Job **1919163** is
+**FAILED, stopped_repair_gate, exit 2**, ran 19:45:20–19:53:15 UTC on one A40.
+All four hovers completed. T4 seeds 1000/1001 had no candidates (108/36 and
+36/108 obstruction/aperture rejections). T6 executed six grasp candidates;
+seed 1000 reached close/lift on attempt 2 then timed out during preplace;
+seed 1001 timed out during three translations and one pregrasp. Final result:
+**0/4 task successes**, 1,509 total reported actions across four cells, no
+other arms or finalists run. The archived metric says zero retained lifts,
+but direct phase evidence shows **one passed retention heuristic** before the
+placement failure (qpos 0.001786/-0.002016, threshold 0.0015). This is not
+verified object retention. The reporting bug will be corrected in repair4.
+Archival is VERIFIED; no Molmo job is active. Unrelated job 1918812 is untouched.
+Executed source is immutable commit
+`4ae6be0b4da7fb12731fbc6d7796433794a13566`, label
+`v9d_molmo_repair3_4ae6be0`. The source bundle hash was verified on Legion,
+and the deployed SHA-named checkout is clean. Independent final review
+approved the gated launch with no HIGH/BLOCKER findings.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_repair3_4ae6be0_1919163/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_repair3_4ae6be0_1919163`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919163.out`.
+
 The user authorized continued evidence-driven fixes and Legion relaunches
 without further confirmation until improvement. A thread follow-up checks
 every ten minutes and continues work; it must not duplicate active jobs.
@@ -14,7 +52,8 @@ replace coarse collision spheres with oriented bounds enclosing the actual
 robot collision geometry. Clearance, aperture, action limits, candidate policy,
 model, seeds, evaluator and simulator remain unchanged. This is an exploratory
 combined integration repair, not a prompt-effect estimate. Use the four-cell
-repair gate before allowing the existing six-arm screen and finalist extension.
+repair gate before allowing the existing six-arm screen and finalist extension
+in that historical run. Repair4 supersedes only this temporary global gate.
 Pre-launch targeted validation: **39 passed** across geometry, episode adapter,
 campaign and frozen-controller isolation tests. Independent tester confirmed
 rotated-box rejection, malformed geometry rejection, staged hover execution and

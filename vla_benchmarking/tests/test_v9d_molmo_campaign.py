@@ -91,6 +91,40 @@ def test_missing_and_failed_cells_stay_in_planned_denominator(tmp_path):
     assert result["successes_per_planned"] == 1 / 12
 
 
+def test_metrics_reconstructs_retained_lift_after_placement_failure(tmp_path):
+    def cell(seed, result):
+        return {
+            "status": "failed", "suite_mode": "vanilla", "task_id": 4,
+            "seed": seed, "evaluator_result": False,
+            "audit": {"canary_manifest": {"attempts": [{"results": [result]}]}},
+        }
+
+    passed_after_placement_failure = {
+        "grasp_retained": False,
+        "attempt_phases": [{
+            "phase": "lift", "status": "reached",
+            "retention_gate": {"enabled": True, "retained": True, "status": "passed"},
+        }],
+    }
+    rejected_gate = {
+        "grasp_retained": False,
+        "attempt_phases": [{
+            "phase": "lift", "status": "reached",
+            "retention_gate": {"enabled": True, "retained": False, "status": "rejected"},
+        }],
+    }
+    missing_gate = {"grasp_retained": False, "attempt_phases": [{"phase": "lift", "status": "reached"}]}
+    campaign.write_json(tmp_path / "vanilla" / "arrow_pick_place_matrix_status.json", {"cells": [
+        cell(1000, passed_after_placement_failure), cell(1001, rejected_gate), cell(1002, missing_gate),
+    ]})
+    result = campaign.metrics(tmp_path, 12)
+    assert result["retained_lifts"] == 1
+    assert result["retention_metric_source"]["cells_by_source"] == {
+        "completed_lift_retention_gate": 1,
+        "no_explicit_retention_evidence": 2,
+    }
+
+
 def test_operational_stop_requires_two_distinct_cells():
     rules = campaign.StopRules()
     record = dict(status="failed", stage="build_env", error_type="ImportError", error="missing dependency", suite_mode="vanilla", task_id=4, seed=1000)
@@ -139,7 +173,7 @@ def test_all_arms_share_runtime_and_best_two_extend(tmp_path, monkeypatch, final
         n = 6 if args["--phase"] == "prefix" else 30
         for suite in ("vanilla", "sealed_randomized"):
             campaign.write_json(output / suite / "arrow_pick_place_matrix_status.json", {"cells": [
-                {"status": "completed", "evaluator_result": output.name == "dense_agentview",
+                {"status": "completed", "evaluator_result": output.name in {"dense_agentview", "geometry_agentview"},
                  "suite_mode": suite, "task_id": 4, "seed": 1000 + i} for i in range(n)
             ]})
         return 0
@@ -154,3 +188,28 @@ def test_all_arms_share_runtime_and_best_two_extend(tmp_path, monkeypatch, final
     assert {c["--molmopoint-prompt-id"] for c in calls} == set(campaign.canary.MOLMOPOINT_PROMPT_IDS)
     assert report["sam3_used"] is False
     assert report["status"] == ("incomplete_finalists" if finalist_failure else "completed")
+
+
+def test_zero_success_screen_arms_are_not_extended(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(campaign, "MolmoPointRuntime", object)
+
+    def fake_main(argv, *, molmo_runtime, cell_completed_callback):
+        args = dict(zip(argv[::2], argv[1::2]))
+        calls.append(args)
+        output = __import__("pathlib").Path(args["--output-dir"])
+        count = 6 if args["--phase"] == "prefix" else 30
+        for suite in ("vanilla", "sealed_randomized"):
+            campaign.write_json(output / suite / "arrow_pick_place_matrix_status.json", {"cells": [
+                {"status": "completed", "evaluator_result": False, "suite_mode": suite, "task_id": 4, "seed": 1000 + i}
+                for i in range(count)
+            ]})
+        return 0
+
+    monkeypatch.setattr(campaign.canary, "main", fake_main)
+    assert campaign.main(["--output-dir", str(tmp_path)]) == 2
+    report = json.loads((tmp_path / "campaign.json").read_text())
+    assert len(calls) == len(campaign.ARMS)
+    assert all(screen["metrics"]["terminal_cells"] == 12 for screen in report["screen"])
+    assert report["finalists"] == []
+    assert report["status"] == "no_successful_arm"

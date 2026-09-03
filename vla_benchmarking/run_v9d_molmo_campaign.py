@@ -139,13 +139,43 @@ def metrics(root: Path, planned: int) -> dict[str, Any]:
     terminal = [r for r in records if r.get("status") in TERMINAL]
     successes = sum(r.get("status") == "completed" and r.get("evaluator_result") is True for r in terminal)
     retained, retry_successes, actions, perception_s = 0, 0, 0, 0.0
+    retention_sources: Counter[str] = Counter()
     failure_counts: Counter[str] = Counter()
     for record in terminal:
         audit = record.get("audit") or {}
         episode = audit.get("canary_manifest") or {}
         attempts = episode.get("attempts") or []
         final = episode.get("final_result") or {}
-        retained += int(any(result.get("grasp_retained") is True for attempt in attempts for result in attempt.get("results", [])))
+        # A placement timeout can occur after a completed lift retention gate.
+        # Count that cell's retained lift from explicit lift evidence even when
+        # the final attempt result correctly reports grasp_retained=False for
+        # the failed placement. Missing, rejected, or incomplete evidence
+        # remains fail-closed. This is proprioception-only heuristic evidence,
+        # not physical object-retention proof.
+        retained_for_cell = False
+        source_for_cell = "no_explicit_retention_evidence"
+        for attempt in attempts:
+            for result in attempt.get("results", []):
+                if result.get("grasp_retained") is True:
+                    retained_for_cell = True
+                    source_for_cell = "result_grasp_retained"
+                    break
+                for phase in result.get("attempt_phases", []) or []:
+                    if not isinstance(phase, Mapping) or phase.get("phase") != "lift":
+                        continue
+                    if phase.get("status") not in {"reached", "dwell", "stop"}:
+                        continue
+                    gate = phase.get("retention_gate")
+                    if isinstance(gate, Mapping) and gate.get("retained") is True and gate.get("status") == "passed":
+                        retained_for_cell = True
+                        source_for_cell = "completed_lift_retention_gate"
+                        break
+                if retained_for_cell:
+                    break
+            if retained_for_cell:
+                break
+        retained += int(retained_for_cell)
+        retention_sources[source_for_cell] += 1
         retry_successes += int(len(attempts) > 1 and final.get("evaluator_success") is True)
         for attempt in attempts:
             perception_s += float(attempt.get("candidate_diagnostics", {}).get("perception_latency_s", 0.0))
@@ -162,6 +192,10 @@ def metrics(root: Path, planned: int) -> dict[str, Any]:
     return {
         "planned": planned, "terminal_cells": len(terminal), "successes": successes,
         "successes_per_planned": successes / planned, "retained_lifts": retained,
+        "retention_metric_source": {
+            "description": "explicit result flag or completed lift retention gate; proprioception-only heuristic, not physical object-retention proof",
+            "cells_by_source": dict(retention_sources),
+        },
         "successful_retries": retry_successes, "reported_actions": actions,
         "perception_latency_s": perception_s, "failure_categories": dict(failure_counts),
         "per_suite": {suite: {"successes": sum(r.get("status") == "completed" and r.get("evaluator_result") is True for r in terminal if r.get("suite_mode") == suite), "planned": planned // 2} for suite in ("vanilla", "sealed_randomized")},
@@ -239,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             report["finished_unix"] = time.time()
             write_json(report_path, report)
             return 2
-    eligible = sorted((r for r in report["screen"] if r["returncode"] == 0 and r["metrics"]["terminal_cells"] == 12), key=rank_key)
+    eligible = sorted((r for r in report["screen"] if r["returncode"] == 0 and r["metrics"]["terminal_cells"] == 12 and r["metrics"]["successes"] > 0), key=rank_key)
     if not args.screen_only:
         for selected in eligible[:2]:
             result = run_arm(Arm(**selected["arm"]), "full60")
@@ -250,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
                 write_json(report_path, report)
                 return 2
     incomplete_finalists = any(r["returncode"] != 0 or r["metrics"]["terminal_cells"] != 60 for r in report["finalists"])
-    report["status"] = ("no_executable_arm" if not eligible else "incomplete_finalists" if incomplete_finalists else "completed")
+    report["status"] = ("no_successful_arm" if not eligible else "incomplete_finalists" if incomplete_finalists else "completed")
     report["finished_unix"] = time.time()
     write_json(report_path, report)
     return 0 if eligible and not incomplete_finalists else 2

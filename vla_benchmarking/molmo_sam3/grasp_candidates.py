@@ -179,6 +179,10 @@ class CandidatePolicy:
     molmo_snap_radius_px: int = 12
     local_seed_radius_px: int = 28
     rim_support_radius_px: int = 24
+    contact_mode: str = "observed_upper_rim"
+    rim_height_quantile: float = 0.90
+    rim_height_band_m: float = 0.008
+    rim_local_radius_m: float = 0.015
     min_rim_support_pixels: int = 3
     min_depth_support_pixels: int = 3
     dedupe_position_m: float = 0.002
@@ -854,15 +858,45 @@ def generate_grasp_candidates(
         ignored_robot_boxes = _current_hand_world_boxes(current_grip, current_rotation, R_ge, contact_offset, collision_boxes)
     if not np.isfinite(config.terminal_contact_allowance_m) or config.terminal_contact_allowance_m < 0:
         raise ValueError("terminal_contact_allowance_m must be finite and non-negative")
+    if config.contact_mode != "observed_upper_rim":
+        raise ValueError("contact_mode must be observed_upper_rim")
+    if not (0.0 < config.rim_height_quantile <= 1.0) or not np.isfinite(config.rim_height_quantile):
+        raise ValueError("rim_height_quantile must be finite in (0, 1]")
+    if not np.isfinite(config.rim_height_band_m) or config.rim_height_band_m < 0:
+        raise ValueError("rim_height_band_m must be finite and non-negative")
+    if not np.isfinite(config.rim_local_radius_m) or config.rim_local_radius_m <= 0:
+        raise ValueError("rim_local_radius_m must be finite and positive")
+    rim_local_radius_m = config.rim_local_radius_m
     valid = _valid_depth(depth)
-    eligible_boundary = _boundary(mask) & valid
-    boundary_pixels = np.column_stack(np.nonzero(eligible_boundary))
+    masked_pixels = np.column_stack(np.nonzero(mask & valid))
+    masked_world, masked_kept = _support_points(masked_pixels, depth, K, T)
+    if len(masked_world) == 0:
+        return GraspCandidateResult((), (), (), config.name, {"reason": "no_valid_visible_rim_boundary", "seed_audit": []})
+    # Exclude the currently observed robot before estimating rim height.  This
+    # is geometry-only self filtering from the live probe, not mask dilation.
+    masked_keep = np.ones(len(masked_world), dtype=bool)
+    for center, radius in ignored_robot_spheres:
+        masked_keep &= np.linalg.norm(masked_world - center[None, :], axis=1) > radius + float(config.obstruction_clearance_m or 0.0)
+    for box in ignored_robot_boxes:
+        masked_keep &= _points_box_signed_clearance(masked_world, box["center_world_m"], box["rotation_world_box"], box["half_extents_m"]) > float(config.obstruction_clearance_m or 0.0)
+    masked_world = masked_world[masked_keep]
+    masked_kept = masked_kept[masked_keep]
+    if len(masked_world) == 0:
+        return GraspCandidateResult((), (), (), config.name, {"reason": "no_visible_target_after_robot_exclusion", "seed_audit": []})
+    rim_height = float(np.quantile(masked_world[:, 2], config.rim_height_quantile))
+    upper_threshold = rim_height - config.rim_height_band_m
+    boundary_mask = _boundary(mask) & valid
+    upper_observed = np.zeros(mask.shape, dtype=bool)
+    upper_observed[masked_kept[:, 0], masked_kept[:, 1]] = masked_world[:, 2] >= upper_threshold
+    # The upper-support pool is intentionally not restricted to silhouette
+    # boundary pixels: a visible upper rim can be interior to a mask.
+    boundary_pixels = np.column_stack(np.nonzero(upper_observed))
     molmo = _as_points(molmo_points)
     seeds, seed_audit = _make_seeds(boundary_pixels, molmo, config)
     rejected: list[CandidateRejection] = []
     candidates: list[GraspCandidate] = []
     if not len(boundary_pixels):
-        return GraspCandidateResult((), (), (), config.name, {"reason": "no_valid_visible_rim_boundary", "seed_audit": seed_audit})
+        return GraspCandidateResult((), (), (), config.name, {"reason": "no_valid_visible_upper_rim_boundary", "seed_audit": seed_audit, "rim_height_m": rim_height, "upper_rim_threshold_m": upper_threshold})
     # Only accepted Molmo proposals influence ranking.  In dense mode an
     # out-of-mask proposal must not pull fallback geometry toward its invalid
     # pixel merely because it was present in the model response.
@@ -881,12 +915,16 @@ def generate_grasp_candidates(
                 for insertion in config.insertion_depths_m:
                     rejected.append(CandidateRejection(seed_index, float(yaw), float(insertion), "seed_deprojection", {"error": str(exc)}))
             continue
-        rim_pixels = _local_pixels(mask & valid, (v, u), config.rim_support_radius_px, boundary_only=True)
-        rim_world, rim_kept = _support_points(rim_pixels, depth, K, T)
+        distances_to_seed = np.linalg.norm(masked_world - base_contact[None, :], axis=1)
+        local_upper = (distances_to_seed <= rim_local_radius_m) & (masked_world[:, 2] >= upper_threshold)
+        local_world = masked_world[local_upper]
+        local_kept = masked_kept[local_upper]
+        rim_world = local_world
+        rim_kept = local_kept
         if len(rim_world) < config.min_rim_support_pixels:
             for yaw in config.yaw_offsets_deg:
                 for insertion in config.insertion_depths_m:
-                    rejected.append(CandidateRejection(seed_index, float(yaw), float(insertion), "insufficient_visible_rim_support", {"support": int(len(rim_world))}))
+                    rejected.append(CandidateRejection(seed_index, float(yaw), float(insertion), "insufficient_visible_rim_support", {"support": int(len(rim_world)), "upper_support": int(len(local_world)), "rim_height_m": rim_height, "upper_rim_threshold_m": upper_threshold}))
             continue
         tangent = _rim_tangent(rim_world, rim_kept)
         jaw = np.cross(approach, tangent)
@@ -897,25 +935,15 @@ def generate_grasp_candidates(
                     rejected.append(CandidateRejection(seed_index, float(yaw), float(insertion), "degenerate_rim_tangent"))
             continue
         jaw /= jaw_norm
-        local_mask_pixels = _local_pixels(mask & valid, (v, u), config.local_seed_radius_px)
-        local_world, _ = _support_points(local_mask_pixels, depth, K, T)
         if len(local_world) < config.min_depth_support_pixels:
             for yaw in config.yaw_offsets_deg:
                 for insertion in config.insertion_depths_m:
                     rejected.append(CandidateRejection(seed_index, float(yaw), float(insertion), "insufficient_depth_support", {"support": int(len(local_world))}))
             continue
-        extent = float(np.ptp((local_world - base_contact[None, :]) @ jaw)) if len(local_world) >= 2 else 0.0
-        required_aperture = max(float(robot_calibration.min_aperture_m), extent + 2.0 * float(robot_calibration.finger_clearance_m))
-        if required_aperture > float(robot_calibration.max_aperture_m) + 1e-9:
-            for yaw in config.yaw_offsets_deg:
-                for insertion in config.insertion_depths_m:
-                    rejected.append(CandidateRejection(seed_index, float(yaw), float(insertion), "aperture_exceeded", {"required_aperture_m": required_aperture}))
-            continue
         molmo_distance = None
         if len(molmo_uv) and config.name != "geometry_only":
             molmo_distance = float(np.min(np.linalg.norm(molmo_uv - np.array((float(u), float(v))), axis=1)))
         depth_support = int(len(local_world))
-        clearance_score = max(0.0, 1.0 - required_aperture / float(robot_calibration.max_aperture_m))
         molmo_score = 0.0 if molmo_distance is None else 1.0 / (1.0 + molmo_distance)
         for yaw in config.yaw_offsets_deg:
             yaw_float = float(yaw)
@@ -929,6 +957,13 @@ def generate_grasp_candidates(
                 for insertion in config.insertion_depths_m:
                     rejected.append(CandidateRejection(seed_index, yaw_float, float(insertion), "invalid_orientation"))
                 continue
+            extent = float(np.ptp((local_world - base_contact[None, :]) @ jaw_yaw)) if len(local_world) >= 2 else 0.0
+            required_aperture = max(float(robot_calibration.min_aperture_m), extent + 2.0 * float(robot_calibration.finger_clearance_m))
+            if required_aperture > float(robot_calibration.max_aperture_m) + 1e-9:
+                for insertion in config.insertion_depths_m:
+                    rejected.append(CandidateRejection(seed_index, yaw_float, float(insertion), "aperture_exceeded", {"required_aperture_m": required_aperture, "local_width_support_m": extent, "rim_height_m": rim_height, "upper_rim_threshold_m": upper_threshold}))
+                continue
+            clearance_score = max(0.0, 1.0 - required_aperture / float(robot_calibration.max_aperture_m))
             # The second branch is physically equivalent for a symmetric jaw:
             # its approach axis is unchanged while jaw/completion are flipped.
             # It is considered only with a live current pose, and is selected
@@ -1062,7 +1097,10 @@ def generate_grasp_candidates(
                     score=score,
                     audit={
                         "frame": "world_grip_site", "source_frame": "original_image_uv", "no_legacy_source_offset": True,
-                        "support_pixels": int(len(rim_world)), "jaw_flip": jaw_flip,
+                        "support_pixels": int(len(rim_world)), "upper_support_pixels": int(len(local_world)),
+                        "rim_height_m": rim_height, "upper_rim_threshold_m": upper_threshold,
+                        "seed_height_m": float(base_contact[2]), "local_width_support_m": extent,
+                        "jaw_flip": jaw_flip,
                         "current_pose_available": live_motion_available,
                         "position_distance_m": chosen["position_distance"],
                         "rotation_distance_rad": chosen["rotation_distance"],
@@ -1096,6 +1134,12 @@ def generate_grasp_candidates(
             "hand_collision_sphere_count": len(collision_spheres),
             "hand_collision_box_count": len(collision_boxes),
             "terminal_contact_allowance_m": float(config.terminal_contact_allowance_m),
+            "contact_mode": config.contact_mode,
+            "rim_height_quantile": float(config.rim_height_quantile),
+            "rim_height_m": rim_height,
+            "upper_rim_threshold_m": upper_threshold,
+            "rim_height_band_m": float(config.rim_height_band_m),
+            "rim_local_radius_m": float(rim_local_radius_m),
         },
     )
 

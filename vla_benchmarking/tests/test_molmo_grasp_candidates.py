@@ -383,3 +383,50 @@ def test_rotated_nonzero_center_box_and_current_robot_filter_are_applied():
     current_box = {**box, "center_world_m": point, "rotation_world_box": box_rotation}
     filtered = _hand_volume_obstruction(**kwargs, ignored_robot_boxes=(current_box,))
     assert filtered["status"] == "no_observed_scene_after_robot_exclusion"
+
+
+def test_observed_upper_rim_band_excludes_lower_wall_seeds_and_audits_local_width():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    yy, xx = np.indices(mask.shape)
+    depth[mask & (yy > 32)] = 1.0
+    depth[mask & (yy <= 32)] = 1.07
+    upper = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=robot,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    assert upper.candidates
+    assert all(item.audit["seed_height_m"] >= item.audit["upper_rim_threshold_m"] for item in upper.candidates)
+    assert all(item.audit["local_width_support_m"] <= 0.03 for item in upper.candidates)
+    lower = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 42.0)],
+        calibration=calibration, robot_calibration=robot,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    assert not lower.candidates
+    assert lower.audit["seed_audit"][0]["reason"] == "outside_mask_or_snap_radius"
+
+
+def test_upper_support_pool_accepts_interior_upper_rim_point():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    depth[30:34, 30:34] = 1.08
+    result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 32.0)],
+        calibration=calibration, robot_calibration=robot,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    assert result.candidates
+    assert (32, 32) in result.seeds_uv
+    assert all(item.audit["upper_support_pixels"] >= 3 for item in result.candidates)
+
+
+def test_local_aperture_width_is_recomputed_for_each_yaw():
+    rgb, depth, mask, calibration, robot, policy = _scene()
+    result = generate_grasp_candidates(
+        rgb=rgb, metric_depth_m=depth, sam_mask=mask, molmo_points=[(32.0, 22.0)],
+        calibration=calibration, robot_calibration=robot,
+        policy=CandidatePolicy(**{**policy.__dict__, "name": "molmo_local"}),
+    )
+    widths = {item.yaw_deg: item.audit["local_width_support_m"] for item in result.candidates if item.insertion_depth_m == 0.0}
+    assert len(widths) == 3
+    assert len({round(value, 8) for value in widths.values()}) > 1
