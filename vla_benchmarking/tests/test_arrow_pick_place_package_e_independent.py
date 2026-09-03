@@ -49,16 +49,17 @@ def test_sealed_suite_mode_is_realized_at_each_injected_boundary(matrix, tmp_pat
         task_ids=[0],
         episodes_per_task=1,
         suite_mode="sealed_randomized",
-        controller_variant="rgbd_arrow_v2",
+        controller_variant=matrix.DEFAULT_CONTROLLER_VARIANT,
         dry_run=True,
         env_builder=build_env,
         arrow_input_builder=build_inputs,
         episode_runner=run_episode,
     )
     assert seen["build"] == (0, 1000, 256, "sealed_randomized")
-    assert seen["inputs"] == ("sealed_randomized", "rgbd_arrow_v2")
-    assert seen["episode"] == ("sealed_randomized", "rgbd_arrow_v2")
-    assert summary["condition_label"] == "sealed_randomized__rgbd_arrow_v2"
+    assert seen["inputs"] == ("sealed_randomized", matrix.DEFAULT_CONTROLLER_VARIANT)
+    assert seen["episode"][0] == "sealed_randomized"
+    assert seen["episode"][1].name == matrix.DEFAULT_CONTROLLER_VARIANT
+    assert summary["condition_label"] == f"sealed_randomized__{matrix.DEFAULT_CONTROLLER_VARIANT}"
     assert summary["protocol"]["suite_contract"]["sealed_randomized"]
 
 
@@ -84,7 +85,7 @@ def test_pure_controller_has_no_new_runtime_api_or_variant_dependency(episode):
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.add(node.module.split(".", 1)[0].lower())
     assert not executable_refs.intersection(forbidden)
-    assert imports <= {"__future__", "dataclasses", "typing", "numpy"}
+    assert imports <= {"__future__", "dataclasses", "hashlib", "typing", "numpy"}
 
     # The new suite/variant/recovery APIs stay in the runner.  The controller
     # function signatures remain explicit geometry-only seams.
@@ -188,6 +189,10 @@ def test_recovery_attempts_and_steps_have_hard_upper_bounds(episode, monkeypatch
     variant = episode.ControllerVariantConfig(
         suite_mode="vanilla", stall_window_steps=2, recovery_attempts=3, recovery_steps=2
     )
+    # This exercises bounded recovery mechanics with an injected canonical
+    # fixture; production run_episode rejects policy mutations under the v9d
+    # freeze and is covered separately by test_v9d_runtime_default.py.
+    monkeypatch.setattr(episode, "load_controller_config", lambda: variant.canonical())
     with pytest.raises(TimeoutError, match="phase close stalled"):
         episode.run_episode(
             env=env,
@@ -226,6 +231,27 @@ def test_dual_wrapper_runs_vanilla_then_randomized_sequentially_and_combines_res
     # two runs and the second starts only after the first returns.
     assert 'run_suite vanilla "$VANILLA_ROOT" 0 &' not in text
     assert 'run_suite sealed_randomized "$RANDOMIZED_ROOT" 1 &' not in text
+
+
+@pytest.mark.parametrize(
+    "wrapper_name",
+    (
+        "run_arrow_pick_place_matrix.sbatch",
+        "run_arrow_pick_place_dual_matrix.sbatch",
+    ),
+)
+def test_arrow_launchers_freeze_v9d_and_guard_ambient_controller_overrides(wrapper_name):
+    """Normal arrow jobs must not silently run an adjacent experiment."""
+    wrapper = Path("vla_benchmarking/legion") / wrapper_name
+    text = wrapper.read_text(encoding="utf-8")
+    assert 'FINAL_CONTROLLER_LABEL="v9d_rgbd_region_grasp_search"' in text
+    assert 'FINAL_CONTROLLER_VARIANT="libero_spatial_akita_bowl_agentview_v9d_rgbd_region_grasp_search"' in text
+    assert 'FINAL_CONTROLLER_CONFIG_PATH="$REPO_ROOT/vla_benchmarking/controller_configs/v9d_rgbd_region_grasp_search.json"' in text
+    assert 'CONTROLLER_CONFIG_INPUT="$FINAL_CONTROLLER_CONFIG_PATH"' in text
+    assert "ambient controller config override refused" in text
+    assert "ambient ARROW_CONTROLLER_VARIANT override refused" in text
+    assert "v9d is the only active arrow controller" in text
+    assert 'matrix_args+=(--controller-config "$CONTROLLER_CONFIG_PATH")' in text
 
 
 @pytest.mark.parametrize(

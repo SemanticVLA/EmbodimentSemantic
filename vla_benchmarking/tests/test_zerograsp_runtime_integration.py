@@ -4,6 +4,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# ZeroGrasp is intentionally retired from the active arrow runtime. Keep this
+# file as historical integration documentation for a future side experiment,
+# but do not let provider-specific expectations define the frozen v9d baseline.
+pytestmark = pytest.mark.skip(reason="ZeroGrasp is archived and not part of active v9d")
+
 try:
     from vla_benchmarking import run_arrow_pick_place_eval as episode
     from vla_benchmarking import run_arrow_pick_place_matrix as matrix

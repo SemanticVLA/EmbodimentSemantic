@@ -38,11 +38,11 @@ def test_default_plan_has_100_cells_unique_seeds_and_paths(matrix, tmp_path: Pat
     )
     randomized = matrix.plan_cells(
         task_ids=[0], episodes_per_task=1, output_root=tmp_path,
-        suite_mode="sealed_randomized", controller_variant="rgbd_arrow_v2",
+        suite_mode="sealed_randomized", controller_variant=matrix.DEFAULT_CONTROLLER_VARIANT,
     )[0]
     assert randomized["profile_validated"] is False
     assert Path(randomized["output_dir"]).parts[-4:-2] == (
-        "sealed_randomized", "rgbd_arrow_v2"
+        "sealed_randomized", matrix.DEFAULT_CONTROLLER_VARIANT
     )
 
 
@@ -104,10 +104,10 @@ def test_cli_requires_mode_and_parses_safety_flags(matrix):
     assert matrix.parse_args(["--execute-motion", "--allow-unvalidated-profile", "--continue-on-motion-failure"]).continue_on_motion_failure is True
     condition = matrix.parse_args([
         "--dry-run", "--suite-mode", "sealed_randomized",
-        "--controller-variant", "rgbd_arrow_v2",
+        "--controller-variant", matrix.DEFAULT_CONTROLLER_VARIANT,
     ])
     assert condition.suite_mode == "sealed_randomized"
-    assert condition.controller_variant == "rgbd_arrow_v2"
+    assert condition.controller_variant == matrix.DEFAULT_CONTROLLER_VARIANT
 
 
 def test_condition_metadata_is_forwarded_only_when_seam_accepts_it(matrix, tmp_path: Path):
@@ -132,22 +132,23 @@ def test_condition_metadata_is_forwarded_only_when_seam_accepts_it(matrix, tmp_p
     summary = matrix.run_matrix(
         output_root=tmp_path,
         task_ids=[0], episodes_per_task=1, dry_run=True,
-        suite_mode="sealed_randomized", controller_variant="rgbd_arrow_v2",
+        suite_mode="sealed_randomized", controller_variant=matrix.DEFAULT_CONTROLLER_VARIANT,
         env_builder=build_env, arrow_input_builder=build_inputs,
         episode_runner=episode_runner,
     )
     assert seen["builder"] == (0, 1000, 256, "sealed_randomized")
-    assert seen["inputs"] == ("sealed_randomized", "rgbd_arrow_v2")
-    assert seen["episode"] == ("sealed_randomized", "rgbd_arrow_v2")
+    assert seen["inputs"] == ("sealed_randomized", matrix.DEFAULT_CONTROLLER_VARIANT)
+    assert seen["episode"][0] == "sealed_randomized"
+    assert seen["episode"][1].name == matrix.DEFAULT_CONTROLLER_VARIANT
     assert summary["suite_mode"] == "sealed_randomized"
-    assert summary["controller_variant"] == "rgbd_arrow_v2"
-    assert summary["protocol"]["condition_label"] == "sealed_randomized__rgbd_arrow_v2"
+    assert summary["controller_variant"] == matrix.DEFAULT_CONTROLLER_VARIANT
+    assert summary["protocol"]["condition_label"] == f"sealed_randomized__{matrix.DEFAULT_CONTROLLER_VARIANT}"
     status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
     assert status["suite_mode"] == "sealed_randomized"
-    assert status["controller_variant"] == "rgbd_arrow_v2"
+    assert status["controller_variant"] == matrix.DEFAULT_CONTROLLER_VARIANT
     record = status["cells"][0]
     assert record["suite_mode"] == "sealed_randomized"
-    assert record["controller_variant"] == "rgbd_arrow_v2"
+    assert record["controller_variant"] == matrix.DEFAULT_CONTROLLER_VARIANT
 
 
 def test_matrix_writes_complete_plan_manifest_before_build_and_continues_failures(
@@ -743,7 +744,7 @@ def test_timeout_phase_is_included_in_phase_aggregates(matrix):
 
 
 def test_external_controller_config_is_resolved_once_and_recorded(matrix, tmp_path: Path):
-    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9_patient_control.json"
+    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9d_rgbd_region_grasp_search.json"
     observed = {}
 
     class Env:
@@ -815,7 +816,7 @@ def test_invalid_external_controller_config_fails_before_environment_build(
 
 
 def test_external_runtime_provenance_survives_controller_failure(matrix, tmp_path: Path):
-    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9_patient_control.json"
+    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9d_rgbd_region_grasp_search.json"
 
     class Env:
         _arrow_capture_contract = {"valid": True}

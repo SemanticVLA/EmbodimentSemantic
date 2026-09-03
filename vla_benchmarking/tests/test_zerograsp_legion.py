@@ -37,57 +37,20 @@ def test_bootstrap_is_explicit_pinned_and_never_downloads_checkpoint():
     assert 'VENV_INPUT="${ROOT}.venv"' in text
 
 
-def test_dual_matrix_zero_grasp_contract_is_opt_in_and_hash_pinned():
+def test_dual_matrix_zero_grasp_is_retired_from_standard_path():
     text = DUAL_MATRIX.read_text(encoding="utf-8")
-    assert PIN in text
-    for variable in (
-        "ZERO_GRASP_ROOT",
-        "ZERO_GRASP_PYTHON",
-        "ZERO_GRASP_PYTHON_SHA256",
-        "ZERO_GRASP_CHECKPOINT",
-        "ZERO_GRASP_CHECKPOINT_SHA256",
-        "ZERO_GRASP_CONFIG",
-        "ZERO_GRASP_CONFIG_SHA256",
-        "ZERO_GRASP_ENV_LOCK",
-        "ZERO_GRASP_ENV_LOCK_SHA256",
-        "ZERO_GRASP_EEF_PROBE",
-    ):
-        assert variable in text
-    assert "vla_benchmarking/zerograsp_worker.py" in text
-    assert "preflight_zerograsp_process.py" in text
-    assert "protocol_ready" in text
-    assert "process_closed" in text
-    assert "zerograsp_process_preflight.json" in text
-    assert "--repo \"$ZERO_GRASP_ROOT_RESOLVED\"" in text
-    assert 'zerograsp-jsonl-v1' in text
-    assert "zerograsp_runtime" in text
-    assert "zero_grasp_revision" in text
-    assert "zero_grasp_checkpoint_sha256" in text
-    assert "zero_grasp_config_sha256" in text
-    assert "pip_freeze" in text
-    assert "Torch/CUDA identity" in text
-    assert '"python_executable_sha256"' in text
-    assert '"venv"' in text and '"python"' in text
-    assert '"$ZERO_GRASP_PYTHON_RESOLVED" - "$ZERO_GRASP_ENV_LOCK_RESOLVED"' in text
-    assert "ZeroGrasp EEF probe hash differs from controller policy" in text
-    assert "ZeroGrasp EEF probe rotation differs from controller policy" in text
-    assert 'cp -- "$ZERO_GRASP_EEF_PROBE_RESOLVED" "$RUN_ROOT/zerograsp_eef_probe.json"' in text
-
-    # The worker handshake must precede the first LIBERO/MuJoCo import and the
-    # matrix launcher invocation, which is where environments are constructed.
-    handshake = text.index('preflight_zerograsp_process.py')
-    libero_import = text.index('import libero, mujoco, robosuite')
-    matrix_launch = text.index('"$PYTHON" "$MATRIX_LAUNCHER"')
-    assert handshake < libero_import < matrix_launch
+    assert "ZeroGrasp and adjacent controller experiments are retired" in text
+    assert "ZERO_GRASP" not in text
+    assert "preflight_zerograsp_process.py" not in text
+    assert "zerograsp_runtime" not in text
+    assert 'FINAL_CONTROLLER_LABEL="v9d_rgbd_region_grasp_search"' in text
+    assert 'CONTROLLER_CONFIG_INPUT="$FINAL_CONTROLLER_CONFIG_PATH"' in text
 
 
-def test_dual_matrix_does_not_run_worker_for_legacy_path():
+def test_dual_matrix_has_no_zero_grasp_worker_path():
     text = DUAL_MATRIX.read_text(encoding="utf-8")
-    selected_block = text[text.index('if [[ "$ZERO_GRASP_SELECTED" == 1 ]]; then'):]
-    assert 'if [[ -n "$CONTROLLER_CONFIG_CANONICAL_PATH" ]]' in text
-    assert 'ZERO_GRASP_SELECTED="$($PYTHON' in text
-    assert 'if [[ "$ZERO_GRASP_SELECTED" == 1 ]]; then' in selected_block
-    assert selected_block.count('--handshake') == 0
+    assert "worker" not in text.lower()
+    assert "--handshake" not in text
 
 
 def test_dual_matrix_motion_mode_is_explicit_and_defaults_to_execution():
@@ -98,28 +61,12 @@ def test_dual_matrix_motion_mode_is_explicit_and_defaults_to_execution():
     assert "matrix_args+=(--execute-motion)" in text
     assert "matrix_args+=(--dry-run)" in text
     assert "motion_mode=$MATRIX_EXECUTION_MODE" in text
-    assert 'ZERO_GRASP_PREFLIGHT_TIMEOUT_S="${ZERO_GRASP_PREFLIGHT_TIMEOUT_S:-120}"' in text
-    assert "ZERO_GRASP_PREFLIGHT_TIMEOUT_S must be an integer in [1, 600]" in text
-    assert '--timeout-s "$ZERO_GRASP_PREFLIGHT_TIMEOUT_S"' in text
+    assert "ZERO_GRASP" not in text
 
 
-def test_dual_matrix_preserves_expected_hashes_before_observed_digest_reuse():
+def test_dual_matrix_has_no_zero_grasp_digest_plumbing():
     text = DUAL_MATRIX.read_text(encoding="utf-8")
-    pairs = (
-        ("ZERO_GRASP_PYTHON", "ZERO_GRASP_PYTHON_EXPECTED_INPUT"),
-        ("ZERO_GRASP_CHECKPOINT", "ZERO_GRASP_CHECKPOINT_EXPECTED_INPUT"),
-        ("ZERO_GRASP_CONFIG", "ZERO_GRASP_CONFIG_EXPECTED_INPUT"),
-        ("ZERO_GRASP_ENV_LOCK", "ZERO_GRASP_ENV_LOCK_EXPECTED_INPUT"),
-    )
-    for observed, preserved in pairs:
-        capture = f'{preserved}="${{{observed}_SHA256:-}}"'
-        reset = f'{observed}_SHA256=""'
-        assert capture in text
-        assert text.index(capture) < text.index(reset)
-    assert 'ZERO_GRASP_CHECKPOINT_EXPECTED="$ZERO_GRASP_CHECKPOINT_EXPECTED_INPUT"' in text
-    assert 'ZERO_GRASP_CONFIG_EXPECTED="$ZERO_GRASP_CONFIG_EXPECTED_INPUT"' in text
-    assert 'ZERO_GRASP_ENV_LOCK_EXPECTED="$ZERO_GRASP_ENV_LOCK_EXPECTED_INPUT"' in text
-    assert '"$ZERO_GRASP_PYTHON_SHA256" == "$ZERO_GRASP_PYTHON_EXPECTED_INPUT"' in text
+    assert "ZERO_GRASP" not in text
 
 
 def test_runtime_setup_matches_official_pinned_compute_contract():
@@ -249,18 +196,10 @@ def test_runtime_lock_rejects_stale_or_different_interpreter_identity():
     assert "existing runtime lock {key} differs" in setup_text
     assert "python_executable_sha256" in setup_text
 
-    # Matrix preflight runs package/Torch checks under the selected external
-    # interpreter and rejects any mismatch before process startup.
-    assert '"$ZERO_GRASP_PYTHON_RESOLVED" - "$ZERO_GRASP_ENV_LOCK_RESOLVED"' in launcher_text
-    assert "selected interpreter" in launcher_text
-    assert "pip_freeze differs" in launcher_text
-    assert "Torch/CUDA identity differs" in launcher_text
-    assert "NumPy identity differs" in launcher_text
-    assert "setuptools/pkg_resources import failed" in launcher_text
-    assert "setuptools identity differs" in launcher_text
-    assert "torchvision identity differs" in launcher_text
-    assert '"python_executable_sha256": python_sha' in launcher_text
-    assert "export PYTHONDONTWRITEBYTECODE=1" in launcher_text
+    # The standard arrow launcher must not read the separate ZeroGrasp lock or
+    # interpreter at all; that experiment is retired from this path.
+    assert "ZERO_GRASP" not in launcher_text
+    assert "preflight_zerograsp_process.py" not in launcher_text
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX runtime test requires bash semantics")

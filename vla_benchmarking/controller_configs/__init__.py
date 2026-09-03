@@ -1,10 +1,11 @@
 """External, reproducible controller configuration loading.
 
-The legacy runner keeps its historical v1--v8 variant names for compatibility.
-New controller policies are represented by JSON documents and are expanded
-before they are handed to the runtime.  Expansion is deliberately small:
-``extends`` may name a relative JSON file (or a bundled config stem), and
-mapping values are recursively merged while lists are replaced as a unit.
+The checked-in arrow runtime has one active policy: v9d.  Historical arrow
+and ZeroGrasp documents live below ``retired/`` and are deliberately rejected
+by this loader.  Fine-tuned VLA configurations are outside this package and
+are unaffected.  Expansion is deliberately small: ``extends`` may name a
+relative JSON file (or a bundled config stem), and mapping values are
+recursively merged while lists are replaced as a unit.
 """
 
 from __future__ import annotations
@@ -17,6 +18,26 @@ from typing import Any, Mapping
 
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
+ACTIVE_CONTROLLER_CONFIG_FILENAME = "v9d_rgbd_region_grasp_search.json"
+ACTIVE_CONTROLLER_CONFIG_PATH = _PACKAGE_DIR / ACTIVE_CONTROLLER_CONFIG_FILENAME
+ACTIVE_CONTROLLER_NAME = "libero_spatial_akita_bowl_agentview_v9d_rgbd_region_grasp_search"
+_RETIRED_DIRNAME = "retired"
+RETIRED_CONTROLLER_NAMES = frozenset(
+    {
+        "libero_spatial_akita_bowl_agentview_v9_patient_control",
+        "libero_spatial_akita_bowl_agentview_v9a_bounded_grasp_search",
+        "libero_spatial_akita_bowl_agentview_v9b_residual_micro_correction",
+        "libero_spatial_akita_bowl_agentview_v9c_combined",
+        "libero_spatial_akita_bowl_agentview_v9e_rgbd_region_with_micro_correction",
+        "libero_spatial_akita_bowl_agentview_v9f_rgbd_region_height_sweep",
+        "libero_spatial_akita_bowl_agentview_v9g_post_lift_retention",
+        "libero_spatial_akita_bowl_agentview_v9h_rgbd_source_approach",
+        "libero_spatial_akita_bowl_agentview_v9i_support_plane_placement",
+        "libero_spatial_akita_bowl_agentview_v9j_combined_evidence_repair",
+        "libero_spatial_akita_bowl_agentview_v10_zg_grasp_only",
+        "libero_spatial_akita_bowl_agentview_v10_zg_grasp_recon_place",
+    }
+)
 
 
 class ControllerConfigError(ValueError):
@@ -82,17 +103,31 @@ def _resolve_reference(reference: str, parent: Path) -> Path:
     raise ControllerConfigError(f"controller config not found: {reference!r} (from {parent})")
 
 
-def load_controller_config(path: str | Path) -> dict[str, Any]:
+def _reject_retired_config(path: Path) -> None:
+    """Fail closed for archived experimental policies before runtime use."""
+    try:
+        path.relative_to(_PACKAGE_DIR / _RETIRED_DIRNAME)
+    except ValueError:
+        return
+    raise ControllerConfigError(
+        f"controller config is retired and cannot be executed: {path.name}"
+    )
+
+
+def load_controller_config(path: str | Path | None = None) -> dict[str, Any]:
     """Load and fully expand one controller JSON document.
 
     Cycles are rejected using canonical resolved paths.  The returned mapping
     contains no ``extends`` key, making it safe to hash and audit directly.
     """
-    root = _resolve_reference(str(path), Path.cwd())
+    root = ACTIVE_CONTROLLER_CONFIG_PATH if path is None else _resolve_reference(str(path), Path.cwd())
+    root = root.resolve()
+    _reject_retired_config(root)
     active: list[Path] = []
 
     def load_one(current: Path) -> dict[str, Any]:
         current = current.resolve()
+        _reject_retired_config(current)
         if current in active:
             chain = " -> ".join(str(item) for item in (*active, current))
             raise ControllerConfigError(f"controller config extends cycle: {chain}")
@@ -119,6 +154,10 @@ def load_controller_config(path: str | Path) -> dict[str, Any]:
             active.pop()
 
     expanded = load_one(root)
+    if expanded.get("name") in RETIRED_CONTROLLER_NAMES:
+        raise ControllerConfigError(
+            f"controller policy is retired and cannot be executed: {expanded['name']}"
+        )
     expanded["config_source"] = root.as_posix()
     # Source path is provenance, but not a semantic configuration value.  Keep
     # it out of the hash so copying a config does not change controller policy.
@@ -126,4 +165,13 @@ def load_controller_config(path: str | Path) -> dict[str, Any]:
     return expanded
 
 
-__all__ = ["ControllerConfigError", "canonical_controller_config", "controller_config_hash", "load_controller_config"]
+__all__ = [
+    "ACTIVE_CONTROLLER_CONFIG_FILENAME",
+    "ACTIVE_CONTROLLER_CONFIG_PATH",
+    "ACTIVE_CONTROLLER_NAME",
+    "ControllerConfigError",
+    "RETIRED_CONTROLLER_NAMES",
+    "canonical_controller_config",
+    "controller_config_hash",
+    "load_controller_config",
+]

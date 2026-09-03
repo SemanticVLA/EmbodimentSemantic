@@ -1,8 +1,28 @@
 {
-  "extends": "v9_patient_base.json",
   "name": "libero_spatial_akita_bowl_agentview_v9d_rgbd_region_grasp_search",
+  "controller": "OSC_POSE",
+  "phase_timeout_steps": 160,
+  "gripper_dwell_steps": 20,
+  "stall_window_steps": 0,
+  "stall_delta_m": 0.0001,
+  "recovery_attempts": 0,
+  "recovery_steps": 0,
+  "endpoint_depth_statistic": "lower_quantile",
+  "endpoint_depth_quantile": 0.25,
+  "approach_tolerance_m": 0.015,
+  "waypoint_tolerance_m": null,
+  "osc_position_scale_m": null,
+  "arrow_anchor_policy": "bbox_center",
+  "approach_lateral_offset_m": null,
+  "max_mask_fraction_for_motion": 0.4,
+  "workspace_bounds_m": {
+    "x": [-0.8, 0.8],
+    "y": [-0.8, 0.8],
+    "z": [0.0, 1.8]
+  },
   "grasp_search": {
     "enabled": true,
+    "empty_gripper_threshold": 0.0015,
     "strategy": "rgbd_region",
     "offsets_m": [],
     "region_radius_m": 0.075,
@@ -14,6 +34,18 @@
     "region_seed_radius_px": 3,
     "max_attempts": 3,
     "phase_timeout_steps": 160,
-    "max_actions": 1200
+    "max_actions": 1200,
+    "trigger_on": ["empty_gripper_likely", "close_stall", "close_timeout", "lift_stall", "lift_timeout"]
+  },
+  "micro_correction": {
+    "enabled": false,
+    "phases": ["descend", "lift", "preplace", "descend_place"],
+    "plateau_window_steps": 10,
+    "plateau_delta_m": 0.0001,
+    "residual_max_m": 0.005,
+    "correction_gain": 1.0,
+    "burst_steps": 8,
+    "max_rounds": 2,
+    "max_actions": 16
   }
 }

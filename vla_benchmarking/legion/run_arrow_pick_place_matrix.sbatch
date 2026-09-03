@@ -15,9 +15,10 @@
 #   MATRIX_EPISODES_PER_TASK positive episode count; defaults to 10
 #   MATRIX_SEED_BASE non-negative seed base; defaults to 1000
 #   MATRIX_RESOLUTION positive square capture resolution; defaults to 256
-#   ARROW_CONTROLLER_VARIANT legacy controller label; defaults to rgbd_arrow_v1
-#   CONTROLLER_CONFIG or ARROW_CONTROLLER_CONFIG external JSON controller config;
-#                    mutually exclusive with a non-default controller variant
+# Controller selection is frozen to the checked-in v9d policy by default:
+#   v9d_rgbd_region_grasp_search.json + its full active label.
+# Historical and experimental controller documents are archival only and are
+# not executable through this standard launcher.
 #
 # Submit this file with sbatch from the Legion login node. Do not execute it
 # directly on the login node or pass an active shared checkout as REPO_ROOT.
@@ -68,8 +69,23 @@ MATRIX_EPISODES_PER_TASK="${MATRIX_EPISODES_PER_TASK:-10}"
 MATRIX_SEED_BASE="${MATRIX_SEED_BASE:-1000}"
 MATRIX_RESOLUTION="${MATRIX_RESOLUTION:-256}"
 MATRIX_CONTINUE_ON_MOTION_FAILURE="${MATRIX_CONTINUE_ON_MOTION_FAILURE:-0}"
-CONTROLLER_VARIANT="${ARROW_CONTROLLER_VARIANT:-rgbd_arrow_v1}"
-CONTROLLER_CONFIG_INPUT="${CONTROLLER_CONFIG:-${ARROW_CONTROLLER_CONFIG:-}}"
+FINAL_CONTROLLER_LABEL="v9d_rgbd_region_grasp_search"
+FINAL_CONTROLLER_VARIANT="libero_spatial_akita_bowl_agentview_v9d_rgbd_region_grasp_search"
+FINAL_CONTROLLER_CONFIG_PATH="$REPO_ROOT/vla_benchmarking/controller_configs/v9d_rgbd_region_grasp_search.json"
+[[ -f "$FINAL_CONTROLLER_CONFIG_PATH" ]] || die "frozen v9d controller config is missing: $FINAL_CONTROLLER_CONFIG_PATH"
+FINAL_CONTROLLER_CONFIG_PATH="$(realpath -e -- "$FINAL_CONTROLLER_CONFIG_PATH")" || die 'cannot canonicalize frozen v9d controller config'
+if [[ -n "${ARROW_CONTROLLER_VARIANT:-}" && "$ARROW_CONTROLLER_VARIANT" != "$FINAL_CONTROLLER_VARIANT" ]]; then
+  die 'ambient ARROW_CONTROLLER_VARIANT override refused; v9d is the only active arrow controller'
+fi
+for ambient_config in "${CONTROLLER_CONFIG:-}" "${ARROW_CONTROLLER_CONFIG:-}"; do
+  if [[ -n "$ambient_config" ]]; then
+    [[ -f "$ambient_config" ]] || die "ambient controller config override is not a file: $ambient_config"
+    ambient_config_path="$(realpath -e -- "$ambient_config")" || die 'cannot canonicalize ambient controller config override'
+    [[ "$ambient_config_path" == "$FINAL_CONTROLLER_CONFIG_PATH" ]] || die 'ambient controller config override refused; v9d is the only active arrow controller'
+  fi
+done
+CONTROLLER_VARIANT="$FINAL_CONTROLLER_VARIANT"
+CONTROLLER_CONFIG_INPUT="$FINAL_CONTROLLER_CONFIG_PATH"
 CONTROLLER_CONFIG_PATH=""
 CONTROLLER_CONFIG_FILE_SHA256=""
 CONTROLLER_CONFIG_HASH=""
@@ -85,7 +101,7 @@ fi
 [[ "$MATRIX_RESOLUTION" =~ ^[1-9][0-9]*$ ]] || die 'MATRIX_RESOLUTION must be a positive integer'
 [[ "$MATRIX_CONTINUE_ON_MOTION_FAILURE" =~ ^[01]$ ]] || die 'MATRIX_CONTINUE_ON_MOTION_FAILURE must be 0 or 1'
 [[ "$CONTROLLER_VARIANT" =~ ^[A-Za-z0-9_.-]+$ ]] || die 'ARROW_CONTROLLER_VARIANT is invalid'
-if [[ -n "$CONTROLLER_CONFIG_INPUT" && "$CONTROLLER_VARIANT" != rgbd_arrow_v1 ]]; then
+if [[ -n "$CONTROLLER_CONFIG_INPUT" && "$CONTROLLER_VARIANT" != "$FINAL_CONTROLLER_VARIANT" ]]; then
   die 'CONTROLLER_CONFIG cannot be combined with a non-default ARROW_CONTROLLER_VARIANT'
 fi
 
@@ -163,6 +179,7 @@ archive_on_exit() {
     printf 'job_id=%s\n' "$SLURM_JOB_ID"
     printf 'expected_commit=%s\n' "$EXPECTED_COMMIT"
     printf 'controller_variant=%s\n' "$CONTROLLER_VARIANT"
+    printf 'controller_label=%s\n' "$FINAL_CONTROLLER_LABEL"
     printf 'controller_config_path=%s\n' "$CONTROLLER_CONFIG_PATH"
     printf 'controller_config_file_sha256=%s\n' "$CONTROLLER_CONFIG_FILE_SHA256"
     printf 'controller_config_hash=%s\n' "$CONTROLLER_CONFIG_HASH"

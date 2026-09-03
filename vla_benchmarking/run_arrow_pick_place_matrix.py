@@ -31,9 +31,17 @@ except ImportError:  # pragma: no cover - direct ``python file.py`` execution
     import run_arrow_pick_place_eval as _episode_module
 
 try:
-    from .controller_configs import load_controller_config
+    from .controller_configs import (
+        ACTIVE_CONTROLLER_CONFIG_FILENAME,
+        ACTIVE_CONTROLLER_NAME,
+        load_controller_config,
+    )
 except ImportError:  # pragma: no cover - direct script execution
-    from controller_configs import load_controller_config
+    from controller_configs import (
+        ACTIVE_CONTROLLER_CONFIG_FILENAME,
+        ACTIVE_CONTROLLER_NAME,
+        load_controller_config,
+    )
 
 
 DEFAULT_TASK_IDS = tuple(range(10))
@@ -42,7 +50,8 @@ DEFAULT_SEED_BASE = 1000
 DEFAULT_RESOLUTION = 256
 SUITE_MODES = ("vanilla", "sealed_randomized")
 DEFAULT_SUITE_MODE = "vanilla"
-DEFAULT_CONTROLLER_VARIANT = "rgbd_arrow_v1"
+DEFAULT_CONTROLLER_VARIANT = ACTIVE_CONTROLLER_NAME
+DEFAULT_CONTROLLER_CONFIG_FILENAME = ACTIVE_CONTROLLER_CONFIG_FILENAME
 CAMERA_NAME = "agentview"
 MANIFEST_JSONL_FILENAME = "arrow_pick_place_matrix_manifest.jsonl"
 # Backwards-compatible descriptive alias for callers that used the first draft.
@@ -79,7 +88,26 @@ def _resolve_controller_selection(
     """
     variant_label = parse_controller_variant(controller_variant)
     if controller_config is None:
-        return variant_label, None, None
+        if variant_label not in {DEFAULT_CONTROLLER_VARIANT, DEFAULT_CONTROLLER_CONFIG_FILENAME}:
+            # Planning can remain dependency-light, but no historical policy
+            # may silently become executable through the matrix boundary.
+            raise ValueError(
+                "only the active v9d controller is selectable; "
+                f"got retired controller {variant_label!r}"
+            )
+        expanded = load_controller_config()
+        converter = getattr(_episode_module, "controller_variant_from_config", None)
+        if converter is None:
+            raise RuntimeError("episode runner does not expose controller config support")
+        variant = converter(expanded, suite_mode=suite_mode)
+        canonical = variant.canonical()
+        provenance = {
+            "path": str(expanded.get("config_source")),
+            "canonical": canonical,
+            "config_hash": str(expanded.get("config_hash")),
+            "runtime_hash": str(variant.config_hash),
+        }
+        return parse_controller_variant(str(variant.name)), variant, provenance
     if variant_label != DEFAULT_CONTROLLER_VARIANT:
         raise ValueError(
             "--controller-config cannot be combined with a non-default "
@@ -90,6 +118,18 @@ def _resolve_controller_selection(
     if converter is None:
         raise RuntimeError("episode runner does not expose controller config support")
     variant = converter(expanded, suite_mode=suite_mode)
+    if variant.name != ACTIVE_CONTROLLER_NAME:
+        raise ValueError(
+            "only the active v9d controller is executable; "
+            f"got retired controller {variant.name!r}"
+        )
+    expected = _episode_module._resolve_controller_variant(
+        None, suite_mode=suite_mode
+    )
+    if variant.canonical() != expected.canonical():
+        raise ValueError(
+            "active v9d controller payload does not match the checked-in policy"
+        )
     canonical = variant.canonical()
     source = expanded.get("config_source")
     provenance = {
@@ -190,11 +230,7 @@ def _source_file_hashes() -> dict[str, str | None]:
         "run_arrow_pick_place_matrix.py",
         "run_arrow_pick_place_eval.py",
         "arrow_controller.py",
-        "zerograsp_contracts.py",
-        "zerograsp_adapter.py",
-        "zerograsp_worker.py",
-        "controller_configs/v10_zg_grasp_only.json",
-        "controller_configs/v10_zg_grasp_recon_place.json",
+        "controller_configs/v9d_rgbd_region_grasp_search.json",
         "config.py",
         "bddl_utils.py",
         "radomize_scenes.py",
@@ -566,7 +602,6 @@ def _error_record(
         "grasp_retries": None,
         "grasp_search": [],
         "micro_corrections": [],
-        "zerograsp": None,
         "motion_trace": [],
         "motion_trace_path": None,
         "motion_trace_sha256": None,
@@ -601,7 +636,6 @@ def _error_record(
             "grasp_retries": None,
             "grasp_search": [],
             "micro_corrections": [],
-            "zerograsp": None,
             "motion_trace": [],
             "motion_trace_path": None,
             "motion_trace_sha256": None,
@@ -682,7 +716,6 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
         ("_arrow_grasp_retry_audit", "grasp_retries"),
         ("_arrow_grasp_search_audit", "grasp_search"),
         ("_arrow_micro_correction_audit", "micro_corrections"),
-        ("_arrow_zerograsp_audit", "zerograsp"),
         ("_arrow_motion_trace", "motion_trace"),
         ("_arrow_motion_trace_path", "motion_trace_path"),
         ("_arrow_motion_trace_sha256", "motion_trace_sha256"),
@@ -1047,100 +1080,6 @@ def _call_with_optional_keywords(
     return function(*positional, **kwargs)
 
 
-def _needs_zerograsp(variant: Any) -> bool:
-    return bool(
-        variant is not None
-        and (
-            getattr(variant, "grasp_provider", None) == "zerograsp"
-            or getattr(variant, "placement_provider", None) == "zerograsp_reconstruction"
-        )
-    )
-
-
-def _build_zerograsp_adapter(variant: Any, suite_mode: str, factory: Callable[..., Any] | None) -> Any:
-    policy = getattr(variant, "zerograsp", None)
-    if policy is None:
-        raise RuntimeError("ZeroGrasp provider requested without zerograsp policy")
-    policy_mapping = dict(policy) if isinstance(policy, Mapping) else dict(getattr(policy, "__dict__", {}))
-    # Executable/artifact identity belongs to the pinned launcher handshake,
-    # not to a checked-in algorithmic controller policy.  Reject these keys
-    # before even invoking an injected factory so no worker can be constructed
-    # from an unverified override.  Dataclass policies contain default None
-    # fields; those are harmless and are treated as absent.
-    runtime_keys = {
-        "command", "cwd", "timeout_s", "external_repo", "checkpoint",
-        "runtime_config", "entrypoint", "env_lock", "runtime_hash",
-    }
-    if isinstance(policy, Mapping):
-        conflicting = sorted(key for key in runtime_keys if key in policy)
-    else:
-        conflicting = sorted(
-            key for key in runtime_keys
-            if policy_mapping.get(key) is not None
-        )
-    if conflicting:
-        raise RuntimeError(
-            "ZeroGrasp runtime paths/command must come only from the verified "
-            f"launcher environment; policy overrides are forbidden: {conflicting}"
-        )
-    # Keep compatibility with the short names used by early V10 drafts while
-    # handing the isolated adapter only the canonical contract fields.
-    if "calibration_hash" in policy_mapping and "calibration_sha256" not in policy_mapping:
-        policy_mapping["calibration_sha256"] = policy_mapping["calibration_hash"]
-    if "probe_hash" in policy_mapping and "probe_sha256" not in policy_mapping:
-        policy_mapping["probe_sha256"] = policy_mapping["probe_hash"]
-    policy_mapping.pop("calibration_hash", None)
-    policy_mapping.pop("probe_hash", None)
-    if factory is not None:
-        return _call_with_optional_keywords(
-            factory,
-            (policy,),
-            {"suite_mode": suite_mode, "controller_variant": variant},
-        )
-    # The production launcher resolves and hashes these values before Python
-    # starts.  Require the same exported identities here and pass exactly
-    # those resolved paths to the isolated worker.
-    environment_paths = {
-        "external_repo": os.environ.get("ZERO_GRASP_ROOT"),
-        "checkpoint": os.environ.get("ZERO_GRASP_CHECKPOINT"),
-        "runtime_config": os.environ.get("ZERO_GRASP_CONFIG"),
-    }
-    zero_python = os.environ.get("ZERO_GRASP_PYTHON")
-    zero_worker = os.environ.get("ZERO_GRASP_WORKER")
-    missing = [
-        name for name, value in {
-            "ZERO_GRASP_PYTHON": zero_python,
-            "ZERO_GRASP_WORKER": zero_worker,
-            "ZERO_GRASP_ROOT": environment_paths["external_repo"],
-            "ZERO_GRASP_CHECKPOINT": environment_paths["checkpoint"],
-            "ZERO_GRASP_CONFIG": environment_paths["runtime_config"],
-        }.items() if not value
-    ]
-    if missing:
-        raise RuntimeError(
-            "ZeroGrasp runtime requires verified launcher environment values: "
-            + ", ".join(missing)
-        )
-    command = [zero_python, zero_worker]
-    for option, key in (("--root", "external_repo"), ("--checkpoint", "checkpoint"), ("--config", "runtime_config")):
-        value = environment_paths[key]
-        command.extend((option, str(value)))
-        policy_mapping[key] = str(value)
-    try:
-        from .zerograsp_adapter import build_zerograsp_adapter
-    except ImportError:  # pragma: no cover - direct script execution
-        from zerograsp_adapter import build_zerograsp_adapter
-    return build_zerograsp_adapter(command, policy_mapping)
-
-
-def _close_adapter(adapter: Any) -> None:
-    if adapter is None:
-        return
-    close = getattr(adapter, "close", None)
-    if callable(close):
-        close()
-
-
 def _run_matrix_impl(
     *,
     output_root: str | Path,
@@ -1161,8 +1100,6 @@ def _run_matrix_impl(
     resume: bool = False,
     retry_motion_began: bool = False,
     continue_on_motion_failure: bool = False,
-    zerograsp_adapter_factory: Callable[..., Any] | None = None,
-    _zerograsp_adapter_holder: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
     suite_mode = parse_suite_mode(suite_mode)
@@ -1273,13 +1210,6 @@ def _run_matrix_impl(
         if controller_config_provenance is not None and resolved_controller is not None
         else None
     )
-    zerograsp_adapter = None
-    if _needs_zerograsp(resolved_controller):
-        zerograsp_adapter = _build_zerograsp_adapter(
-            resolved_controller, suite_mode, zerograsp_adapter_factory
-        )
-        if _zerograsp_adapter_holder is not None:
-            _zerograsp_adapter_holder["adapter"] = zerograsp_adapter
     planned_records = [_planned_record(cell) for cell in cells]
     if not resume and any(path.exists() for path in (manifest_json_path, manifest_path, status_path, summary_path)):
         raise FileExistsError(
@@ -1557,7 +1487,6 @@ def _run_matrix_impl(
                             if resolved_controller is not None
                             else controller_variant
                         ),
-                        "zerograsp_adapter": zerograsp_adapter,
                         **inputs,
                     }
                     accepted_runner_keywords = _accepted_optional_keywords(run_episode)
@@ -1611,7 +1540,6 @@ def _run_matrix_impl(
                         "evaluator_result": None if dry_run else audit.get("evaluator_success"),
                         "grasp_search": audit.get("grasp_search", []),
                         "micro_corrections": audit.get("micro_corrections", []),
-                        "zerograsp": audit.get("zerograsp"),
                         "controller_config": controller_config_provenance,
                         "controller_config_observed": audit.get("controller_variant"),
                     })
@@ -1745,7 +1673,7 @@ def _run_matrix_impl(
             # Promote the new list-valued audits to stable matrix fields even
             # when the episode returned a final audit before cleanup, or
             # raised after publishing only environment-side diagnostics.
-            for field in ("grasp_search", "micro_corrections", "zerograsp"):
+            for field in ("grasp_search", "micro_corrections"):
                 value = None
                 audit_value = cell_record.get("audit")
                 if isinstance(audit_value, Mapping) and (isinstance(audit_value.get(field), (list, Mapping))):
@@ -1887,13 +1815,8 @@ def _run_matrix_impl(
 
 
 def run_matrix(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Run a matrix and always close its single suite-level ZeroGrasp adapter."""
-    holder: dict[str, Any] = {}
-    try:
-        kwargs["_zerograsp_adapter_holder"] = holder
-        return _run_matrix_impl(*args, **kwargs)
-    finally:
-        _close_adapter(holder.get("adapter"))
+    """Run the frozen v9d matrix with no external model lifecycle."""
+    return _run_matrix_impl(*args, **kwargs)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

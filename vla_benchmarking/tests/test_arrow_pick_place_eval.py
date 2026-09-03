@@ -855,102 +855,29 @@ def test_controller_variant_provenance_is_canonical_and_suite_scoped(runner):
         runner.ControllerVariantConfig(suite_mode="unknown")
 
 
-def test_candidate_variant_exposes_bounded_depth_and_approach_knobs(runner):
-    candidate = runner.ControllerVariantConfig(
-        name=runner.CANDIDATE_CONTROLLER_VARIANT_NAME,
-        endpoint_depth_statistic="lower_quantile",
-        endpoint_depth_quantile=0.2,
-        approach_tolerance_m=0.02,
-    )
-    assert candidate.canonical()["endpoint_depth_statistic"] == "lower_quantile"
-    assert candidate.canonical()["endpoint_depth_quantile"] == 0.2
-    assert candidate.canonical()["approach_tolerance_m"] == 0.02
-    resolved = runner._resolve_controller_variant(
-        runner.CANDIDATE_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert resolved.endpoint_depth_statistic == "lower_quantile"
-    assert resolved.approach_tolerance_m == runner.CANDIDATE_APPROACH_TOLERANCE_M
-    with pytest.raises(ValueError, match="reserved for the candidate"):
-        runner.ControllerVariantConfig(name=runner.DEFAULT_PROFILE_NAME, approach_tolerance_m=0.02)
+def test_retired_controller_variants_are_rejected_before_execution(runner):
+    """Historical experiments remain readable in archives, never executable."""
+    for retired_name in (
+        "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v1",
+        "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2",
+        "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3",
+        "libero_spatial_akita_bowl_agentview_candidate_lowerq_gain_v4",
+        "libero_spatial_akita_bowl_agentview_candidate_visible_anchor_v5",
+        "libero_spatial_akita_bowl_agentview_candidate_directional_approach_v6",
+        "libero_spatial_akita_bowl_agentview_candidate_patient_control_v7",
+        "libero_spatial_akita_bowl_agentview_candidate_grasp_retry_v8",
+    ):
+        with pytest.raises(Exception, match="only the active v9d controller"):
+            runner._resolve_controller_variant(retired_name, suite_mode="vanilla")
 
-    v2 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert v2.max_mask_fraction_for_motion == pytest.approx(0.40)
-    assert v2.workspace_bounds_m["z"] == (0.0, 1.8)
-    assert v2.hash != candidate.hash
-    with pytest.raises(ValueError, match="cannot exceed 1.8"):
-        runner.ControllerVariantConfig(
-            name=runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
-            workspace_bounds_m={"x": (-1, 1), "y": (-1, 1), "z": (0, 1.81)},
-        )
-
-    v3 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V3_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert v3.waypoint_tolerance_m == pytest.approx(0.025)
-    assert v3.max_mask_fraction_for_motion == pytest.approx(0.40)
-    assert v3.hash not in {candidate.hash, v2.hash}
-    with pytest.raises(ValueError, match="reserved for the v3"):
-        runner.ControllerVariantConfig(
-            name=runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
-            waypoint_tolerance_m=0.02,
-        )
-
-    v4 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V4_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert v4.osc_position_scale_m == pytest.approx(0.035)
-    assert v4.waypoint_tolerance_m is None
-    assert v4.max_mask_fraction_for_motion == pytest.approx(0.40)
-    assert v4.hash not in {candidate.hash, v2.hash, v3.hash}
-    with pytest.raises(ValueError, match="reserved for the v4"):
-        runner.ControllerVariantConfig(
-            name=runner.CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
-            osc_position_scale_m=0.035,
-        )
-
-    v5 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V5_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert v5.arrow_anchor_policy == "visible_inset"
-    assert v5.max_mask_fraction_for_motion == pytest.approx(0.40)
-    assert v5.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash}
-    with pytest.raises(ValueError, match="reserved for the v5"):
-        runner.ControllerVariantConfig(
-            name=runner.CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
-            arrow_anchor_policy="visible_inset",
-        )
-
-    v6 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V6_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert v6.approach_lateral_offset_m == pytest.approx(0.04)
-    assert v6.arrow_anchor_policy == "bbox_center"
-    assert v6.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash, v5.hash}
-    with pytest.raises(ValueError, match="reserved for the v6"):
-        runner.ControllerVariantConfig(
-            name=runner.CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
-            approach_lateral_offset_m=0.04,
-        )
-
-    v7 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V7_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert v7.phase_timeout_steps == 160
-    assert v7.stall_window_steps == 0
-    assert v7.approach_tolerance_m == pytest.approx(runner.CANDIDATE_APPROACH_TOLERANCE_M)
-    assert v7.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash, v5.hash, v6.hash}
-
-    v8 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V8_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    assert v8.grasp_contact_threshold == pytest.approx(0.0015)
-    assert tuple(v8.grasp_retry_offsets_m) == pytest.approx((-0.012, 0.012))
-    assert v8.hash not in {candidate.hash, v2.hash, v3.hash, v4.hash, v5.hash, v6.hash, v7.hash}
+    active = runner._resolve_controller_variant("default", suite_mode="vanilla")
+    assert active.name == runner.DEFAULT_PROFILE_NAME
+    assert active.endpoint_depth_statistic == "lower_quantile"
+    assert active.endpoint_depth_quantile == pytest.approx(0.25)
+    assert active.grasp_search is not None and active.grasp_search.enabled is True
 
 
-def test_osc_position_scale_candidate_changes_only_translational_scales(runner, monkeypatch):
+def test_osc_position_scale_changes_only_translational_scales(runner, monkeypatch):
     seen = {}
 
     def fake_osc(**kwargs):
@@ -960,7 +887,7 @@ def test_osc_position_scale_candidate_changes_only_translational_scales(runner, 
     monkeypatch.setattr(runner, "normalized_osc_action", fake_osc)
     action = runner.normalized_action_for_waypoint(
         runner._proprioception(_motion_proprio()), np.zeros(3), gripper=0.0,
-        osc_position_scale_m=runner.CANDIDATE_V4_OSC_POSITION_SCALE_M,
+        osc_position_scale_m=0.035,
     )
     assert action.shape == (7,)
     assert seen["scales"] == pytest.approx((0.035, 0.035, 0.035, 0.5, 0.5, 0.5))
@@ -1020,12 +947,6 @@ def test_endpoint_depth_statistics_and_candidate_tolerance_are_audited(
 ):
     _patch_episode_controller(runner, monkeypatch)
     capture = _episode_capture(runner)
-    candidate = runner.ControllerVariantConfig(
-        name=runner.CANDIDATE_CONTROLLER_VARIANT_NAME,
-        endpoint_depth_statistic="lower_quantile",
-        endpoint_depth_quantile=0.25,
-        approach_tolerance_m=0.02,
-    )
     audit = runner.run_episode(
         env=_MotionEnv(),
         task_id=0,
@@ -1035,77 +956,39 @@ def test_endpoint_depth_statistics_and_candidate_tolerance_are_audited(
         arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
         capture=capture,
         dry_run=True,
-        controller_variant=candidate,
     )
     assert audit["endpoint_depth_statistics"]["source_tail"]["statistic"] == "lower_quantile"
-    assert audit["controller_variant"]["canonical"]["approach_tolerance_m"] == 0.02
-    assert audit["phases"][1]["policy"]["tolerance_m"] == 0.02
+    assert audit["controller_variant"]["canonical"]["endpoint_depth_quantile"] == 0.25
+    assert audit["phases"][1]["policy"]["tolerance_m"] == 0.015
 
 
 def test_v3_tolerance_applies_to_all_positional_phases(runner, monkeypatch, tmp_path: Path):
     _patch_episode_controller(runner, monkeypatch)
-    audit = runner.run_episode(
-        env=_MotionEnv(),
-        task_id=0,
-        seed=1000,
-        resolution=256,
-        output_dir=tmp_path,
-        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
-        capture=_episode_capture(runner),
-        dry_run=True,
-        controller_variant=runner.CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
-    )
-    for phase in audit["phases"]:
-        if phase["phase"] not in {"close", "open"}:
-            assert phase["policy"]["tolerance_m"] == pytest.approx(0.025)
-
-
-def test_v2_mask_gate_and_workspace_override_are_audited(
-    runner, monkeypatch, tmp_path: Path
-):
-    _patch_episode_controller(runner, monkeypatch)
-    base = _episode_capture(runner)
-    capture = runner.CapturedRGBD(
-        base.rgb,
-        base.normalized_depth,
-        base.metric_depth,
-        base.calibration,
-        base.observation,
-        "normalized_masked",
-        {"masked_pixel_count": 22, "total_pixel_count": 64, "masked_fraction": 22 / 64},
-    )
-    with pytest.raises(RuntimeError, match="sanitization policy rejected"):
+    with pytest.raises(Exception, match="only the active v9d controller"):
         runner.run_episode(
             env=_MotionEnv(),
             task_id=0,
             seed=1000,
             resolution=256,
-            output_dir=tmp_path / "default",
+            output_dir=tmp_path,
             arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
-            capture=capture,
-            dry_run=False,
-            stop_after_phase="pregrasp",
+            capture=_episode_capture(runner),
+            dry_run=True,
+            controller_variant="libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3",
         )
 
-    v2 = runner._resolve_controller_variant(
-        runner.CANDIDATE_V2_CONTROLLER_VARIANT_NAME, suite_mode="vanilla"
-    )
-    env = _MotionEnv()
-    audit = runner.run_episode(
-        env=env,
-        task_id=0,
-        seed=1000,
-        resolution=256,
-        output_dir=tmp_path / "v2",
-        arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
-        capture=capture,
-        dry_run=False,
-        stop_after_phase="pregrasp",
-        controller_variant=v2,
-    )
-    assert audit["depth_sanitization_policy"]["max_mask_fraction"] == pytest.approx(0.40)
-    assert audit["workspace_bounds_m"]["z"] == [0.0, 1.8]
-    assert audit["workspace_validation"]["bounds_m"]["z"] == [0.0, 1.8]
+
+def test_v2_mask_gate_and_workspace_override_are_audited(
+    runner, monkeypatch, tmp_path: Path
+):
+    del monkeypatch, tmp_path
+    with pytest.raises(Exception, match="only the active v9d controller"):
+        runner._resolve_controller_variant(
+            "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2", suite_mode="vanilla"
+        )
+    active = runner._resolve_controller_variant("default", suite_mode="vanilla")
+    assert active.max_mask_fraction_for_motion == pytest.approx(0.4)
+    assert active.workspace_bounds_m["z"] == [0.0, 1.8]
 
 
 def test_randomization_dimensions_are_task_actual_not_suite_wide(runner):
@@ -1315,8 +1198,30 @@ def _patch_episode_controller(runner, monkeypatch, *, point=(0.0, 0.0, 1.0)):
         lambda **kwargs: type("Arrow", (), {"source_xy": (8.0, 8.0), "target_xy": (24.0, 24.0)})(),
     )
     monkeypatch.setattr(runner, "deproject_endpoint", lambda *args: np.asarray(point, dtype=np.float64))
+    # The frozen v9d default enables its RGB-D retry policy.  Keep these
+    # controller-fake tests focused on the phase under test by supplying a
+    # deterministic, in-workspace retry candidate instead of running the real
+    # region planner on the synthetic all-ones depth fixture.
+    monkeypatch.setattr(
+        runner,
+        "derive_rgbd_region_grasp_candidates",
+        lambda *args, **kwargs: (
+            np.asarray(point, dtype=np.float64).reshape(1, 3),
+            {
+                "selected_profile_quantiles": [0.8],
+                "selected_pixels_xy": [[8, 8]],
+            },
+        ),
+    )
     monkeypatch.setattr(runner, "build_bowl_waypoints", lambda *args: np.zeros((6, 3)))
     monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
+    # v9d's bounded retry asks for a fresh proprioception sample before its
+    # open/retreat reset.  The tiny fake environment has no observation hook,
+    # so provide the contract-level sample explicitly.
+    monkeypatch.setattr(runner, "_raw_observation", lambda _env: _motion_proprio())
+    # Keep generic motion/video tests out of the v9d retry trigger itself; the
+    # dedicated retry test below supplies its own explicit trigger.
+    monkeypatch.setattr(runner, "_empty_gripper_likely", lambda *args, **kwargs: False)
 
 
 def test_profile_gate_rejects_task_seed_and_resolution_before_step(runner, monkeypatch, tmp_path: Path):
@@ -1524,7 +1429,7 @@ def test_visual_endpoint_diagnostics_are_published_before_workspace_failure(
             stop_after_phase="pregrasp",
         )
     assert "source_tail" in env._arrow_endpoint_depths_m
-    assert env._arrow_endpoint_depth_statistics["source_tail"]["statistic"] == "median"
+    assert env._arrow_endpoint_depth_statistics["source_tail"]["statistic"] == "lower_quantile"
     assert env._arrow_deprojected_visual_endpoint_world_points_m["source_tail"] == [2.0, 0.0, 1.0]
     assert env._arrow_control_targets_world_m["source_grasp"] == pytest.approx(
         [2.0146, 0.0432, 1.0244]
@@ -1564,137 +1469,10 @@ def test_run_motion_preserves_gripper_timeout_and_marks_motion(runner, monkeypat
     assert env._arrow_phase_audit[-1]["steps"] == 1
 
 
-def test_recovery_requires_approval_and_persists_error_audit(runner, monkeypatch, tmp_path: Path):
-    _patch_episode_controller(runner, monkeypatch)
-    env = _MotionEnv()
-
-    def timeout_motion(motion_env, *args, **kwargs):
-        motion_env._arrow_phase_audit = [{"phase": "close", "status": "timeout"}]
-        raise TimeoutError("close phase timed out")
-
-    monkeypatch.setattr(runner, "_run_motion", timeout_motion)
-    monkeypatch.setattr(
-        runner,
-        "recover_grasp_or_release",
-        lambda *args, **kwargs: {
-            "phase": kwargs["phase"],
-            "eef_pos_m": [0.0, 0.0, 0.0],
-            "eef_quat": [0.0, 0.0, 0.0, 1.0],
-        },
-    )
-    with pytest.raises(TimeoutError, match="close phase timed out"):
-        runner.run_episode(
-            env=env,
-            task_id=0,
-            seed=1000,
-            resolution=256,
-            output_dir=tmp_path,
-            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
-            capture=_episode_capture(runner),
-            dry_run=False,
-            stop_after_phase="retreat",
-            recovery_attempts=1,
-            recovery_steps=3,
-        )
-    # No callback means no recovery action.  The original timeout remains the
-    # raised error, while the proposal/error audit survives on disk.
-    assert env.actions == []
-    recovery_path = tmp_path / "arrow_pick_place_recovery_audit.json"
-    assert recovery_path.is_file()
-    recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
-    assert recovery[0]["approved"] is False
-    assert recovery[0]["executed_steps"] == 0
-
-
-def test_recovery_action_is_reachable_only_with_explicit_approval(runner, monkeypatch, tmp_path: Path):
-    _patch_episode_controller(runner, monkeypatch)
-    monkeypatch.setattr(
-        runner,
-        "normalized_osc_action",
-        lambda **kwargs: np.r_[np.zeros(6, dtype=np.float32), float(kwargs["gripper"])],
-    )
-    env = _MotionEnv()
-
-    def timeout_motion(motion_env, *args, **kwargs):
-        motion_env._arrow_phase_audit = [{"phase": "open", "status": "timeout"}]
-        raise TimeoutError("open phase timed out")
-
-    monkeypatch.setattr(runner, "_run_motion", timeout_motion)
-    monkeypatch.setattr(
-        runner,
-        "recover_grasp_or_release",
-        lambda *args, **kwargs: {
-            "phase": kwargs["phase"],
-            "eef_pos_m": [0.0, 0.0, 0.0],
-            "eef_quat": [0.0, 0.0, 0.0, 1.0],
-        },
-    )
-    with pytest.raises(TimeoutError):
-        runner.run_episode(
-            env=env,
-            task_id=0,
-            seed=1000,
-            resolution=256,
-            output_dir=tmp_path,
-            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
-            capture=_episode_capture(runner),
-            dry_run=False,
-            stop_after_phase="retreat",
-            recovery_attempts=1,
-            recovery_steps=2,
-            recovery_callback=lambda phase, proposal: True,
-        )
-    assert len(env.actions) == 2
-    assert all(float(action[-1]) == -1.0 for action in env.actions)
-
-
-def test_partial_recovery_failure_preserves_steps_already_sent(runner, monkeypatch, tmp_path: Path):
-    _patch_episode_controller(runner, monkeypatch)
-
-    class _RecoveryFailEnv(_MotionEnv):
-        def step(self, action):
-            if len(self.actions) >= 1:
-                raise RuntimeError("recovery transport failure")
-            return super().step(action)
-
-    env = _RecoveryFailEnv()
-
-    def timeout_motion(motion_env, *args, **kwargs):
-        motion_env._arrow_phase_audit = [{"phase": "close", "status": "timeout"}]
-        raise TimeoutError("close phase timed out")
-
-    monkeypatch.setattr(runner, "_run_motion", timeout_motion)
-    monkeypatch.setattr(
-        runner,
-        "recover_grasp_or_release",
-        lambda *args, **kwargs: {
-            "phase": kwargs["phase"],
-            "eef_pos_m": [0.0, 0.0, 0.0],
-            "eef_quat": [0.0, 0.0, 0.0, 1.0],
-        },
-    )
-    with pytest.raises(TimeoutError, match="close phase timed out"):
-        runner.run_episode(
-            env=env,
-            task_id=0,
-            seed=1000,
-            resolution=256,
-            output_dir=tmp_path,
-            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
-            capture=_episode_capture(runner),
-            dry_run=False,
-            stop_after_phase="retreat",
-            recovery_attempts=1,
-            recovery_steps=2,
-            recovery_callback=lambda phase, proposal: True,
-        )
-    recovery = json.loads(
-        (tmp_path / "arrow_pick_place_recovery_audit.json").read_text(encoding="utf-8")
-    )
-    assert recovery[0]["approved"] is True
-    assert recovery[0]["attempted_steps"] == 2
-    assert recovery[0]["executed_steps"] == 1
-    assert recovery[0]["error_type"] == "RuntimeError"
+def test_frozen_v9d_disables_legacy_recovery_overrides(runner):
+    active = runner._resolve_controller_variant("default", suite_mode="vanilla")
+    assert active.recovery_attempts == 0
+    assert active.recovery_steps == 0
 
 
 def test_external_v9_config_inheritance_and_hash_are_stable(runner, tmp_path: Path):
@@ -1711,27 +1489,22 @@ def test_external_v9_config_inheritance_and_hash_are_stable(runner, tmp_path: Pa
     assert variant.canonical()["grasp_search"]["offsets_m"] == [[0.0, 0.0, -0.01]]
 
 
-def test_v9d_rgbd_region_config_is_dynamic_and_v9e_changes_only_micro_correction(runner):
+def test_v9d_rgbd_region_config_is_the_only_active_policy(runner):
     config_root = Path(runner.__file__).parent / "controller_configs"
     v9d_expanded = runner.load_controller_config(config_root / "v9d_rgbd_region_grasp_search.json")
-    v9e_expanded = runner.load_controller_config(
-        config_root / "v9e_rgbd_region_with_micro_correction.json"
-    )
     v9d = runner.controller_variant_from_config(v9d_expanded)
-    v9e = runner.controller_variant_from_config(v9e_expanded)
     assert v9d.grasp_search.strategy == "rgbd_region"
     assert v9d.grasp_search.offsets_m == ()
     assert v9d.grasp_search.max_attempts == 3
     assert v9d.grasp_search.region_candidate_height_quantiles == ()
     assert v9d.micro_correction.enabled is False
-    assert v9e.micro_correction.enabled is True
-    left = v9d.canonical()
-    right = v9e.canonical()
-    left.pop("name")
-    right.pop("name")
-    left.pop("micro_correction")
-    right.pop("micro_correction")
-    assert left == right
+    for retired_name in (
+        "v9e_rgbd_region_with_micro_correction.json",
+        "v9f_rgbd_region_height_sweep.json",
+        "v10_zg_grasp_only.json",
+    ):
+        with pytest.raises(Exception, match="retired|not found"):
+            runner.load_controller_config(config_root / retired_name)
 
 
 def test_rgbd_region_retry_uses_only_capture_geometry_and_proprioception(
@@ -1805,6 +1578,10 @@ def test_rgbd_region_retry_uses_only_capture_geometry_and_proprioception(
             max_actions=100,
         ),
     )
+    # This is an isolated retry-mechanics test, not an executable policy
+    # selection.  Bypass the production v9d resolver only at this seam so the
+    # historical custom fixture can exercise the bounded retry loop.
+    monkeypatch.setattr(runner, "_resolve_controller_variant", lambda value, **kwargs: value)
     capture = _episode_capture(runner)
     audit = runner.run_episode(
         env=_MotionEnv(),

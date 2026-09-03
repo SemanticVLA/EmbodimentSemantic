@@ -21,7 +21,6 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -81,21 +80,20 @@ except (ImportError, ValueError):  # pragma: no cover - direct script fallback
 
 try:
     from .controller_configs import (
+        ACTIVE_CONTROLLER_CONFIG_FILENAME,
+        ACTIVE_CONTROLLER_NAME,
         ControllerConfigError,
         controller_config_hash,
         load_controller_config,
     )
 except (ImportError, ValueError):  # pragma: no cover - direct script fallback
-    from controller_configs import ControllerConfigError, controller_config_hash, load_controller_config
-
-try:
-    from .zerograsp_contracts import ZeroGraspConfig, ZeroGraspObservation, serialize_audit, stable_json_hash
-except (ImportError, ValueError):  # pragma: no cover - direct script fallback
-    try:
-        from zerograsp_contracts import ZeroGraspConfig, ZeroGraspObservation, serialize_audit, stable_json_hash
-    except ImportError:  # pragma: no cover - optional ZeroGrasp runtime
-        ZeroGraspConfig = ZeroGraspObservation = serialize_audit = stable_json_hash = None
-
+    from controller_configs import (
+        ACTIVE_CONTROLLER_CONFIG_FILENAME,
+        ACTIVE_CONTROLLER_NAME,
+        ControllerConfigError,
+        controller_config_hash,
+        load_controller_config,
+    )
 
 CAMERA_NAME = "agentview"
 # The only resolution covered by the live-validated calibration/profile.  Keep
@@ -107,17 +105,8 @@ DEFAULT_SUBJECT = "akita_black_bowl_1"
 # Fixed, camera/profile-specific offsets from visual endpoints to a robust
 # bowl-rim grasp/release point. These are constant transforms, never runtime
 # simulator object coordinates.
-DEFAULT_PROFILE_NAME = "libero_spatial_akita_bowl_agentview_v1"
-CANDIDATE_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v1"
-CANDIDATE_V2_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2"
-CANDIDATE_V3_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3"
-CANDIDATE_V4_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_lowerq_gain_v4"
-CANDIDATE_V5_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_visible_anchor_v5"
-CANDIDATE_V6_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_directional_approach_v6"
-CANDIDATE_V7_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_patient_control_v7"
-CANDIDATE_V8_CONTROLLER_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_candidate_grasp_retry_v8"
-V10_ZG_GRASP_ONLY_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_v10_zg_grasp_only"
-V10_ZG_GRASP_RECON_PLACE_VARIANT_NAME = "libero_spatial_akita_bowl_agentview_v10_zg_grasp_recon_place"
+DEFAULT_PROFILE_NAME = ACTIVE_CONTROLLER_NAME
+DEFAULT_CONTROLLER_CONFIG_FILENAME = ACTIVE_CONTROLLER_CONFIG_FILENAME
 DEFAULT_SOURCE_GRASP_OFFSET_M = (0.0146, 0.0432, 0.0244)
 DEFAULT_DESTINATION_RELEASE_OFFSET_M = (-0.0057, 0.0484, 0.0310)
 DEFAULT_GRIPPER_DWELL_STEPS = 20
@@ -193,23 +182,7 @@ MAX_NORMALIZED_MASK_FRACTION = 0.25
 ENDPOINT_DEPTH_STATISTICS = ("median", "lower_quantile", "nearest_valid")
 DEFAULT_ENDPOINT_DEPTH_STATISTIC = "median"
 DEFAULT_ENDPOINT_DEPTH_QUANTILE = 0.25
-CANDIDATE_ENDPOINT_DEPTH_STATISTIC = "lower_quantile"
-CANDIDATE_ENDPOINT_DEPTH_QUANTILE = 0.25
-CANDIDATE_APPROACH_TOLERANCE_M = 0.015
-CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION = 0.40
-CANDIDATE_V3_WAYPOINT_TOLERANCE_M = 0.025
-CANDIDATE_V4_OSC_POSITION_SCALE_M = 0.035
 ARROW_ANCHOR_POLICIES = ("bbox_center", "visible_inset")
-CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M = 0.04
-CANDIDATE_V7_PHASE_TIMEOUT_STEPS = 160
-CANDIDATE_V7_STALL_WINDOW_STEPS = 0
-CANDIDATE_V8_GRIPPER_CONTACT_THRESHOLD = 0.0015
-CANDIDATE_V8_GRASP_RETRY_OFFSETS_M = (-0.012, 0.012)
-CANDIDATE_V2_WORKSPACE_BOUNDS_M = MappingProxyType({
-    "x": WORKSPACE_BOUNDS_M["x"],
-    "y": WORKSPACE_BOUNDS_M["y"],
-    "z": (WORKSPACE_BOUNDS_M["z"][0], 1.8),
-})
 MAX_APPROACH_TOLERANCE_M = 0.025
 MAX_MASK_FRACTION_FOR_MOTION = 0.50
 MAX_OSC_POSITION_SCALE_M = 0.10
@@ -542,10 +515,6 @@ class ControllerVariantConfig:
     micro_correction: MicroCorrectionPolicy | Mapping[str, Any] | None = None
     source_approach: Mapping[str, Any] | None = None
     destination_placement: Mapping[str, Any] | None = None
-    grasp_provider: str | None = None
-    placement_provider: str | None = None
-    zerograsp: Mapping[str, Any] | ZeroGraspConfig | None = None
-    zerograsp_policy: Mapping[str, Any] | ZeroGraspConfig | None = None
     config_source: str | None = None
     external_config_hash: str | None = None
 
@@ -558,41 +527,6 @@ class ControllerVariantConfig:
         object.__setattr__(self, "destination_placement", _optional_rgbd_policy(
             self.destination_placement, "destination_placement", {"enabled", "patch_radius_px", "min_valid_fraction", "max_residual_m", "release_clearance_m"}
         ))
-        if self.grasp_provider not in (None, "classical", "zerograsp"):
-            raise ValueError("grasp_provider must be classical or zerograsp")
-        if self.placement_provider not in (None, "classical", "zerograsp_reconstruction"):
-            raise ValueError("placement_provider must be classical or zerograsp_reconstruction")
-        if self.zerograsp is not None and self.zerograsp_policy is not None:
-            left = self.zerograsp.__dict__ if hasattr(self.zerograsp, "__dict__") else dict(self.zerograsp)
-            right = self.zerograsp_policy.__dict__ if hasattr(self.zerograsp_policy, "__dict__") else dict(self.zerograsp_policy)
-            if left != right:
-                raise ValueError("zerograsp and zerograsp_policy cannot disagree")
-        policy = self.zerograsp if self.zerograsp is not None else self.zerograsp_policy
-        if policy is not None and ZeroGraspConfig is not None:
-            try:
-                # ``command``/``cwd`` are adapter-process settings, not model
-                # settings, and are intentionally kept in the runtime policy.
-                model_policy = dict(policy) if isinstance(policy, Mapping) else asdict(policy)
-                model_policy.pop("command", None)
-                model_policy.pop("cwd", None)
-                model_policy.pop("timeout_s", None)
-                # Runtime-only aliases are accepted at the boundary for
-                # compatibility with early V10 drafts, but the public
-                # ZeroGrasp config remains the flat *_sha256 schema.
-                if "calibration_hash" in model_policy and "calibration_sha256" not in model_policy:
-                    model_policy["calibration_sha256"] = model_policy["calibration_hash"]
-                if "probe_hash" in model_policy and "probe_sha256" not in model_policy:
-                    model_policy["probe_sha256"] = model_policy["probe_hash"]
-                model_policy.pop("calibration_hash", None)
-                model_policy.pop("probe_hash", None)
-                ZeroGraspConfig.from_mapping(model_policy).validate()
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"invalid zerograsp policy: {exc}") from exc
-        object.__setattr__(self, "zerograsp", policy)
-        object.__setattr__(self, "zerograsp_policy", policy)
-        if (self.grasp_provider == "zerograsp" or self.placement_provider == "zerograsp_reconstruction") and policy is None:
-            raise ValueError("ZeroGrasp providers require an explicit zerograsp policy")
-        external = self.config_source is not None or self.grasp_search is not None or self.micro_correction is not None or self.source_approach is not None or self.destination_placement is not None or self.grasp_provider is not None or self.placement_provider is not None
         if self.suite_mode not in SUITE_MODES:
             raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {self.suite_mode!r}")
         if self.phase_timeout_steps <= 0 or self.gripper_dwell_steps <= 0:
@@ -613,17 +547,6 @@ class ControllerVariantConfig:
             raise ValueError(
                 f"approach_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
             )
-        if self.approach_tolerance_m is not None and not external and self.name != CANDIDATE_CONTROLLER_VARIANT_NAME:
-            if self.name not in {
-                CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
-                CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
-                CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
-                CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
-                CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
-                CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
-                CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
-            }:
-                raise ValueError("relaxed approach tolerance is reserved for the candidate controller variant")
         if self.waypoint_tolerance_m is not None and (
             not np.isfinite(float(self.waypoint_tolerance_m))
             or float(self.waypoint_tolerance_m) <= 0.0
@@ -632,8 +555,6 @@ class ControllerVariantConfig:
             raise ValueError(
                 f"waypoint_tolerance_m must be in (0, {MAX_APPROACH_TOLERANCE_M}]"
             )
-        if self.waypoint_tolerance_m is not None and not external and self.name != CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
-            raise ValueError("waypoint tolerance is reserved for the v3 candidate controller variant")
         if self.osc_position_scale_m is not None and (
             not np.isfinite(float(self.osc_position_scale_m))
             or float(self.osc_position_scale_m) <= 0.0
@@ -642,38 +563,28 @@ class ControllerVariantConfig:
             raise ValueError(
                 f"osc_position_scale_m must be in (0, {MAX_OSC_POSITION_SCALE_M}]"
             )
-        if self.osc_position_scale_m is not None and not external and self.name != CANDIDATE_V4_CONTROLLER_VARIANT_NAME:
-            raise ValueError("OSC position scale is reserved for the v4 candidate controller variant")
         if self.arrow_anchor_policy not in ARROW_ANCHOR_POLICIES:
             raise ValueError(
                 f"arrow_anchor_policy must be one of {ARROW_ANCHOR_POLICIES}"
             )
-        if self.arrow_anchor_policy != "bbox_center" and not external and self.name != CANDIDATE_V5_CONTROLLER_VARIANT_NAME:
-            raise ValueError("non-center arrow anchors are reserved for the v5 candidate controller variant")
         if self.approach_lateral_offset_m is not None and (
             not np.isfinite(float(self.approach_lateral_offset_m))
             or float(self.approach_lateral_offset_m) <= 0.0
             or float(self.approach_lateral_offset_m) > 0.10
         ):
             raise ValueError("approach_lateral_offset_m must be in (0, 0.10]")
-        if self.approach_lateral_offset_m is not None and not external and self.name != CANDIDATE_V6_CONTROLLER_VARIANT_NAME:
-            raise ValueError("directional approach offset is reserved for the v6 candidate controller variant")
         if self.grasp_contact_threshold is not None and (
             not np.isfinite(float(self.grasp_contact_threshold))
             or float(self.grasp_contact_threshold) <= 0.0
             or float(self.grasp_contact_threshold) > 0.01
         ):
             raise ValueError("grasp_contact_threshold must be in (0, 0.01]")
-        if self.grasp_contact_threshold is not None and not external and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
-            raise ValueError("grasp contact detection is reserved for the v8 candidate controller variant")
         if self.grasp_retry_offsets_m is not None:
             offsets = tuple(float(value) for value in self.grasp_retry_offsets_m)
             if len(offsets) > 3 or any(
                 not np.isfinite(value) or abs(value) > 0.03 for value in offsets
             ):
                 raise ValueError("grasp_retry_offsets_m must contain at most three offsets within +/-0.03 m")
-        if self.grasp_retry_offsets_m is not None and not external and self.name != CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
-            raise ValueError("grasp retries are reserved for the v8 candidate controller variant")
         if self.max_mask_fraction_for_motion is not None and (
             not np.isfinite(float(self.max_mask_fraction_for_motion))
             or not 0.0 <= float(self.max_mask_fraction_for_motion) <= MAX_MASK_FRACTION_FOR_MOTION
@@ -748,16 +659,6 @@ class ControllerVariantConfig:
             result["source_approach"] = json.loads(json.dumps(self.source_approach, sort_keys=True))
         if self.destination_placement is not None:
             result["destination_placement"] = json.loads(json.dumps(self.destination_placement, sort_keys=True))
-        if self.grasp_provider is not None:
-            result["grasp_provider"] = self.grasp_provider
-        if self.placement_provider is not None:
-            result["placement_provider"] = self.placement_provider
-        if self.zerograsp is not None:
-            policy = self.zerograsp
-            result["zerograsp"] = (
-                serialize_audit(policy) if serialize_audit is not None else dict(policy)
-                if isinstance(policy, Mapping) else asdict(policy)
-            )
         return result
 
     @property
@@ -805,8 +706,15 @@ def controller_variant_from_config(
         "max_mask_fraction_for_motion", "workspace_bounds_m", "grasp_search",
         "micro_correction",
         "source_approach", "destination_placement",
-        "grasp_provider", "placement_provider", "zerograsp", "zerograsp_policy",
     }
+    retired_keys = {
+        "grasp_provider", "placement_provider", "zerograsp", "zerograsp_policy"
+    }
+    if retired_keys.intersection(data):
+        raise ControllerConfigError(
+            "ZeroGrasp is a retired side experiment and cannot be selected by "
+            "the active arrow runtime"
+        )
     unknown = set(data) - allowed
     if unknown:
         raise ControllerConfigError(f"unknown controller config keys: {sorted(unknown)}")
@@ -832,100 +740,45 @@ def _resolve_controller_variant(
     max_mask_fraction_for_motion: float | None = None,
     workspace_bounds_m: Mapping[str, Sequence[float]] | None = None,
 ) -> ControllerVariantConfig:
+    def require_active(variant: ControllerVariantConfig) -> ControllerVariantConfig:
+        if variant.name != DEFAULT_PROFILE_NAME:
+            raise ControllerConfigError(
+                "only the active v9d controller is executable; "
+                f"got retired controller {variant.name!r}"
+            )
+        expected = controller_variant_from_config(
+            load_controller_config(), suite_mode=suite_mode
+        )
+        if variant.canonical() != expected.canonical():
+            raise ControllerConfigError(
+                "active v9d controller payload does not match the checked-in policy"
+            )
+        return variant
+
     if isinstance(value, ControllerVariantConfig):
-        return value
+        return require_active(value)
     if isinstance(value, Mapping):
-        return controller_variant_from_config(value, suite_mode=suite_mode)
-    name = str(value) if value is not None else DEFAULT_PROFILE_NAME
+        return require_active(controller_variant_from_config(value, suite_mode=suite_mode))
+    if value is None:
+        # The active v9d document is the single source of truth for the
+        # default.  Loading it here keeps nested RGB-D policy defaults and
+        # provenance identical for direct episodes and matrix runs.
+        return require_active(controller_variant_from_config(
+            load_controller_config(), suite_mode=suite_mode
+        ))
+    name = str(value)
+    if name in {"default", DEFAULT_PROFILE_NAME}:
+        return require_active(controller_variant_from_config(
+            load_controller_config(DEFAULT_CONTROLLER_CONFIG_FILENAME),
+            suite_mode=suite_mode,
+        ))
     if name.endswith(".json") or "/" in name or "\\" in name:
-        return controller_variant_from_config(load_controller_config(name), suite_mode=suite_mode)
-    if name in {
-        CANDIDATE_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
-    }:
-        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
-        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
-        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-    waypoint_tolerance_m = None
-    if name == CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
-        waypoint_tolerance_m = CANDIDATE_V3_WAYPOINT_TOLERANCE_M
-    if name == CANDIDATE_V2_CONTROLLER_VARIANT_NAME:
-        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
-    if name == CANDIDATE_V3_CONTROLLER_VARIANT_NAME:
-        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
-    osc_position_scale_m = None
-    if name == CANDIDATE_V4_CONTROLLER_VARIANT_NAME:
-        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
-        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
-        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-        osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M
-    arrow_anchor_policy = "visible_inset" if name == CANDIDATE_V5_CONTROLLER_VARIANT_NAME else "bbox_center"
-    if name == CANDIDATE_V5_CONTROLLER_VARIANT_NAME:
-        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
-        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
-        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-    approach_lateral_offset_m = (
-        CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M
-        if name == CANDIDATE_V6_CONTROLLER_VARIANT_NAME
-        else None
-    )
-    if name == CANDIDATE_V6_CONTROLLER_VARIANT_NAME:
-        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
-        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
-        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-    if name == CANDIDATE_V7_CONTROLLER_VARIANT_NAME:
-        phase_timeout_steps = CANDIDATE_V7_PHASE_TIMEOUT_STEPS
-        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
-        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
-        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-    if name == CANDIDATE_V7_CONTROLLER_VARIANT_NAME:
-        stall_window_steps = CANDIDATE_V7_STALL_WINDOW_STEPS
-    grasp_contact_threshold = None
-    grasp_retry_offsets_m = None
-    if name == CANDIDATE_V8_CONTROLLER_VARIANT_NAME:
-        max_mask_fraction_for_motion = CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        workspace_bounds_m = CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        endpoint_depth_statistic = CANDIDATE_ENDPOINT_DEPTH_STATISTIC
-        endpoint_depth_quantile = CANDIDATE_ENDPOINT_DEPTH_QUANTILE
-        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-        grasp_contact_threshold = CANDIDATE_V8_GRIPPER_CONTACT_THRESHOLD
-        grasp_retry_offsets_m = CANDIDATE_V8_GRASP_RETRY_OFFSETS_M
-    return ControllerVariantConfig(
-        name=name,
-        suite_mode=suite_mode,
-        phase_timeout_steps=phase_timeout_steps,
-        gripper_dwell_steps=gripper_dwell_steps,
-        stall_window_steps=stall_window_steps,
-        stall_delta_m=stall_delta_m,
-        recovery_attempts=recovery_attempts,
-        recovery_steps=recovery_steps,
-        endpoint_depth_statistic=endpoint_depth_statistic,
-        endpoint_depth_quantile=endpoint_depth_quantile,
-        approach_tolerance_m=approach_tolerance_m,
-        waypoint_tolerance_m=waypoint_tolerance_m,
-        osc_position_scale_m=osc_position_scale_m,
-        arrow_anchor_policy=arrow_anchor_policy,
-        approach_lateral_offset_m=approach_lateral_offset_m,
-        grasp_contact_threshold=grasp_contact_threshold,
-        grasp_retry_offsets_m=grasp_retry_offsets_m,
-        max_mask_fraction_for_motion=max_mask_fraction_for_motion,
-        workspace_bounds_m=workspace_bounds_m,
+        return require_active(controller_variant_from_config(
+            load_controller_config(name), suite_mode=suite_mode
+        ))
+    raise ControllerConfigError(
+        "only the active v9d controller is executable; "
+        f"got retired controller {name!r}"
     )
 
 
@@ -1583,75 +1436,6 @@ def _refine_or_deproject_endpoint(
         "pixel_provenance": "runner_decoded_arrow_endpoint",
         "depth_provenance": "runner_depth_at_median_patch",
     }
-
-
-def _zerograsp_observation(
-    capture: CapturedRGBD,
-    arrow_rgb: np.ndarray,
-    source_uv: Sequence[float],
-    target_uv: Sequence[float],
-) -> Any:
-    """Build the strict learned-controller observation with no simulator data."""
-    if ZeroGraspObservation is None:
-        raise RuntimeError("ZeroGrasp contracts are unavailable")
-    proprio = _proprioception(capture.observation)
-    return ZeroGraspObservation(
-        clean_rgb=np.asarray(capture.rgb, dtype=np.uint8),
-        arrow_rgb=np.asarray(arrow_rgb, dtype=np.uint8),
-        depth_m=np.asarray(capture.metric_depth, dtype=np.float32),
-        K=np.asarray(capture.calibration.intrinsic, dtype=np.float64),
-        T_world_camera=np.asarray(capture.calibration.world_from_camera, dtype=np.float64),
-        source_px=(float(source_uv[0]), float(source_uv[1])),
-        destination_px=(float(target_uv[0]), float(target_uv[1])),
-        # LIBERO exposes these in different frames: position is grip_site,
-        # orientation is the right_hand body.  Keep them separate and never
-        # fabricate a synthetic SE(3) observation.
-        eef_position_world_m=proprio.get("eef_pos"),
-        eef_quaternion_right_hand_xyzw=proprio.get("eef_quat"),
-        gripper_qpos=proprio.get("gripper_qpos"),
-    )
-
-
-def _zerograsp_frame_metadata(observation: Any) -> dict[str, Any]:
-    return {
-        "camera_frame": "opencv_optical_x_right_y_down_z_forward",
-        "world_frame": "libero_mujoco_world",
-        "eef_frame": "robot0_eef_pos_grip_site",
-        "eef_position_frame": "world_grip_site",
-        "eef_orientation_frame": "world_right_hand",
-        "rgb_shape": list(np.asarray(observation.clean_rgb).shape),
-        "depth_shape": list(np.asarray(observation.depth_m).shape),
-        "source_px": list(observation.source_px),
-        "destination_px": list(observation.destination_px),
-        "transform": "T_world_camera",
-    }
-
-
-def _zerograsp_infer_select(adapter: Any, observation: Any) -> tuple[Any, Mapping[str, Any], dict[str, Any]]:
-    """Run the public adapter API and return explicit, serializable provenance."""
-    if adapter is None:
-        raise RuntimeError("ZeroGrasp provider requested but no adapter was supplied")
-    infer = getattr(adapter, "infer", None)
-    select = getattr(adapter, "select", None)
-    if not callable(infer) or not callable(select):
-        raise TypeError("ZeroGrasp adapter must expose infer(observation) and select(result, observation)")
-    result = infer(observation)
-    selected = select(result, observation)
-    if not isinstance(selected, Mapping):
-        raise TypeError("ZeroGrasp adapter select() must return a mapping")
-    audit: dict[str, Any] = {}
-    adapter_audit = getattr(adapter, "last_audit", None)
-    if isinstance(adapter_audit, Mapping):
-        audit.update(serialize_audit(adapter_audit) if serialize_audit is not None else dict(adapter_audit))
-    audit.update({
-        "status": "completed",
-        "fallback": False,
-        "request_hash": getattr(result, "request_hash", audit.get("request_hash")),
-        "output_hash": getattr(result, "output_hash", audit.get("output_hash")),
-        "runtime_hash": audit.get("runtime_hash") or getattr(adapter, "runtime_hash", None),
-        "frame_metadata": _zerograsp_frame_metadata(observation),
-    })
-    return result, selected, audit
 
 
 def _pose_waypoint(position: Any, orientation: Any | None = None, orientation_frame: str | None = None) -> dict[str, Any]:
@@ -2763,7 +2547,6 @@ def run_episode(
     motion_started_callback: Callable[[], None] | None = None,
     controller_variant: ControllerVariantConfig | str | None = None,
     suite_mode: str | None = None,
-    zerograsp_adapter: Any | None = None,
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
     recovery_steps: int = DEFAULT_RECOVERY_STEPS,
     recovery_callback: Callable[[str, Mapping[str, Any]], bool] | None = None,
@@ -2896,89 +2679,6 @@ def run_episode(
     })
     setattr(env, "_arrow_decode_audit", dict(arrow_decode_audit))
     setattr(env, "_arrow_input_arrow_audit", dict(arrow_audit))
-    zerograsp_result = None
-    zerograsp_selected: Mapping[str, Any] | None = None
-    zerograsp_audit: dict[str, Any] | None = None
-    eef_orientation_transform: np.ndarray | None = None
-    if variant.grasp_provider == "zerograsp" or variant.placement_provider == "zerograsp_reconstruction":
-        policy = variant.zerograsp
-        calibration_policy = (
-            dict(policy) if isinstance(policy, Mapping)
-            else asdict(policy) if policy is not None and hasattr(policy, "__dataclass_fields__")
-            else None
-        )
-        if not isinstance(calibration_policy, Mapping) or calibration_policy.get("eef_calibration_verified") is not True:
-            zerograsp_audit = {
-                "status": "rejected",
-                "fallback": False,
-                "error": "explicit verified flat ZeroGrasp EEF calibration is required before motion",
-                "calibration": dict(calibration_policy) if isinstance(calibration_policy, Mapping) else None,
-                "frame_metadata": {"camera_frame": "opencv_optical_x_right_y_down_z_forward", "world_frame": "libero_mujoco_world"},
-            }
-            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
-            raise RuntimeError(zerograsp_audit["error"])
-        translation_rule = str(calibration_policy.get("translation_rule", ""))
-        if translation_rule != "center_plus_depth_x_then_R_G_E_delta_E_v1":
-            message = "ZeroGrasp calibration must declare the exact dynamic candidate-depth local-X translation rule"
-            zerograsp_audit = {"status": "rejected", "fallback": False, "error": message, "calibration": dict(calibration_policy)}
-            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
-            raise RuntimeError(message)
-        eef_orientation_transform = np.asarray(calibration_policy.get("R_H_E"), dtype=np.float64)
-        if eef_orientation_transform.shape != (3, 3) or not np.allclose(
-            eef_orientation_transform.T @ eef_orientation_transform, np.eye(3), atol=1e-5
-        ) or not np.isclose(np.linalg.det(eef_orientation_transform), 1.0, atol=1e-5):
-            message = "ZeroGrasp pose calibration requires a verified R_H_E right-hand to grip-site rotation"
-            zerograsp_audit = {"status": "rejected", "fallback": False, "error": message, "calibration": dict(calibration_policy)}
-            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
-            raise RuntimeError(message)
-        zerograsp_audit = {
-            "status": "pending",
-            "fallback": False,
-            "provider": {"grasp": variant.grasp_provider, "placement": variant.placement_provider},
-            "calibration": dict(calibration_policy),
-        }
-        setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
-        try:
-            learned_observation = _zerograsp_observation(capture, arrow_rgb, source_uv, target_uv)
-            zerograsp_result, zerograsp_selected, inference_audit = _zerograsp_infer_select(
-                zerograsp_adapter, learned_observation
-            )
-            zerograsp_audit.update(inference_audit)
-            zerograsp_audit["provenance"] = serialize_audit(zerograsp_selected) if serialize_audit is not None else dict(zerograsp_selected)
-            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
-        except BaseException as exc:
-            # Preserve the adapter's partial provenance even when inference or
-            # selection fails before _zerograsp_infer_select can return.  This
-            # is required for complete failed-cell diagnostics and never
-            # enables a fallback path.
-            adapter_audit = getattr(zerograsp_adapter, "last_audit", None)
-            if isinstance(adapter_audit, Mapping):
-                zerograsp_audit.update(
-                    serialize_audit(adapter_audit) if serialize_audit is not None else dict(adapter_audit)
-                )
-            zerograsp_audit["runtime_hash"] = (
-                zerograsp_audit.get("runtime_hash")
-                or getattr(zerograsp_adapter, "runtime_hash", None)
-            )
-            frame_metadata = zerograsp_audit.get("frame_metadata")
-            if not isinstance(frame_metadata, Mapping):
-                frame_metadata = _zerograsp_frame_metadata(
-                    locals().get("learned_observation")
-                    if locals().get("learned_observation") is not None
-                    else _zerograsp_observation(capture, arrow_rgb, source_uv, target_uv)
-                )
-            else:
-                merged_frame_metadata = _zerograsp_frame_metadata(
-                    locals().get("learned_observation")
-                    if locals().get("learned_observation") is not None
-                    else _zerograsp_observation(capture, arrow_rgb, source_uv, target_uv)
-                )
-                merged_frame_metadata.update(dict(frame_metadata))
-                frame_metadata = merged_frame_metadata
-            zerograsp_audit["frame_metadata"] = dict(frame_metadata)
-            zerograsp_audit.update({"status": "failed", "fallback": False, "error_type": type(exc).__name__, "error": str(exc)})
-            setattr(env, "_arrow_zerograsp_audit", dict(zerograsp_audit))
-            raise
     depth_sanitization_policy = assess_depth_sanitization_for_motion(
         capture, (source_uv, target_uv), max_mask_fraction=max_mask_fraction_for_motion
     )
@@ -3114,29 +2814,6 @@ def run_episode(
             raise RuntimeError(f"RGB-D destination support plane rejected: {exc}") from exc
         setattr(env, "_arrow_support_plane", dict(support_plane_audit))
         setattr(env, "_arrow_placement_observable", {"enabled": True, "status": "accepted"})
-    zg_source_pose = None
-    zg_pregrasp_pose = None
-    zg_placement_pose = None
-    if zerograsp_selected is not None and variant.grasp_provider == "zerograsp":
-        zg_source_pose = np.asarray(zerograsp_selected.get("T_W_E"), dtype=np.float64)
-        if zg_source_pose.shape != (4, 4):
-            raise ValueError("ZeroGrasp selected T_W_E must be a 4x4 calibrated EEF pose")
-        if "T_W_E_pregrasp" not in zerograsp_selected:
-            raise ValueError("ZeroGrasp selection must provide only the calibrated T_W_E_pregrasp EEF pose")
-        zg_pregrasp_pose = np.asarray(zerograsp_selected["T_W_E_pregrasp"], dtype=np.float64)
-        if zg_pregrasp_pose.shape != (4, 4):
-            raise ValueError("ZeroGrasp selected T_W_E_pregrasp must be a 4x4 calibrated EEF pose")
-        bowl_point = zg_source_pose[:3, 3].copy()
-    if zerograsp_selected is not None and variant.placement_provider == "zerograsp_reconstruction":
-        placement = zerograsp_selected.get("placement")
-        placement_value = (
-            placement.get("T_world_eef") if isinstance(placement, Mapping)
-            else getattr(placement, "T_world_eef", None)
-        )
-        zg_placement_pose = np.asarray(placement_value, dtype=np.float64)
-        if zg_placement_pose.shape != (4, 4):
-            raise ValueError("ZeroGrasp reconstruction placement must provide a 4x4 T_world_eef")
-        destination_point = zg_placement_pose[:3, 3].copy()
     setattr(env, "_arrow_deprojected_visual_endpoint_world_points_m", {
         "source_tail": source_visual_point.tolist(),
         "destination_head": destination_visual_point.tolist(),
@@ -3160,54 +2837,11 @@ def run_episode(
     initial_proprio = _proprioception(capture.observation)
     if not np.isfinite(clearance_m) or clearance_m <= 0:
         raise ValueError("clearance_m must be finite and positive")
-    # Build the shared safe-Z transit from the actual source/destination poses
-    # that will be executed.  A calibrated ZeroGrasp source can sit above the
-    # classical arrow-derived endpoint; using the latter here could make the
-    # lift descend into the bowl or carried object.
-    transfer_source_point = (
-        zg_source_pose[:3, 3].copy() if zg_source_pose is not None else bowl_point
-    )
     waypoints = _require(build_bowl_waypoints, "build_bowl_waypoints")(
-        transfer_source_point, destination_point,
+        bowl_point, destination_point,
         initial_proprio.get("eef_quat"),
         {"lift_height_m": float(clearance_m)},
     )
-    if zg_source_pose is not None:
-        waypoint_values = list(waypoints)
-        source_rotation = zg_source_pose[:3, :3]
-        # The pure waypoint helper may be mocked or may use a historical
-        # source-independent lift height.  Enforce a calibrated clearance
-        # above every actually executed source/destination EEF position so a
-        # high learned grasp cannot turn lift into a downward motion.
-        selected_clearance_z = max(
-            float(transfer_source_point[2]),
-            float(np.asarray(destination_point, dtype=np.float64)[2]),
-        ) + float(clearance_m)
-        for index in (2, 3):
-            point = _position(waypoint_values[index]).astype(np.float64, copy=True)
-            point[2] = max(float(point[2]), selected_clearance_z)
-            waypoint_values[index] = point
-        waypoint_values[0] = _pose_waypoint(zg_pregrasp_pose[:3, 3], source_rotation, "grip_site")
-        waypoint_values[1] = _pose_waypoint(zg_source_pose[:3, 3], source_rotation, "grip_site")
-        waypoint_values[2] = _pose_waypoint(
-            np.array((zg_source_pose[0, 3], zg_source_pose[1, 3], _position(waypoint_values[2])[2])),
-            source_rotation, "grip_site",
-        )
-        waypoint_values[3] = _pose_waypoint(_position(waypoint_values[3]), source_rotation, "grip_site")
-        # Carry the selected grip-site orientation through release and
-        # retreat.  C10 keeps the classical destination position but must not
-        # fall back to the initial right-hand orientation; C11 replaces the
-        # release orientation with the reconstruction-selected EEF pose.
-        release_rotation = (
-            zg_placement_pose[:3, :3] if zg_placement_pose is not None else source_rotation
-        )
-        release_position = (
-            zg_placement_pose[:3, 3] if zg_placement_pose is not None
-            else _position(waypoint_values[4])
-        )
-        waypoint_values[4] = _pose_waypoint(release_position, release_rotation, "grip_site")
-        waypoint_values[5] = _pose_waypoint(_position(waypoint_values[5]), release_rotation, "grip_site")
-        waypoints = waypoint_values
     waypoints = _apply_directional_pregrasp_offset(
         waypoints,
         source_visual_point,
@@ -3431,6 +3065,7 @@ def run_episode(
         if (
             policy is not None
             and policy.enabled
+            and not dry_run
             and stop_after_phase == "retreat"
             and phase == "close"
             and "empty_gripper_likely" in policy.trigger_on
@@ -3456,7 +3091,6 @@ def run_episode(
             micro_correction=variant.micro_correction,
             micro_action_budget=micro_action_budget,
             post_phase_callback=_after_motion_phase,
-            eef_orientation_transform=eef_orientation_transform,
             motion_trace_max_steps=motion_trace_max_steps,
             motion_trace_path=output_root / "motion_trace.json",
             failure_snapshot_callback=failure_snapshot_callback,
@@ -4000,7 +3634,6 @@ def run_episode(
         "grasp_retries": grasp_retry_audit,
         "grasp_search": grasp_search_audit,
         "micro_corrections": micro_correction_audit,
-        "zerograsp": zerograsp_audit,
         "settle_diagnostics": settle_diagnostics,
         "environment_audit": getattr(env, "_arrow_environment_audit", None),
         "capture_contract": capture_contract,
@@ -4152,6 +3785,19 @@ def build_libero_env(
     controller_variant: ControllerVariantConfig | str | None = None,
 ) -> Any:
     """Construct direct LIBERO OffScreenRenderEnv with explicit suite semantics."""
+    if isinstance(controller_variant, ControllerVariantConfig):
+        if controller_variant.name != DEFAULT_PROFILE_NAME:
+            raise ControllerConfigError(
+                "only the active v9d controller may construct a runtime environment; "
+                f"got retired controller {controller_variant.name!r}"
+            )
+    elif controller_variant is not None:
+        requested_name = str(controller_variant).strip()
+        if requested_name not in {"default", DEFAULT_PROFILE_NAME, DEFAULT_CONTROLLER_CONFIG_FILENAME}:
+            raise ControllerConfigError(
+                "only the active v9d controller may construct a runtime environment; "
+                f"got retired controller {requested_name!r}"
+            )
     if suite_mode is None:
         suite_mode = (
             controller_variant.suite_mode
@@ -4359,14 +4005,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--controller-variant",
         choices=(
             "default",
-            CANDIDATE_CONTROLLER_VARIANT_NAME,
-            CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
-            CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
-            CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
-            CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
-            CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
-            CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
-            CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
+            DEFAULT_PROFILE_NAME,
         ),
         default="default",
     )
@@ -4409,86 +4048,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         external_variant = controller_variant_from_config(
             load_controller_config(args.controller_config), suite_mode=args.suite_mode
         )
-    candidate_variant = args.controller_variant in {
-        CANDIDATE_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V2_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V3_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V4_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V5_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V6_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V7_CONTROLLER_VARIANT_NAME,
-        CANDIDATE_V8_CONTROLLER_VARIANT_NAME,
-    }
-    candidate_v2 = args.controller_variant == CANDIDATE_V2_CONTROLLER_VARIANT_NAME
-    candidate_v3 = args.controller_variant == CANDIDATE_V3_CONTROLLER_VARIANT_NAME
-    candidate_v4 = args.controller_variant == CANDIDATE_V4_CONTROLLER_VARIANT_NAME
-    candidate_v5 = args.controller_variant == CANDIDATE_V5_CONTROLLER_VARIANT_NAME
-    candidate_v6 = args.controller_variant == CANDIDATE_V6_CONTROLLER_VARIANT_NAME
-    candidate_v7 = args.controller_variant == CANDIDATE_V7_CONTROLLER_VARIANT_NAME
-    candidate_v8 = args.controller_variant == CANDIDATE_V8_CONTROLLER_VARIANT_NAME
-    variant_name = args.controller_variant if candidate_variant else DEFAULT_PROFILE_NAME
-    endpoint_depth_statistic = args.endpoint_depth_statistic or (
-        CANDIDATE_ENDPOINT_DEPTH_STATISTIC if candidate_variant else DEFAULT_ENDPOINT_DEPTH_STATISTIC
-    )
-    endpoint_depth_quantile = args.endpoint_depth_quantile
-    if endpoint_depth_quantile is None:
-        endpoint_depth_quantile = (
-            CANDIDATE_ENDPOINT_DEPTH_QUANTILE if candidate_variant else DEFAULT_ENDPOINT_DEPTH_QUANTILE
+        if external_variant.name != DEFAULT_PROFILE_NAME:
+            raise SystemExit(
+                "retired controller selection rejected; use "
+                f"{DEFAULT_CONTROLLER_CONFIG_FILENAME}"
+            )
+    elif args.controller_variant in {"default", DEFAULT_PROFILE_NAME}:
+        # No-config execution must use the same fully expanded v9d policy as
+        # an explicit config path, including its real source and semantic hash.
+        external_variant = controller_variant_from_config(
+            load_controller_config(), suite_mode=args.suite_mode
         )
-    approach_tolerance_m = args.approach_tolerance_m
-    if approach_tolerance_m is None and candidate_variant:
-        approach_tolerance_m = CANDIDATE_APPROACH_TOLERANCE_M
-    phase_timeout_steps = (
-        CANDIDATE_V7_PHASE_TIMEOUT_STEPS if candidate_v7 else args.phase_timeout_steps
-    )
-    stall_window_steps = (
-        CANDIDATE_V7_STALL_WINDOW_STEPS if candidate_v7 else args.stall_window_steps
-    )
-    waypoint_tolerance_m = (
-        CANDIDATE_V3_WAYPOINT_TOLERANCE_M if candidate_v3 else None
-    )
-    max_mask_fraction_for_motion = (
-        CANDIDATE_V2_MAX_MASK_FRACTION_FOR_MOTION
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7 or candidate_v8
-        else None
-    )
-    workspace_bounds_m = (
-        CANDIDATE_V2_WORKSPACE_BOUNDS_M
-        if candidate_v2 or candidate_v3 or candidate_v4 or candidate_v5 or candidate_v6 or candidate_v7 or candidate_v8
-        else None
-    )
-    osc_position_scale_m = CANDIDATE_V4_OSC_POSITION_SCALE_M if candidate_v4 else None
-    arrow_anchor_policy = "visible_inset" if candidate_v5 else "bbox_center"
-    approach_lateral_offset_m = (
-        CANDIDATE_V6_APPROACH_LATERAL_OFFSET_M if candidate_v6 else None
-    )
-    grasp_contact_threshold = (
-        CANDIDATE_V8_GRIPPER_CONTACT_THRESHOLD if candidate_v8 else None
-    )
-    grasp_retry_offsets_m = (
-        CANDIDATE_V8_GRASP_RETRY_OFFSETS_M if candidate_v8 else None
-    )
-    selected_variant = external_variant or ControllerVariantConfig(
-        name=variant_name,
-        suite_mode=args.suite_mode,
-        phase_timeout_steps=phase_timeout_steps,
-        gripper_dwell_steps=args.gripper_dwell_steps,
-        stall_window_steps=stall_window_steps,
-        stall_delta_m=args.stall_delta_m,
-        recovery_attempts=args.recovery_attempts,
-        recovery_steps=args.recovery_steps,
-        endpoint_depth_statistic=endpoint_depth_statistic,
-        endpoint_depth_quantile=endpoint_depth_quantile,
-        approach_tolerance_m=approach_tolerance_m,
-        waypoint_tolerance_m=waypoint_tolerance_m,
-        osc_position_scale_m=osc_position_scale_m,
-        arrow_anchor_policy=arrow_anchor_policy,
-        approach_lateral_offset_m=approach_lateral_offset_m,
-        grasp_contact_threshold=grasp_contact_threshold,
-        grasp_retry_offsets_m=grasp_retry_offsets_m,
-        max_mask_fraction_for_motion=max_mask_fraction_for_motion,
-        workspace_bounds_m=workspace_bounds_m,
-    )
+    else:
+        # Historical v1-v9/v10 labels remain useful in archived provenance,
+        # but are not executable runtime selections anymore.
+        raise SystemExit(
+            "retired controller selection rejected; use "
+            f"{DEFAULT_CONTROLLER_CONFIG_FILENAME}"
+        )
+    # The checked-in v9d document is the sole executable policy.  Its expanded
+    # values are authoritative; command-line knobs remain for historical
+    # parsing compatibility but cannot silently create a second controller.
+    selected_variant = external_variant
+    if selected_variant is None:  # defensive: both resolution branches above must set it
+        raise ControllerConfigError("active v9d controller could not be resolved")
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode,
         controller_variant=selected_variant,

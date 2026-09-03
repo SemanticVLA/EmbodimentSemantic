@@ -209,106 +209,14 @@ One-task CPU smoke run:
 python run_scene_graph_visual_ablation.py --tasks "[0]" --episodes 1 --max-videos 1 --device cpu
 ```
 
-### Optional ZeroGrasp grasp-proposal runtime
+### Archived ZeroGrasp grasp-proposal experiment
 
-ZeroGrasp is an isolated, opt-in grasp/reconstruction provider for the
-arrow-only pick/place runner. The official checkout is pinned to
-`152f67c27269ff3f089783bd2f041d67641fa506`; it is kept outside the LIBERO
-environment. Bootstrap never downloads a checkpoint:
-
-```bash
-bash vla_benchmarking/legion/bootstrap_zerograsp.sh \
-  --root /absolute/path/to/ZeroGrasp \
-  --create-venv
-```
-
-Use `--install-deps` only when intentionally installing the pinned repository
-requirements into the isolated `ROOT.venv` (or an explicit `--venv` path); it is
-not the complete official CUDA runtime. For a reproducible Legion compute-node
-environment, submit the setup-and-smoke job (never execute it on a login node):
-
-```bash
-# REPO_ROOT is this isolated evaluation checkout; ZERO_GRASP_ROOT may be a
-# not-yet-created absolute path on persistent storage.
-export REPO_ROOT=/absolute/path/to/evaluation-checkout
-export ZERO_GRASP_ROOT=/absolute/path/to/ZeroGrasp
-export ARROW_MATRIX_EXPECTED_COMMIT=<exact-40-character-evaluation-checkout-sha>
-export ZERO_GRASP_SETUP_MODE=acquire
-sbatch vla_benchmarking/legion/setup_zerograsp_runtime.sbatch
-```
-
-That job loads the pinned `nvhpc-nompi/25.1` CUDA compiler module,
-`gcc/11.5.0` host compiler, and `miniforge/24.3.0-0`; it explicitly pins
-`CC`, `CXX`, and `CUDAHOSTCXX` before creating a persistent Python 3.11 venv
-outside the checkout, installs the official CUDA 12.1 stack (Torch 2.2.0,
-torchvision 0.17.0, PyG wheels, xformers 0.0.24), pinned
-`dwconv`/`graspnetAPI` refs, O-CNN `v2.2.6`, and the octree submodule. O-CNN is
-pinned before its `v2.3` Triton-kernel transition because that newer line is
-incompatible with ZeroGrasp's Torch 2.2.0 / Triton 2.2.0 runtime. The upstream
-stack also still imports `pkg_resources`, so the environment pins setuptools
-80.9.0 instead of accepting setuptools 82+, which removed that module. The upstream
-requirements leave `ocnn` floating, so the setup fails closed unless the
-script's reviewed immutable ref is used. The upstream `dwconv` VCS requirement
-is likewise filtered and installed at its pinned ref after Torch with build
-isolation disabled, because its build imports Torch and compiles a CUDA
-extension. The runtime lock records and verifies the compiler module names and
-the resolved paths, versions, and executable hashes for `nvcc`, `gcc`, and
-`g++`. Because Legion compute-node DNS does not reliably resolve the PyG wheel
-host, pinned `torch_cluster==1.6.3` is built once in that persistent venv with
-build isolation disabled. The legacy octree feature extractor is compiled from
-a temporary copy so its in-place build artifacts cannot dirty the immutable
-ZeroGrasp checkout. The setup and matrix jobs also disable Python bytecode
-writes so importing the external model cannot add `__pycache__` files there.
-The job installs `gdown==5.2.0` only on the compute node and fetches the official Drive file id
-`1xUmFdgT_Ozu4zIPIsh_1SJMcegeQUWqQ` only when the checkpoint path is absent;
-existing checkpoint files are never overwritten. Acquisition exits before any
-runtime/model import, worker process, or checkpoint deserialization. The
-resulting checkpoint SHA-256 and byte size, config hash, Python/CUDA/GPU identity, source refs, and
-`pip freeze` are written to an external lock and persistent archive. The first
-acquisition records the observed checkpoint hash in
-`checkpoint-acquisition.json`; operators must preserve it as
-`ZERO_GRASP_CHECKPOINT_SHA256` for subsequent fail-closed execution:
-
-```bash
-export ZERO_GRASP_SETUP_MODE=execute
-export ZERO_GRASP_CHECKPOINT_SHA256=<sha256-from-checkpoint-acquisition.json>
-export ARROW_MATRIX_EXPECTED_COMMIT=<exact-40-character-evaluation-checkout-sha>
-sbatch vla_benchmarking/legion/setup_zerograsp_runtime.sbatch
-```
-
-Only execute mode performs imports, a true official checkpoint load, and a
-bounded worker process ready/close preflight. The preflight verifies the
-explicit lowercase checkpoint SHA before starting the worker, so a missing or
-mismatched digest cannot reach model deserialization. The SHA must match both
-the artifact and acquisition/runtime lock. The model-load smoke does
-not construct LIBERO/MuJoCo, move a robot, or query an evaluator. Demo-image
-candidate inference remains a separate later smoke once an operator supplies
-the exact input artifact and calibration.
-
-The matrix launcher performs ZeroGrasp
-preflight only when the fully expanded external controller JSON selects a
-ZeroGrasp provider. That preflight requires all of the following environment
-variables: `ZERO_GRASP_ROOT`, `ZERO_GRASP_PYTHON`, `ZERO_GRASP_CHECKPOINT`,
-`ZERO_GRASP_CHECKPOINT_SHA256`, `ZERO_GRASP_CONFIG`, and
-`ZERO_GRASP_CONFIG_SHA256`. The adapter is the repository file
-`vla_benchmarking/zerograsp_worker.py`; it uses the built-in official backend
-when no optional operator entrypoint is configured. `ZERO_GRASP_ENV_LOCK` and its
-`ZERO_GRASP_ENV_LOCK_SHA256` are mandatory for every ZeroGrasp matrix; the
-launcher verifies the lock's selected source revision, checkpoint/config paths
-and hashes, canonical venv/interpreter path, interpreter executable hash,
-current `pip freeze`, exact NumPy 1.26.4 ABI-compatible runtime, and
-Torch/CUDA identity before starting the worker. A
-different `ZERO_GRASP_PYTHON` or stale environment therefore fails closed.
-
-That worker must implement the `zerograsp-jsonl-v1` JSONL handshake; the
-launcher verifies the pinned source revision and every supplied artifact hash,
-then performs that handshake before the first LIBERO/MuJoCo environment
-construction. The worker receives only
-the allowed RGB-D/calibration/proprioception path and arrow-derived source
-selection; task bboxes, object poses, simulator state, and evaluator results
-are not passed to it. Resolved revision and hashes are recorded in
-`job_context.env` and the combined dual-matrix summary. Classical and existing
-v1--v9 controller configurations do not invoke or import ZeroGrasp.
+ZeroGrasp is retired from the active arrow runtime. Its source, dependency
+setup notes, checkpoint provenance, and prior experiments are retained in the
+repository history and archival run records for reproducibility only. The
+standard Legion arrow launcher is v9d and does not read ZeroGrasp configuration
+or `ZERO_GRASP_*` environment variables. Fine-tune/LoRA workflows are
+separate and unchanged.
 
 ### SmolVLA LoRA fine-tuning (Lambda GPU)
 
