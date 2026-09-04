@@ -56,6 +56,7 @@ MOLMOPOINT_PROMPT_IDS = ("rim_contact", "rim_downward_approach", "rim_clearance"
 
 MOTION_PROFILE_NAMES = (
     "baseline", "placement_micro5mm", "release_plus20mm", "release20_visual_xy",
+    "release20_retreat80mm", "release_plus40mm",
 )
 SCIENTIFIC_IDENTITY_SCHEMA = "molmo_sam3_scientific_identity.v1"
 PLACEMENT_MICRO_CORRECTION_PARAMS = {
@@ -171,16 +172,30 @@ def resolve_motion_profile(name: str, *, region_backend: str) -> dict[str, Any]:
         raise ValueError(f"motion profile must be one of {MOTION_PROFILE_NAMES}")
     if name == "placement_micro5mm" and region_backend != "rgbd":
         raise ValueError("placement_micro5mm requires --region-backend rgbd")
-    return {
+    profile = {
         "name": name,
         "region_backend": region_backend,
         "micro_correction": (
             dict(PLACEMENT_MICRO_CORRECTION_PARAMS)
             if name == "placement_micro5mm" else None
         ),
-        "release_height_offset_m": 0.020 if name in {"release_plus20mm", "release20_visual_xy"} else 0.0,
+        "release_height_offset_m": 0.020 if name in {"release_plus20mm", "release20_visual_xy", "release20_retreat80mm"} else 0.040 if name == "release_plus40mm" else 0.0,
         "transfer_xy_policy": "visual_endpoints" if name == "release20_visual_xy" else "legacy_displacement",
     }
+    if name == "release20_retreat80mm":
+        profile.update({
+            "retreat_height_offset_m": 0.080,
+            "retreat_tolerance_m": 0.005,
+            "retreat_reference": "open_after_release_plus20mm",
+        })
+    elif name == "release_plus40mm":
+        profile.update({
+            "retreat_height_offset_m": 0.0,
+            "retreat_tolerance_m": 0.015,
+            "retreat_reference": "original_30mm_retreat",
+            "release_height_assertion_m": 0.040,
+        })
+    return profile
 
 
 def _candidate_motion_kwargs(
@@ -198,6 +213,11 @@ def _candidate_motion_kwargs(
     release_offset = float(resolved_motion_profile.get("release_height_offset_m", 0.0))
     if release_offset != 0.0:
         kwargs["experimental_release_height_offset_m"] = release_offset
+    if resolved_motion_profile.get("name") in {"release20_retreat80mm", "release_plus40mm"}:
+        kwargs["experimental_motion_profile"] = str(resolved_motion_profile["name"])
+    retreat_offset = float(resolved_motion_profile.get("retreat_height_offset_m", 0.0))
+    if retreat_offset != 0.0:
+        kwargs["experimental_retreat_height_offset_m"] = retreat_offset
     if resolved_motion_profile.get("transfer_xy_policy") == "visual_endpoints":
         kwargs["experimental_transfer_xy_policy"] = "visual_endpoints"
     return kwargs
@@ -2289,6 +2309,7 @@ def main(
     *,
     molmo_runtime: Any | None = None,
     cell_completed_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+    execution_cell_identities_by_suite: Mapping[str, Sequence[tuple[int, int]]] | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=sorted(VARIANTS), required=True)
@@ -2316,7 +2337,14 @@ def main(
     parser.add_argument("--dry-run", action="store_true", help="validate local model assets without motion")
     args = parser.parse_args(argv)
     if args.episodes_per_task is None:
-        args.episodes_per_task = 2 if args.phase == "prefix" else 10
+        # A failure-stratified prefix selects arbitrary seeds from the full
+        # canonical 10-episode shard; materialize all 30 cells and filter only
+        # execution.  Ordinary prefixes retain the historical 2-episode plan.
+        args.episodes_per_task = (
+            10
+            if args.phase == "prefix" and execution_cell_identities_by_suite is not None
+            else 2 if args.phase == "prefix" else 10
+        )
     if args.episodes_per_task <= 0:
         parser.error("--episodes-per-task must be positive")
     try:
@@ -3058,6 +3086,13 @@ def main(
                 continue_on_motion_failure=True,
                 resume=bool(args.phase == "full60" and suite_root.exists()),
                 resume_terminal=bool(args.phase == "full60" and suite_root.exists()),
+                execution_cell_identities=(
+                    tuple(execution_cell_identities_by_suite[suite_mode])
+                    if args.phase == "prefix"
+                    and execution_cell_identities_by_suite is not None
+                    and suite_mode in execution_cell_identities_by_suite
+                    else None
+                ),
                 cell_completed_callback=cell_completed_callback,
                 experiment_metadata={
                     "schema_version": (RGBD_EXPERIMENT_SCHEMA if args.region_backend == "rgbd" else SAM_EXPERIMENT_SCHEMA),

@@ -41,6 +41,31 @@ def test_rgbd_main_passes_frozen_v9d_matrix_selection(tmp_path, monkeypatch):
     assert selected == [matrix.DEFAULT_CONTROLLER_VARIANT] * 2
 
 
+def test_failure_screen_materializes_full_shard_and_filters_execution(tmp_path, monkeypatch):
+    matrix = importlib.import_module("run_arrow_pick_place_matrix")
+    seen = []
+    monkeypatch.setattr(runner, "_execution_provenance", lambda **_kwargs: {
+        "execution_sha": "a" * 40, "checkout_clean": True,
+        "live_verified": True, "provenance_status": "live_verified", "dirty_paths": [],
+    })
+
+    def capture_matrix(**kwargs):
+        seen.append(kwargs)
+        return {"successes": 0}
+
+    monkeypatch.setattr(matrix, "run_matrix", capture_matrix)
+    selected = {
+        "vanilla": ((4, 1000), (6, 1005), (9, 1004), (9, 1001), (4, 1002), (6, 1000)),
+        "sealed_randomized": ((4, 1000), (9, 1003), (9, 1007), (4, 1006), (4, 1002), (9, 1000)),
+    }
+    assert runner.main([
+        "--region-backend", "rgbd", "--variant", "rgbd_geometry_agentview",
+        "--output-dir", str(tmp_path),
+    ], execution_cell_identities_by_suite=selected) == 0
+    assert [item["episodes_per_task"] for item in seen] == [10, 10]
+    assert [item["execution_cell_identities"] for item in seen] == [selected["vanilla"], selected["sealed_randomized"]]
+
+
 @dataclass
 class Calibration:
     camera_name: str

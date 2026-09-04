@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import traceback
+from numbers import Integral
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -206,6 +207,53 @@ def _contract_hash(protocol: Mapping[str, Any], cells: Sequence[Mapping[str, Any
     ]
     payload = {"protocol": protocol, "cells": identity_cells}
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _execution_cell_selector(
+    cells: Sequence[Mapping[str, Any]],
+    identities: Sequence[tuple[int, int]] | None,
+) -> tuple[set[tuple[int, int]] | None, dict[str, Any] | None]:
+    """Validate a sparse execution selection without changing the cell plan.
+
+    ``(task_id, seed)`` is the stable cell identity used by resume.  The
+    selector is deliberately operational metadata: it never enters the
+    protocol or contract hash, so removing it for a continuation preserves
+    the scientific matrix identity and allows the skipped cells to run.
+    """
+    if identities is None:
+        return None, None
+    known = {(int(cell["task_id"]), int(cell["seed"])) for cell in cells}
+    selected: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for raw in identities:
+        if not isinstance(raw, (tuple, list)) or len(raw) != 2:
+            raise ValueError(
+                "execution_cell_identities must contain (task_id, seed) pairs"
+            )
+        task_id, seed = raw
+        if (
+            isinstance(task_id, bool) or isinstance(seed, bool)
+            or not isinstance(task_id, Integral) or not isinstance(seed, Integral)
+        ):
+            raise ValueError(
+                "execution_cell_identities task_id and seed must be integers"
+            )
+        identity = (int(task_id), int(seed))
+        if identity in seen:
+            raise ValueError(f"execution_cell_identities contains duplicate {identity}")
+        if identity not in known:
+            raise ValueError(f"execution_cell_identities contains unknown cell {identity}")
+        seen.add(identity)
+        selected.append(identity)
+    payload = {"schema": "execution_cell_selector.v1", "identities": selected}
+    metadata = {
+        "schema": payload["schema"],
+        "selected_count": len(selected),
+        "selector_digest": hashlib.sha256(
+            _canonical_json(payload).encode("utf-8")
+        ).hexdigest(),
+    }
+    return seen, metadata
 
 
 def _sha256_file(path: Path) -> str | None:
@@ -804,15 +852,21 @@ def _attach_early_runtime_diagnostics(
 
 
 def _partition_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    completed = [record for record in records if record.get("status") == "completed"]
+    terminal = [
+        record for record in records
+        if record.get("status") in {"completed", "failed", "interrupted"}
+    ]
+    completed = [record for record in terminal if record.get("status") == "completed"]
     evaluated = [_audit_success(record) for record in completed]
     evaluated = [value for value in evaluated if value is not None]
     successes = sum(value is True for value in evaluated)
     has_evaluator_result = bool(evaluated)
     return {
         "total": len(records),
+        "planned": len(records) - len(terminal),
+        "terminal": len(terminal),
         "completed": len(completed),
-        "failed": len(records) - len(completed),
+        "failed": len(terminal) - len(completed),
         "evaluated": len(evaluated),
         "successes": int(successes),
         # A dry-run has no evaluator denominator; do not turn its null result
@@ -1128,6 +1182,7 @@ def _run_matrix_impl(
     continue_on_motion_failure: bool = False,
     experiment_metadata: Mapping[str, Any] | None = None,
     cell_completed_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    execution_cell_identities: Sequence[tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
     suite_mode = parse_suite_mode(suite_mode)
@@ -1154,6 +1209,9 @@ def _run_matrix_impl(
         for cell in cells:
             cell["controller_config_path"] = controller_config_provenance["path"]
             cell["controller_config_hash"] = controller_config_provenance["config_hash"]
+    execution_selector, execution_selection = _execution_cell_selector(
+        cells, execution_cell_identities
+    )
     validate_motion_authorization(
         cells,
         execute_motion=execute_motion,
@@ -1371,6 +1429,7 @@ def _run_matrix_impl(
                     "contract_hash": contract_hash,
                     "provenance": provenance,
                     "cells": planned_records,
+                    **({"execution_selection": execution_selection} if execution_selection is not None else {}),
                 },
                 indent=2,
                 sort_keys=True,
@@ -1406,6 +1465,7 @@ def _run_matrix_impl(
                     "contract_hash": contract_hash,
                     "provenance": provenance,
                     "cells": status_records,
+                    **({"execution_selection": execution_selection} if execution_selection is not None else {}),
                 },
                 indent=2,
                 sort_keys=True,
@@ -1492,6 +1552,14 @@ def _run_matrix_impl(
             cell_record: dict[str, Any] | None = None
             cell_index = int(cell["cell_index"])
             prior = prior_for_cell(cell)
+            if execution_selector is not None and (
+                int(cell["task_id"]), int(cell["seed"])
+            ) not in execution_selector:
+                # Selection is an execution-time filter only.  The canonical
+                # cell remains in status_records as planned (or as its prior
+                # terminal outcome), and is eligible for a later unfiltered
+                # continuation using the same contract hash.
+                continue
             if resume and prior is not None and (
                 prior.get("status") == "completed"
                 or (resume_terminal and prior.get("status") in {"failed", "interrupted"})
@@ -1855,20 +1923,25 @@ def _run_matrix_impl(
                 # result is durable and its environment has been closed.
                 cell_completed_callback(cell_record)
 
-    completed = [record for record in records if record.get("status") == "completed"]
-    failures = [record for record in records if record.get("status") != "completed"]
+    inventory_records = list(status_records)
+    terminal_records = [
+        record for record in inventory_records
+        if record.get("status") in {"completed", "failed", "interrupted"}
+    ]
+    completed = [record for record in terminal_records if record.get("status") == "completed"]
+    failures = [record for record in terminal_records if record.get("status") != "completed"]
     evaluated = [_audit_success(record) for record in completed]
     evaluated = [value for value in evaluated if value is not None]
     successes = sum(value is True for value in evaluated)
     has_evaluator_result = bool(evaluated)
-    class_records = [record for record in records if _record_failure_class(record) is not None]
+    class_records = [record for record in inventory_records if _record_failure_class(record) is not None]
     by_task_records = {
-        task_id: [record for record in records if int(record["task_id"]) == task_id]
-        for task_id in sorted({int(record["task_id"]) for record in records})
+        task_id: [record for record in inventory_records if int(record["task_id"]) == task_id]
+        for task_id in sorted({int(record["task_id"]) for record in inventory_records})
     }
     by_seed_records = {
-        seed: [record for record in records if int(record["seed"]) == seed]
-        for seed in sorted({int(record["seed"]) for record in records})
+        seed: [record for record in inventory_records if int(record["seed"]) == seed]
+        for seed in sorted({int(record["seed"]) for record in inventory_records})
     }
     summary = {
         "schema_version": MATRIX_SCHEMA_VERSION,
@@ -1878,25 +1951,26 @@ def _run_matrix_impl(
         "condition_label": f"{suite_mode}__{controller_variant}",
         "protocol": protocol,
         "provenance": provenance,
+        **({"execution_selection": execution_selection} if execution_selection is not None else {}),
         "manifest_path": manifest_path.as_posix(),
         "manifest_json_path": manifest_json_path.as_posix(),
         "status_path": status_path.as_posix(),
         "contract_hash": contract_hash,
         "summary_path": summary_path.as_posix(),
-        "total_cells": len(records),
+        "total_cells": len(cells),
         "completed_cells": len(completed),
         "failed_cells_count": len(failures),
         "evaluated_cells": len(evaluated),
-        "planned_count": len(records),
-        "conservative_denominator": len(records),
+        "planned_count": len(cells),
+        "conservative_denominator": len(cells),
         "successes": int(successes),
         # Preserve the original evaluable-only alias while exposing explicit
         # conservative/planned and evaluable denominator metrics below.
         "success_rate": (float(successes) / len(evaluated)) if evaluated else None,
-        "planned_success_rate": (float(successes) / len(records))
-        if records and evaluated else None,
-        "conservative_success_rate": (float(successes) / len(records))
-        if records and evaluated else None,
+        "planned_success_rate": (float(successes) / len(cells))
+        if cells and evaluated else None,
+        "conservative_success_rate": (float(successes) / len(cells))
+        if cells and evaluated else None,
         "evaluable_denominator": len(evaluated),
         "evaluable_success_rate": (float(successes) / len(evaluated)) if evaluated else None,
         "failed_cells": [
@@ -1924,8 +1998,8 @@ def _run_matrix_impl(
             failure_class: sum(_record_failure_class(record) == failure_class for record in class_records)
             for failure_class in sorted({_record_failure_class(record) for record in class_records})
         },
-        "phase_aggregates": _phase_aggregates(records),
-        "diagnostic_aggregates": _diagnostic_aggregates(records),
+        "phase_aggregates": _phase_aggregates(inventory_records),
+        "diagnostic_aggregates": _diagnostic_aggregates(inventory_records),
         "per_task": {
             str(task_id): _partition_summary(task_records)
             for task_id, task_records in by_task_records.items()

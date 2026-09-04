@@ -353,6 +353,88 @@ def test_resume_skips_completed_cells_without_overwriting_plan(matrix, tmp_path:
     assert len(manifest_records[0]["attempts"]) == 1
 
 
+def test_sparse_execution_selector_preserves_full_plan_and_unfiltered_resume(
+    matrix, tmp_path: Path
+):
+    selected = ((4, 1000), (6, 1005), (9, 1004))
+    calls: list[tuple[int, int]] = []
+
+    class Env:
+        def close(self):
+            pass
+
+    def build_env(task_id, seed, resolution):
+        del resolution
+        calls.append((int(task_id), int(seed)))
+        return Env()
+
+    def episode_runner(**kwargs):
+        return {"evaluator_success": None, "motion_executed": False}
+
+    first = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[4, 6, 9],
+        episodes_per_task=10,
+        dry_run=True,
+        allow_unvalidated_profile=True,
+        env_builder=build_env,
+        episode_runner=episode_runner,
+        arrow_input_builder=lambda *args: {},
+        execution_cell_identities=selected,
+    )
+    assert first["total_cells"] == 30
+    assert first["completed_cells"] == 3
+    assert first["failed_cells_count"] == 0
+    assert first["execution_selection"]["selected_count"] == 3
+    assert len(calls) == 3
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    assert len(status["cells"]) == 30
+    assert sum(cell["status"] == "planned" for cell in status["cells"]) == 27
+    contract_hash = first["contract_hash"]
+
+    resumed = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[4, 6, 9],
+        episodes_per_task=10,
+        dry_run=True,
+        allow_unvalidated_profile=True,
+        env_builder=build_env,
+        episode_runner=episode_runner,
+        arrow_input_builder=lambda *args: {},
+        resume=True,
+    )
+    assert resumed["contract_hash"] == contract_hash
+    assert resumed["total_cells"] == 30
+    assert resumed["completed_cells"] == 30
+    assert len(calls) == 30
+    assert "execution_selection" not in resumed
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    assert all(cell["status"] == "completed" for cell in status["cells"])
+
+
+@pytest.mark.parametrize("identities", [
+    ((4, 1000), (4, 1000)),
+    ((4, 9999),),
+    ((4,),),
+    ((4.5, 1000),),
+])
+def test_sparse_execution_selector_rejects_duplicate_unknown_or_malformed_identity(
+    matrix, tmp_path: Path, identities
+):
+    with pytest.raises(ValueError, match="execution_cell_identities"):
+        matrix.run_matrix(
+            output_root=tmp_path,
+            task_ids=[4],
+            episodes_per_task=2,
+            dry_run=True,
+            allow_unvalidated_profile=True,
+            env_builder=lambda *args: object(),
+            episode_runner=lambda **kwargs: {"evaluator_success": None},
+            arrow_input_builder=lambda *args: {},
+            execution_cell_identities=identities,
+        )
+
+
 def test_close_keyboard_interrupt_is_persisted_before_reraise(matrix, tmp_path: Path):
     class Env:
         def close(self):

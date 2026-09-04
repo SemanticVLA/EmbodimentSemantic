@@ -30,6 +30,19 @@ def test_repair_gate_needs_completed_hover_and_contact_for_each_task():
     assert len(gate.canonical()["cells"]) == 4
 
 
+def test_failure_stratified_screen_selection_is_fixed_per_suite():
+    assert campaign.failure_stratified_screen_identities("vanilla") == (
+        (4, 1000), (6, 1005), (9, 1004),
+        (9, 1001), (4, 1002), (6, 1000),
+    )
+    assert campaign.failure_stratified_screen_identities("sealed_randomized") == (
+        (4, 1000), (9, 1003), (9, 1007),
+        (4, 1006), (4, 1002), (9, 1000),
+    )
+    with pytest.raises(ValueError, match="suite_mode"):
+        campaign.failure_stratified_screen_identities("unknown")
+
+
 @pytest.mark.parametrize("bad_hover", [False, True])
 def test_repair_gate_fails_closed_on_missing_contact_or_hover(bad_hover):
     gate = campaign.RepairGate()
@@ -280,6 +293,35 @@ def test_zero_success_screen_arms_are_not_extended(tmp_path, monkeypatch):
     assert all(screen["metrics"]["terminal_cells"] == 12 for screen in report["screen"])
     assert report["finalists"] == []
     assert report["status"] == "no_successful_arm"
+
+
+def test_failure_stratified_screen_keeps_per_arm_motion_profiles(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(campaign, "MolmoPointRuntime", object)
+
+    def fake_main(argv, *, molmo_runtime, cell_completed_callback, execution_cell_identities_by_suite=None):
+        args = dict(zip(argv[::2], argv[1::2]))
+        calls.append((args, execution_cell_identities_by_suite))
+        output = __import__("pathlib").Path(args["--output-dir"])
+        for suite in ("vanilla", "sealed_randomized"):
+            campaign.write_json(output / suite / "arrow_pick_place_matrix_status.json", {"cells": [
+                {"status": "completed", "evaluator_result": False, "suite_mode": suite,
+                 "task_id": 4, "seed": 1000 + i} for i in range(6)
+            ]})
+        return 0
+
+    monkeypatch.setattr(campaign.canary, "main", fake_main)
+    assert campaign.main([
+        "--output-dir", str(tmp_path), "--failure-stratified-screen", "--screen-only",
+    ]) == 2
+    report = json.loads((tmp_path / "campaign.json").read_text())
+    assert [item["name"] for item in report["arms"]] == [
+        "failure_retreat80", "failure_release40", "failure_opening40_retreat80",
+    ]
+    assert [item["motion_profile"] for item in report["arms"]] == [
+        "release20_retreat80mm", "release_plus40mm", "release20_retreat80mm",
+    ]
+    assert all(item[1] and all(len(v) == 6 for v in item[1].values()) for item in calls)
 
 
 @pytest.mark.parametrize("success", [False, True])

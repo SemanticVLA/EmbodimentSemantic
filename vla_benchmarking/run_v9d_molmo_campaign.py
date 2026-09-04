@@ -35,6 +35,11 @@ ARMS = (
     Arm("dense_agentview_clearance", "molmo_dense_agentview", "rim_clearance"),
     Arm("dense_wrist", "molmo_dense_wrist"),
 )
+FAILURE_ARMS = (
+    Arm("failure_retreat80", "molmo_dense_agentview", "rim_clearance", "release20_retreat80mm"),
+    Arm("failure_release40", "molmo_dense_agentview", "rim_clearance", "release_plus40mm"),
+    Arm("failure_opening40_retreat80", "molmo_dense_agentview", "rim_clearance", "release20_retreat80mm", "preshape40mm"),
+)
 MOTION_PROBE_ARMS = (
     Arm("placement_control", "molmo_dense_agentview"),
     Arm("placement_burst5mm", "molmo_dense_agentview", motion_profile="placement_micro5mm"),
@@ -51,6 +56,19 @@ PARKED_OPENING_PROBE_ARMS = (
     Arm("parked_opening40mm", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "preshape40mm"),
     Arm("parked_opening_control", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "full_open"),
 )
+# Fixed, failure-stratified screen identities.  These are task/seed keys only;
+# the matrix planner still materializes the complete 30-cell inventory for
+# each suite and derives the canonical episode/init-state index.
+FAILURE_STRATIFIED_SCREEN_IDENTITIES = {
+    "vanilla": (
+        (4, 1000), (6, 1005), (9, 1004),
+        (9, 1001), (4, 1002), (6, 1000),
+    ),
+    "sealed_randomized": (
+        (4, 1000), (9, 1003), (9, 1007),
+        (4, 1006), (4, 1002), (9, 1000),
+    ),
+}
 TERMINAL = {"completed", "failed", "interrupted"}
 CONTRACT_ERRORS = (
     "evaluator called before retreat", "evaluator use before retreat",
@@ -59,6 +77,17 @@ CONTRACT_ERRORS = (
     "evaluator failure",
 )
 PRESHAPE_FAILURE_CATEGORIES = ("below_band", "timeout", "pose_drift", "missing_measurement", "motion_failed", "unsupported_budget", "opening_guard", "opening_settling_failed")
+
+
+def failure_stratified_screen_identities(suite_mode: str) -> tuple[tuple[int, int], ...]:
+    """Return the fixed 6-cell screen sample for one canonical suite."""
+    try:
+        selected = FAILURE_STRATIFIED_SCREEN_IDENTITIES[str(suite_mode)]
+    except KeyError as exc:
+        raise ValueError(
+            "suite_mode must be one of vanilla, sealed_randomized"
+        ) from exc
+    return tuple((int(task_id), int(seed)) for task_id, seed in selected)
 
 
 class ArmStop(RuntimeError):
@@ -294,6 +323,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--label", default="v9d_molmo_rgbd")
     parser.add_argument("--screen-only", action="store_true")
+    parser.add_argument("--failure-stratified-screen", action="store_true",
+                        help="execute the fixed six-cell-per-suite failure-stratified screen")
     parser.add_argument("--arms", help="comma-separated subset of existing screen arms; fresh run identity required")
     parser.add_argument("--observation-profile", choices=("baseline", "hover20mm", "parked"), default=None)
     parser.add_argument("--motion-profile", choices=canary.MOTION_PROFILE_NAMES, default=None)
@@ -313,20 +344,29 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--opening-probe requires --observation-profile hover20mm and --motion-profile release_plus20mm")
     if args.parked_opening_probe and (args.observation_profile not in (None, "parked") or args.motion_profile not in (None, "release_plus20mm")):
         parser.error("--parked-opening-probe requires --observation-profile parked and --motion-profile release_plus20mm")
-    observation_profile = "parked" if args.parked_opening_probe else "hover20mm" if (args.opening_probe or args.settled_opening_probe) else (args.observation_profile or "baseline")
+    if args.failure_stratified_screen:
+        if args.motion_profile not in (None, "baseline"):
+            parser.error("--failure-stratified-screen uses fixed per-arm motion profiles")
+        if args.observation_profile not in (None, "parked"):
+            parser.error("--failure-stratified-screen requires the parked observation procedure")
+    observation_profile = (
+        "parked" if (args.parked_opening_probe or args.failure_stratified_screen)
+        else "hover20mm" if (args.opening_probe or args.settled_opening_probe)
+        else (args.observation_profile or "baseline")
+    )
     motion_profile = "release_plus20mm" if (args.opening_probe or args.settled_opening_probe or args.parked_opening_probe) else (args.motion_profile or "baseline")
     if args.motion_probe and (args.arms is not None or args.observation_profile not in (None, "baseline") or args.motion_profile not in (None, "baseline")):
         parser.error("--motion-probe fixes its paired arms and baseline observation/profile selection")
     if args.arms is not None and args.repair_gate:
         parser.error("--arms cannot enable the obsolete global repair gate")
-    arms = PARKED_OPENING_PROBE_ARMS if args.parked_opening_probe else SETTLED_OPENING_PROBE_ARMS if args.settled_opening_probe else OPENING_PROBE_ARMS if args.opening_probe else MOTION_PROBE_ARMS if args.motion_probe else ARMS
+    arms = PARKED_OPENING_PROBE_ARMS if args.parked_opening_probe else SETTLED_OPENING_PROBE_ARMS if args.settled_opening_probe else OPENING_PROBE_ARMS if args.opening_probe else MOTION_PROBE_ARMS if args.motion_probe else FAILURE_ARMS if args.failure_stratified_screen else ARMS
     if args.arms is not None:
         names = args.arms.split(",")
-        available = {arm.name: arm for arm in ARMS}
+        available = {arm.name: arm for arm in (*ARMS, *FAILURE_ARMS)}
         if len(names) != len(set(names)) or any(name not in available for name in names):
             parser.error("--arms must contain unique existing screen arm names")
         arms = tuple(available[name] for name in names)
-    if not args.motion_probe and not args.opening_probe and not args.settled_opening_probe and not args.parked_opening_probe:
+    if not args.motion_probe and not args.opening_probe and not args.settled_opening_probe and not args.parked_opening_probe and not args.failure_stratified_screen:
         arms = tuple(Arm(arm.name, arm.variant, arm.prompt, motion_profile, arm.opening_profile) for arm in arms)
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -354,6 +394,11 @@ def main(argv: list[str] | None = None) -> int:
             else canary.resolve_opening_profile("full_open", region_backend="rgbd", camera_name=canary.AGENTVIEW)
         ),
         "screen_planned_per_arm": 12, "screen": [], "finalists": [],
+        "screen_selection": (
+            {suite: [list(pair) for pair in failure_stratified_screen_identities(suite)]
+             for suite in ("vanilla", "sealed_randomized")}
+            if args.failure_stratified_screen else None
+        ),
         "status": "running", "started_unix": time.time(),
         "comparison": "exploratory grasp pipeline comparison; geometry control shares motion and hover",
         "historical_baselines": {"1914768": {"successes": 15, "planned": 60}, "1917528": {"successes": 14, "planned": 60}},
@@ -429,7 +474,16 @@ def main(argv: list[str] | None = None) -> int:
             canary_args.extend(["--opening-profile", arm.opening_profile])
         if observation_profile != "baseline":
             canary_args.extend(["--observation-profile", observation_profile])
-        rc = canary.main(canary_args, molmo_runtime=runtime, cell_completed_callback=on_cell)
+        canary_kwargs = {
+            "molmo_runtime": runtime,
+            "cell_completed_callback": on_cell,
+        }
+        if args.failure_stratified_screen and phase == "prefix":
+            canary_kwargs["execution_cell_identities_by_suite"] = {
+                suite: failure_stratified_screen_identities(suite)
+                for suite in ("vanilla", "sealed_randomized")
+            }
+        rc = canary.main(canary_args, **canary_kwargs)
         result = {"arm": asdict(arm), "phase": phase, "returncode": rc,
                   "stop_reason": rules.reason, "fatal": rules.fatal,
                   "elapsed_s": time.monotonic() - started,

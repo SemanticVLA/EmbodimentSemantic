@@ -2019,6 +2019,7 @@ def _run_motion(
     dry_run: bool,
     phase_frame_callback: Callable[[str, int], str | Path | None] | None = None,
     motion_started_callback: Callable[[], None] | None = None,
+    phase_observer: Callable[[str, Mapping[str, Any]], None] | None = None,
     stall_window_steps: int = DEFAULT_STALL_WINDOW_STEPS,
     stall_delta_m: float = DEFAULT_STALL_DELTA_M,
     phase_policies: Mapping[str, Mapping[str, Any]] | None = None,
@@ -2527,6 +2528,12 @@ def _run_motion(
                 record["status"] = "stop"
         phase_audit.append(record)
         setattr(env, "_arrow_phase_audit", phase_audit)
+        if phase_observer is not None:
+            try:
+                phase_observer(phase, record)
+            except Exception as exc:  # passive diagnostics cannot alter motion
+                record["phase_observer_error_type"] = type(exc).__name__
+                record["phase_observer_error"] = str(exc)
         if not dry_run and phase_frame_callback is not None:
             try:
                 frame_path = phase_frame_callback(phase, len(phase_audit) - 1)
@@ -2772,6 +2779,7 @@ def run_episode(
     capture: CapturedRGBD | None = None,
     allow_unvalidated_profile: bool = False,
     motion_started_callback: Callable[[], None] | None = None,
+    phase_observer: Callable[[str, Mapping[str, Any]], None] | None = None,
     controller_variant: ControllerVariantConfig | str | None = None,
     suite_mode: str | None = None,
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
@@ -2785,6 +2793,8 @@ def run_episode(
     experimental_eef_orientation_transform: Sequence[Sequence[float]] | np.ndarray | None = None,
     experimental_gripper_opening_m: float | None = None,
     experimental_release_height_offset_m: float = 0.0,
+    experimental_retreat_height_offset_m: float = 0.0,
+    experimental_motion_profile: str | None = None,
     experimental_transfer_xy_policy: str = "legacy_displacement",
     experimental_motion_diagnostics: bool = False,
     experimental_micro_correction: MicroCorrectionPolicy | None = None,
@@ -2798,10 +2808,35 @@ def run_episode(
         raise ValueError("experimental_release_height_offset_m must be finite") from exc
     if not np.isfinite(release_height_offset) or release_height_offset < 0.0:
         raise ValueError("experimental_release_height_offset_m must be finite and non-negative")
-    if release_height_offset != 0.0 and not np.isclose(release_height_offset, 0.020, atol=1e-9, rtol=0.0):
-        raise ValueError("experimental_release_height_offset_m only supports +0.020 m")
+    if release_height_offset != 0.0 and not (
+        np.isclose(release_height_offset, 0.020, atol=1e-9, rtol=0.0)
+        or np.isclose(release_height_offset, 0.040, atol=1e-9, rtol=0.0)
+    ):
+        raise ValueError("experimental_release_height_offset_m only supports +0.020 m or +0.040 m")
     if release_height_offset != 0.0 and experimental_candidate is None:
         raise ValueError("experimental_release_height_offset_m requires an experimental candidate")
+    try:
+        retreat_height_offset = float(experimental_retreat_height_offset_m)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("experimental_retreat_height_offset_m must be finite") from exc
+    if not np.isfinite(retreat_height_offset) or retreat_height_offset < 0.0:
+        raise ValueError("experimental_retreat_height_offset_m must be finite and non-negative")
+    if retreat_height_offset != 0.0 and not np.isclose(retreat_height_offset, 0.080, atol=1e-9, rtol=0.0):
+        raise ValueError("experimental_retreat_height_offset_m only supports +0.080 m")
+    if retreat_height_offset != 0.0 and experimental_candidate is None:
+        raise ValueError("experimental_retreat_height_offset_m requires an experimental candidate")
+    if experimental_motion_profile is not None and experimental_motion_profile not in {
+        "release20_retreat80mm", "release_plus40mm",
+    }:
+        raise ValueError("experimental_motion_profile is not an approved failure-led profile")
+    if experimental_motion_profile is not None and experimental_candidate is None:
+        raise ValueError("experimental_motion_profile requires an experimental candidate")
+    if experimental_motion_profile == "release20_retreat80mm":
+        if not np.isclose(release_height_offset, 0.020, atol=1e-9, rtol=0.0) or not np.isclose(retreat_height_offset, 0.080, atol=1e-9, rtol=0.0):
+            raise ValueError("release20_retreat80mm requires +0.020 m release and +0.080 m retreat")
+    elif experimental_motion_profile == "release_plus40mm":
+        if not np.isclose(release_height_offset, 0.040, atol=1e-9, rtol=0.0) or retreat_height_offset != 0.0:
+            raise ValueError("release_plus40mm requires +0.040 m release and the original retreat")
     if experimental_transfer_xy_policy not in {"legacy_displacement", "visual_endpoints"}:
         raise ValueError("experimental_transfer_xy_policy must be legacy_displacement or visual_endpoints")
     if experimental_transfer_xy_policy == "visual_endpoints" and experimental_candidate is None:
@@ -3202,11 +3237,23 @@ def run_episode(
             raise ValueError("experimental release-height treatment requires sequence waypoints") from exc
         if normal_waypoints.ndim != 2 or normal_waypoints.shape[0] <= 5 or normal_waypoints.shape[1] < 3:
             raise ValueError("experimental release-height treatment requires six 3D waypoints")
+        nominal_preplace = normal_waypoints[3, :3].copy()
         nominal_release = normal_waypoints[4, :3].copy()
         nominal_retreat = normal_waypoints[5, :3].copy()
         shifted_waypoints = np.array(normal_waypoints, dtype=np.float64, copy=True)
         shifted_waypoints[4, 2] += release_height_offset
-        shifted_waypoints[5, 2] += release_height_offset
+        if experimental_motion_profile == "release20_retreat80mm":
+            # The retreat is measured from the actual (already shifted) open
+            # target, so it remains a bounded vertical move above release.
+            shifted_waypoints[5, :3] = shifted_waypoints[4, :3] + np.asarray((0.0, 0.0, retreat_height_offset))
+        elif experimental_motion_profile == "release_plus40mm":
+            # Keep the historical destination+30mm retreat independent of
+            # the experimental release-height change.
+            shifted_waypoints[5, :3] = nominal_retreat
+            if float(nominal_preplace[2] - shifted_waypoints[4, 2]) < 0.040 - 1e-9:
+                raise ValueError("release_plus40mm requires preplace.z-release.z >= 0.040 m")
+        else:
+            shifted_waypoints[5, 2] += release_height_offset
         waypoints = shifted_waypoints
         release_height_audit = {
             "offset_m": release_height_offset,
@@ -3217,6 +3264,19 @@ def run_episode(
             "rows_shifted": [4, 5],
             "rows_unchanged": [0, 1, 2, 3],
         }
+        if experimental_motion_profile in {"release20_retreat80mm", "release_plus40mm"}:
+            release_height_audit.update({
+                "motion_profile": experimental_motion_profile,
+                "retreat_height_offset_m": retreat_height_offset,
+                "retreat_tolerance_m": 0.005 if experimental_motion_profile == "release20_retreat80mm" else float(PHASE_POLICIES["retreat"]["tolerance_m"]),
+                "retreat_reference": (
+                    "open_after_release_plus20mm"
+                    if experimental_motion_profile == "release20_retreat80mm"
+                    else "original_30mm_retreat"
+                ),
+                "rows_shifted": [4, 5] if experimental_motion_profile == "release20_retreat80mm" else [4],
+                "rows_preserved": [5] if experimental_motion_profile == "release_plus40mm" else [],
+            })
     motion_phase_order: Sequence[str] | None = None
     motion_phase_limits: Mapping[str, int] | None = None
     motion_execution_timeout_steps = phase_timeout_steps
@@ -3336,6 +3396,13 @@ def run_episode(
                 phase_policies[positional_phase]["tolerance_m"] = float(
                     variant.waypoint_tolerance_m
                 )
+    if experimental_motion_profile == "release20_retreat80mm":
+        # This treatment changes only the final retreat target and its local
+        # convergence tolerance; recovery settings and all other phase policy
+        # values remain resolved from the frozen controller variant.
+        phase_policies["retreat"]["tolerance_m"] = 0.005
+    if release_height_audit is not None:
+        release_height_audit["retreat_tolerance_m"] = float(phase_policies["retreat"]["tolerance_m"])
 
     output_root = Path(output_dir).expanduser().resolve()
     frame_paths = _save_capture(capture, arrow_rgb, output_root)
@@ -3541,6 +3608,7 @@ def run_episode(
             dry_run=dry_run,
             phase_frame_callback=phase_frame_callback if not dry_run else None,
             motion_started_callback=motion_started_callback if not dry_run else None,
+            phase_observer=phase_observer if not dry_run else None,
             stall_window_steps=variant.stall_window_steps,
             stall_delta_m=variant.stall_delta_m,
             phase_policies=phase_policies,
@@ -3737,6 +3805,7 @@ def run_episode(
                             attempt_index, "reset"
                         ),
                         motion_started_callback=motion_started_callback,
+                        phase_observer=phase_observer,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
                         phase_policies=phase_policies,
@@ -3766,6 +3835,7 @@ def run_episode(
                             attempt_index, "grasp"
                         ),
                         motion_started_callback=motion_started_callback,
+                        phase_observer=phase_observer,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
                         phase_policies=phase_policies,
@@ -3815,6 +3885,7 @@ def run_episode(
                             attempt_index, "placement"
                         ),
                         motion_started_callback=motion_started_callback,
+                        phase_observer=phase_observer,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
                         phase_policies=phase_policies,
@@ -4025,6 +4096,7 @@ def run_episode(
                     dry_run=False,
                     phase_frame_callback=None,
                     motion_started_callback=motion_started_callback,
+                    phase_observer=phase_observer,
                     stall_window_steps=variant.stall_window_steps,
                     stall_delta_m=variant.stall_delta_m,
                     phase_policies=phase_policies,
@@ -4216,6 +4288,9 @@ def run_episode(
         "evaluator_read_after_action": bool(not dry_run and full_execution),
         "timestamp_unix": time.time(),
     }
+    if experimental_motion_profile is not None:
+        audit["experimental_motion_profile"] = experimental_motion_profile
+        audit["experimental_retreat_height_offset_m"] = retreat_height_offset
     audit_path = output_root / "arrow_pick_place_audit.json"
     audit_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     audit["audit_path"] = audit_path.as_posix()
