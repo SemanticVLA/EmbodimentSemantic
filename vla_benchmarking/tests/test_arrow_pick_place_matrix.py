@@ -50,12 +50,14 @@ def test_default_plan_has_100_cells_unique_seeds_and_paths(matrix, tmp_path: Pat
 def test_early_runtime_diagnostics_preserve_opening_audits_and_exact_budget(matrix):
     env = SimpleNamespace(
         _molmo_sam3_opening_preshape={"status": "failed", "failure_reason": "timeout", "budget_used": 61},
+        _molmo_opening_settling_audit={"status": "failed", "shared_budget_used": 61},
         _molmo_sam3_observation_hover={"status": "completed"},
         _molmo_sam3_gripper_open={"status": "completed"},
         _molmo_sam3_action_budget=matrix._episode_module._ActionBudget(1200, used=61),
     )
     observed = matrix._early_runtime_diagnostics(env)
     assert observed["opening_preshape"]["failure_reason"] == "timeout"
+    assert observed["opening_settling"]["shared_budget_used"] == 61
     assert observed["observation_hover"]["status"] == "completed"
     assert observed["gripper_open"]["status"] == "completed"
     assert observed["total_actions"] == 61
@@ -64,6 +66,38 @@ def test_early_runtime_diagnostics_preserve_opening_audits_and_exact_budget(matr
 
 def test_early_runtime_diagnostics_does_not_add_experimental_fields_to_baseline(matrix):
     assert matrix._early_runtime_diagnostics(SimpleNamespace()) == {}
+
+
+@pytest.mark.parametrize("fail_after_sample", [False, True])
+def test_settling_numpy_telemetry_survives_matrix_json(matrix, tmp_path, monkeypatch, fail_after_sample):
+    import numpy as np
+    from molmo_sam3 import settling
+
+    observation = {"eef_pos": np.array([0.1, 0.2, 0.5]), "eef_quat": np.array([0., 0., 0., 1.])}
+    env = SimpleNamespace(_molmo_sam3_action_budget=matrix._episode_module._ActionBudget(1200))
+    env._get_observations = lambda **_kwargs: observation
+    steps = []
+
+    def step(action):
+        steps.append(action)
+        if fail_after_sample and len(steps) == 2:
+            observation["eef_pos"] = np.array([0.13, 0.2, 0.5])
+        return observation, 0., False, {}
+
+    env.step = step
+    monkeypatch.setattr(settling.episode, "normalized_action_for_waypoint", lambda *_args, **_kwargs: np.zeros(7))
+    monkeypatch.setattr(settling, "_telemetry", lambda *_args: {"controller": {"output_scale": np.array([0.05, 0.05, 0.05])}})
+    kwargs = dict(hover_audit={"hover_world_m": [0.1, 0.2, 0.5], "region_q90_world_z_m": 0.4}, initial_hover_observation=dict(observation), output_dir=tmp_path, motion_settings={})
+    if fail_after_sample:
+        with pytest.raises(RuntimeError, match="safety envelope"):
+            settling._settle_to_original_hover(env, **kwargs)
+    else:
+        settling._settle_to_original_hover(env, **kwargs)
+    record = {"audit": {"opening_settling": {"status": "older"}}}
+    matrix._attach_early_runtime_diagnostics(record, matrix._early_runtime_diagnostics(env))
+    restored = json.loads(json.dumps(record))
+    assert restored["audit"]["opening_settling"]["actions"][0]["controller_telemetry"]["controller"]["output_scale"] == [0.05, 0.05, 0.05]
+    assert restored["audit"]["total_actions"] == len(steps)
 
 
 def test_condition_labels_are_validated(matrix):

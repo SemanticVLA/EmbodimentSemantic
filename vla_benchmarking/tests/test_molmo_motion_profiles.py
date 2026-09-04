@@ -72,6 +72,16 @@ def test_opening_profile_is_explicit_and_rgbd_agentview_gated():
         runner.resolve_opening_profile(
             "preshape40mm", region_backend="rgbd", camera_name=runner.WRIST_CAMERA,
         )
+    settled_control = runner.resolve_opening_profile(
+        "full_open_settled", region_backend="rgbd", camera_name=runner.AGENTVIEW,
+    )
+    settled_treatment = runner.resolve_opening_profile(
+        "preshape40mm_settled", region_backend="rgbd", camera_name=runner.AGENTVIEW,
+    )
+    assert settled_control["settling_required"] is True
+    assert settled_control["preshape_required"] is False
+    assert settled_treatment["settling_required"] is True
+    assert settled_treatment["preshape_required"] is True
 
 
 def test_release_profile_passes_only_bounded_height_offset_to_candidate_runner():

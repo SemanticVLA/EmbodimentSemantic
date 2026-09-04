@@ -1,5 +1,88 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Settled opening comparison preparation — 2026-09-04 01:05 UTC
+
+Final gate APPROVED: independent tester 18 passed, reviewer 20 focused checks
+passed and no unresolved HIGH/BLOCKER. Reviewer found raw NumPy settling
+telemetry could overwrite JSON-safe matrix evidence; shared helper now
+normalizes published/returned success and failure audits. Final correction
+and production integration checks: 6 passed, plus 2 actual helper-to-matrix
+plain-JSON regressions with action totals preserved. Ready for one immutable
+24-cell settled opening release. No additional diagnostic is required.
+
+Implementation frozen after 104 combined targeted tests passed in 8.95 seconds,
+plus compilation, Bash syntax, diff check and unchanged frozen config. Shared
+helper, matrix failure evidence, launcher, campaign and legacy-profile checks
+are included. Independent production retry integration and one focused final
+review completed as recorded above; no further model or diagnostic setup.
+
+Robot-only diagnostic 1919319 passed the previously stated gate. Promote its
+unchanged nominal-hover settling helper into production; do not relax pose,
+height, clearance, opening or action limits. New profiles `full_open_settled`
+and `preshape40mm_settled` share fresh observation hover and settling on both
+initial approach and retries. Only the latter performs the fixed 40 mm
+preshape. Existing profiles and frozen v9d stay unchanged.
+
+Question: does measured 40 mm opening improve the executable grasp policy
+relative to full opening when both use the proven settling handoff?
+Primary comparison: `settled_opening40mm` then `settled_opening_control`,
+12 planned cells each (tasks 4/6/9, seeds 1000/1001, both suites). Hold pinned
+MolmoPoint, dense agentview, rim_clearance prompt, hover20mm, release_plus20mm,
+candidate geometry, evaluator and 160/1200/four-grasp limits constant.
+Retry planning explicitly refreshes the existing privileged bbox arrow-input
+provider on new RGB-D, then recomputes observed-support hover; final candidate
+capture occurs after settling and optional preshape. This is not visual
+tracking or a vision-only object identity claim. No simulator object poses
+enter grasp geometry.
+
+New immutable source and experiment identities are required. Preserve all
+failures; stop an arm after repeated operational failure on two distinct
+cells. Rank successes / planned cells, then retention, retries, actions and
+latency. Screen only: no automatic 60-cell extension or default promotion.
+The old full-open screens remain 2/12 versus historical matching 3/12, with
+different source identities. The robot-only pass is not grasp improvement.
+Remote preflight at 01:05:27 UTC found no active experimental allocation,
+gpu_a40 available, HOME 249 TB free and scratch 167 TB free.
+
+## Handoff diagnostic PASSED — 2026-09-04 00:58 UTC
+
+Job **1919319** is terminal, exit0, archiveVERIFIED. All four cases persisted;
+`control_reproduced=true`, `treatment_passed=true`. Both immediate controls
+reproduce the original pose_drift failures with61/57total actions. Both
+settled treatments complete unchanged preshape at **40.88649mm**, using
+15/16settling actions then44preshape actions,107total actions per case.
+Final settling target residual16.29/16.84mm is within original20mm tolerance;
+height margins111.09/111.58mm exceed80mm, angularerrors.0649/.0670rad remain
+below.12rad. Last controller goals agree with nominal hover to micrometers;
+live scales verified50mmXYZ/.5radrotation, delta mode,gripper0_grip_site.
+
+Conclusion: this supports the bounded settling handoff repair on both tested
+T4seeds. It is **not grasp/task improvement**. Proceed to a new independently
+identified canary with the proven settling policy; preserve paired controls,
+fresh-frame retries, all guards and budgets. Do not relaunch the old immediate
+opening arm or tune thresholds based on these two cases.
+
+## Handoff probe launched; opening campaign final — 2026-09-04 00:56 UTC
+
+**1919319** submitted00:56:11UTC; RUNNING00:56:45UTC on compute-3-12,
+oneA40/eightCPUs/64GB,15minute limit. Immutable clean source
+**4c3ba0b1c898cd1bf68e41256fb07ab1ce7c6930**,
+label `v9d_molmo_handoff_4c3ba0b`. ExactSHA/runtime/diagnostic entrypoint
+verified; model_load_count_expected0. First immediate-control case reproduced
+preshape pose_drift with61total actions. No treatment result at this audit.
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_handoff_4c3ba0b_1919319/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_handoff_4c3ba0b_1919319`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919319.out`.
+BundleSHA256 `d85d19b3ac81d19d7aaf5b34df4c3fe631f3c7bc7ed3def56470129e7d1e52d6`.
+
+**1919318 final:** opening_probe_stopped, workloadexit2, archiveVERIFIED.
+Control completed **2/12**, retainedlift evidence8, successfulretries2,
+3734actions,1214.304s perception; eachsuite1/6. Failuresgrasp_failed4,
+no_candidates4,task_failure2. Opening40mm0/12planned with2attempted/stopped,
+bothcontrollerfailures; actual118actions preserved in its helperaudits.
+No improvement and no60extension. This repeats the prior full-open screen's
+success/action counts; runtimes differ. Historicalmatchedbaseline remains3/12.
+
 ## Handoff diagnostic release gate — 2026-09-04
 
 Implemented standalone `run_molmo_opening_probe.py` and isolated

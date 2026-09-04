@@ -88,7 +88,9 @@ OBSERVATION_PROFILE_PARAMS = {
     },
 }
 
-OPENING_PROFILE_NAMES = ("full_open", "preshape40mm")
+OPENING_PROFILE_NAMES = (
+    "full_open", "preshape40mm", "full_open_settled", "preshape40mm_settled",
+)
 PRESHAPE40MM_PARAMS = {
     "target_opening_m": 0.040,
     "accepted_opening_band_m": (0.035, 0.045),
@@ -97,6 +99,19 @@ PRESHAPE40MM_PARAMS = {
     "close_pulse": 1.0,
     "max_actions": 160,
     "shared_action_budget": 1200,
+}
+SETTLED_OPENING_PARAMS = {
+    # These values are part of the settled-opening scientific identity and
+    # mirror the bounded robot-only settling helper contract.
+    "settling_max_actions": 160,
+    "settling_position_tolerance_m": 0.0005,
+    "settling_orientation_increment_rad": 0.01,
+    "settling_hover_position_tolerance_m": 0.020,
+    "settling_hover_orientation_tolerance_rad": 0.12,
+    "settling_min_height_margin_m": 0.080,
+    "settling_consecutive_samples": 5,
+    "settling_shared_action_budget": 1200,
+    "settling_retry_protocol": "new_agentview_arrow_hover_settle_fresh_capture",
 }
 
 
@@ -109,10 +124,25 @@ def resolve_opening_profile(
     """Resolve the bounded opening treatment without changing full-open behavior."""
     if name not in OPENING_PROFILE_NAMES:
         raise ValueError(f"opening profile must be one of {OPENING_PROFILE_NAMES}")
-    if name == "preshape40mm":
+    settled = name.endswith("_settled")
+    preshape = name.startswith("preshape40mm")
+    if settled or preshape:
         if region_backend != "rgbd" or camera_name != AGENTVIEW:
             raise ValueError("preshape40mm requires the RGB-D agentview path")
+    if preshape and settled:
+        return {"name": name, "settling_required": True, "preshape_required": True,
+                **dict(PRESHAPE40MM_PARAMS), **dict(SETTLED_OPENING_PARAMS)}
+    if preshape:
+        # Keep the legacy profile payload byte-for-byte compatible with
+        # existing scientific identities.
         return {"name": name, **dict(PRESHAPE40MM_PARAMS)}
+    if settled:
+        return {
+            "name": name, "settling_required": True, "preshape_required": False,
+            "target_opening_m": None, "accepted_opening_band_m": None,
+            "settled_range_m": None, "settle_actions": 160, "max_actions": 160,
+            **dict(SETTLED_OPENING_PARAMS),
+        }
     return {"name": name, "target_opening_m": None, "accepted_opening_band_m": None,
             "settled_range_m": None, "max_actions": 0}
 
@@ -2494,6 +2524,7 @@ def main(
         if worker_state.get("worker") is None:
             raise RuntimeError("gripper-open preflight completed without an initialized perception worker")
         worker_state["worker"].robot_calibration = calibration
+        initial_hover_observation = episode._raw_observation(env)
         _perform_observation_hover(
             env, initial, provisional_source, output_dir=hover_output,
             motion_started_callback=motion_callback,
@@ -2552,19 +2583,56 @@ def main(
             setattr(target_env, "_molmo_sam3_opening_preshape", dict(audit))
             return audit
 
-        if resolved_opening_profile["name"] == "preshape40mm":
+        def run_settling(target_env: Any, target_hover_audit: Mapping[str, Any], initial_observation: Mapping[str, Any], target_output: Path) -> Mapping[str, Any]:
+            try:
+                from .molmo_sam3.settling import _settle_to_original_hover
+            except ImportError:  # pragma: no cover - direct script use
+                from molmo_sam3.settling import _settle_to_original_hover
+            settle_kwargs = {
+                "hover_audit": target_hover_audit,
+                "initial_hover_observation": initial_observation,
+                "output_dir": target_output,
+                "motion_settings": motion_settings,
+                "motion_started_callback": motion_callback,
+            }
+            try:
+                audit = _settle_to_original_hover(target_env, **settle_kwargs)
+            except Exception as exc:
+                # Keep stop accounting stable: numeric pose details belong in
+                # the durable helper audit, never in the failure category.
+                existing = getattr(target_env, "_molmo_opening_settling_audit", None)
+                if not isinstance(existing, Mapping):
+                    existing = {"status": "failed", "error_type": type(exc).__name__}
+                setattr(target_env, "_molmo_opening_settling_audit", dict(existing))
+                raise RuntimeError("opening_settling_failed") from exc
+            if not isinstance(audit, Mapping) or str(audit.get("status", "")).lower() != "completed":
+                setattr(target_env, "_molmo_opening_settling_audit", dict(audit) if isinstance(audit, Mapping) else {"status": "failed"})
+                raise RuntimeError("opening_settling_failed")
+            setattr(target_env, "_molmo_opening_settling_audit", dict(audit))
+            return audit
+
+        if resolved_opening_profile.get("settling_required"):
+            opening_audit = run_settling(
+                env, getattr(env, "_molmo_sam3_observation_hover", {}),
+                initial_hover_observation, output_dir / "opening_settling"
+            )
+        if (resolved_opening_profile.get("preshape_required") or resolved_opening_profile["name"] == "preshape40mm"):
             opening_audit = run_preshape(env, output_dir / "opening_preshape")
         fresh = episode.capture_agentview(env, resolution=resolution, camera_name=AGENTVIEW)
         hover_audit = getattr(env, "_molmo_sam3_observation_hover", None)
         if isinstance(hover_audit, dict):
             hover_audit["fresh_capture_provenance"] = _observation_capture_provenance(fresh)
         arrow_state: dict[str, Any] = {"rgb": None, "source_uv": None, "destination_uv": None}
+        arrow_input_state: dict[str, Any] = {
+            "bboxes": bboxes, "subject": kwargs.get("subject", "bowl"),
+            "goal_object": kwargs.get("goal_object", "plate"),
+        }
         first_capture: dict[str, Any] = {AGENTVIEW: fresh}
 
         def refresh_arrow(capture: Any) -> tuple[np.ndarray, Sequence[float], Sequence[float] | None]:
             rendered, _ = episode.render_exactly_one_arrow(
-                capture.rgb, bboxes, subject=kwargs.get("subject", "bowl"),
-                goal_object=kwargs.get("goal_object", "plate"), anchor_policy="bbox_center",
+                capture.rgb, arrow_input_state["bboxes"], subject=arrow_input_state["subject"],
+                goal_object=arrow_input_state["goal_object"], anchor_policy="bbox_center",
             )
             source_point, target_point = episode.decode_arrow_pixels(capture.rgb, rendered)
             arrow_state.update({"rgb": rendered, "source_uv": source_point, "destination_uv": target_point})
@@ -2594,14 +2662,43 @@ def main(
             setattr(_env, "_molmo_sam3_robot_calibration_probe", probe)
 
         def before_capture(_env: Any, attempt_index: int) -> Any:
-            # Recovery has already completed before this callback.  Shape first,
-            # then capture; no motion is allowed after this returned frame.
+            # Recovery has already completed before this callback.  Settled
+            # retries plan from a new observation/arrow, hover, settle, shape,
+            # then capture; no motion is allowed after the returned frame.
             nonlocal opening_audit
-            if resolved_opening_profile["name"] != "preshape40mm":
+            profile_name = resolved_opening_profile["name"]
+            if not (profile_name.endswith("_settled") or profile_name == "preshape40mm"):
                 return None
-            opening_audit = run_preshape(
-                _env, output_dir / "attempts" / f"attempt_{int(attempt_index):02d}" / "opening_preshape"
-            )
+            retry_output = output_dir / "attempts" / f"attempt_{int(attempt_index):02d}"
+            if profile_name.endswith("_settled"):
+                planning_capture = episode.capture_agentview(_env, resolution=resolution, camera_name=AGENTVIEW)
+                try:
+                    try:
+                        from . import run_arrow_pick_place_matrix as retry_matrix
+                    except ImportError:  # pragma: no cover - direct script use
+                        import run_arrow_pick_place_matrix as retry_matrix
+                    retry_inputs = retry_matrix._default_arrow_inputs(_env, task_id, resolution)
+                except Exception as exc:
+                    raise RuntimeError("settled opening retry arrow refresh failed") from exc
+                if not isinstance(retry_inputs, Mapping) or not isinstance(retry_inputs.get("bboxes"), Mapping):
+                    raise RuntimeError("settled opening retry arrow inputs are invalid")
+                arrow_input_state.update({
+                    "bboxes": retry_inputs["bboxes"], "subject": retry_inputs.get("subject", "bowl"),
+                    "goal_object": retry_inputs.get("goal_object", "plate"),
+                })
+                _rendered, retry_source, _retry_destination = refresh_arrow(planning_capture)
+                retry_hover_initial = episode._raw_observation(_env)
+                retry_hover = _perform_observation_hover(
+                    _env, planning_capture, retry_source,
+                    output_dir=retry_output / "observation_hover",
+                    motion_started_callback=motion_callback,
+                    motion_settings=motion_settings,
+                )
+                opening_audit = run_settling(
+                    _env, retry_hover, retry_hover_initial, retry_output / "opening_settling"
+                )
+            if (resolved_opening_profile.get("preshape_required") or profile_name == "preshape40mm"):
+                opening_audit = run_preshape(_env, retry_output / "opening_preshape")
             return episode.capture_agentview(_env, resolution=resolution, camera_name=AGENTVIEW)
 
         transform = worker_state.get("transform")
@@ -2635,7 +2732,7 @@ def main(
                 return {"status": "recovery_failed", "grasp_retained": False,
                         "retreat_complete": False, "total_actions": action_count_before,
                         "error": "live contact calibration unavailable before candidate"}
-            if resolved_opening_profile["name"] == "preshape40mm":
+            if (resolved_opening_profile.get("preshape_required") or resolved_opening_profile["name"] == "preshape40mm"):
                 try:
                     actual_opening = float(measure_opening(env))
                     low, high = (float(value) for value in resolved_opening_profile["accepted_opening_band_m"])
@@ -2669,7 +2766,7 @@ def main(
                     canary_video_dir=kwargs.get("canary_video_dir"),
                     experimental_candidate=context.candidate,
                     experimental_eef_orientation_transform=transform,
-                    experimental_gripper_opening_m=(actual_opening if resolved_opening_profile["name"] == "preshape40mm" else worker_state.get("opening_m")),
+                    experimental_gripper_opening_m=(actual_opening if (resolved_opening_profile.get("preshape_required") or resolved_opening_profile["name"] == "preshape40mm") else worker_state.get("opening_m")),
                     post_lift_retention_gate=retention_gate,
                     retreat_completed_callback=retreat_completed_callback,
                     experimental_action_budget=getattr(env, "_molmo_sam3_action_budget", None),
@@ -2731,7 +2828,7 @@ def main(
             observation_profile_params=resolved_observation_profile,
             opening_profile=resolved_opening_profile["name"],
             opening_profile_params=resolved_opening_profile,
-            before_capture_fn=(before_capture if resolved_opening_profile["name"] == "preshape40mm" else None),
+            before_capture_fn=(before_capture if (resolved_opening_profile.get("preshape_required") or resolved_opening_profile.get("settling_required") or resolved_opening_profile["name"] == "preshape40mm") else None),
         )
         final = result.get("final_result") if isinstance(result.get("final_result"), Mapping) else {}
         audit = final.get("audit") if isinstance(final, Mapping) else None
@@ -2744,6 +2841,7 @@ def main(
             "opening_profile": resolved_opening_profile["name"],
             "opening_profile_params": _json_safe(resolved_opening_profile),
             "opening_preshape": _json_safe(opening_audit),
+            "opening_settling": _json_safe(getattr(env, "_molmo_opening_settling_audit", None)),
             "phases": audit.get("phases", []) if isinstance(audit, Mapping) else [],
             "motion_phases_reached": final.get("motion_phases_reached", []) if isinstance(final, Mapping) else [],
             "grasp_search": [], "canary_manifest": result,

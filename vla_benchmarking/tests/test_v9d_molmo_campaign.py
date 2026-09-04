@@ -353,6 +353,37 @@ def test_opening_probe_is_paired_screen_and_forwards_fixed_profiles(tmp_path, mo
     assert [arm["name"] for arm in report["arms"]] == ["opening40mm", "opening_control"]
 
 
+def test_settled_opening_probe_is_treatment_first_and_screen_only(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(campaign, "MolmoPointRuntime", object)
+
+    def fake_main(argv, *, molmo_runtime, cell_completed_callback):
+        del molmo_runtime, cell_completed_callback
+        args = dict(zip(argv[::2], argv[1::2]))
+        calls.append(args)
+        output = Path(args["--output-dir"])
+        for suite in ("vanilla", "sealed_randomized"):
+            campaign.write_json(output / suite / "arrow_pick_place_matrix_status.json", {"cells": [
+                {"status": "completed", "evaluator_result": False, "suite_mode": suite,
+                 "task_id": task, "seed": seed}
+                for task in (4, 6, 9) for seed in (1000, 1001)
+            ]})
+        return 0
+
+    monkeypatch.setattr(campaign.canary, "main", fake_main)
+    assert campaign.main(["--output-dir", str(tmp_path), "--settled-opening-probe"]) == 0
+    assert [call["--opening-profile"] for call in calls] == ["preshape40mm_settled", "full_open_settled"]
+    assert all(call["--variant"] == "molmo_dense_agentview" for call in calls)
+    assert all(call["--molmopoint-prompt-id"] == "rim_clearance" for call in calls)
+    assert all(call["--observation-profile"] == "hover20mm" for call in calls)
+    assert all(call["--motion-profile"] == "release_plus20mm" for call in calls)
+    report = json.loads((tmp_path / "campaign.json").read_text())
+    assert report["status"] == "settled_opening_probe_completed"
+    assert report["settled_opening_probe"] is True
+    assert report["settled_opening_probe_contract"]["planned_cells"] == 24
+    assert report["finalists"] == []
+
+
 @pytest.mark.parametrize("extra", [
     ["--opening-probe", "--arms", "dense_agentview"],
     ["--opening-probe", "--motion-probe"],
@@ -371,7 +402,9 @@ def test_sbatch_job_context_renders_with_lowercase_opening_probe_unset(tmp_path)
     text = sbatch.read_text(encoding="utf-8")
     cat_start = text.index('cat > "$RUN_ROOT/job_context.env" <<EOF')
     cat_end = text.index("\nEOF", cat_start) + len("\nEOF")
-    assignment_start = text.rindex('opening_probe="', 0, cat_start)
+    # Match the standalone assignment; ``settled_opening_probe`` contains the
+    # same substring and must not be selected by a bare rindex.
+    assignment_start = text.rindex('\nopening_probe="', 0, cat_start) + 1
     shell_vars = "\n".join((
         "RUN_ROOT=.", "SLURM_JOB_ID=1", "SLURM_JOB_NAME=test",
         "CANARY_LABEL=label", f"CANARY_EXPECTED_COMMIT={'a' * 40}",

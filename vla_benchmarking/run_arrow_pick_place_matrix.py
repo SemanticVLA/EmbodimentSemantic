@@ -733,6 +733,7 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
         ("_arrow_input_budget", "input_budget"),
         ("_arrow_forbidden_input_audit", "forbidden_input_audit"),
         ("_molmo_sam3_opening_preshape", "opening_preshape"),
+        ("_molmo_opening_settling_audit", "opening_settling"),
         ("_molmo_sam3_observation_hover", "observation_hover"),
         ("_molmo_sam3_gripper_open", "gripper_open"),
     ):

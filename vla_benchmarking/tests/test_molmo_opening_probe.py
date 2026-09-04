@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
 import run_molmo_opening_probe as probe
 from run_arrow_pick_place_eval import _ActionBudget
+from molmo_sam3 import settling
 
 
 class _Env:
@@ -90,6 +93,58 @@ def test_unsafe_settling_sample_is_recorded_before_fail_closed(tmp_path, monkeyp
             motion_settings={},
         )
     assert env._molmo_opening_settling_audit["actions"][0]["safety_failure"] == "hover_envelope"
+    assert json.loads((tmp_path / "opening_settling_audit.json").read_text())["status"] == "failed"
+
+
+def test_settling_motion_started_callback_fires_once(tmp_path, monkeypatch):
+    env = _Env()
+    monkeypatch.setattr(probe.episode, "normalized_action_for_waypoint", lambda *_args, **_kwargs: np.zeros(7))
+    callbacks = []
+    audit = probe._settle_to_original_hover(
+        env,
+        hover_audit={"hover_world_m": [0.1, 0.2, 0.5], "region_q90_world_z_m": 0.42},
+        initial_hover_observation={"eef_pos": [0.1, 0.2, 0.5], "eef_quat": [0.0, 0.0, 0.0, 1.0]},
+        output_dir=tmp_path,
+        motion_settings={},
+        motion_started_callback=lambda: callbacks.append(True),
+    )
+    assert audit["status"] == "completed"
+    assert callbacks == [True]
+
+
+def test_settling_publishes_json_safe_raw_controller_telemetry(tmp_path, monkeypatch):
+    env = _Env()
+    monkeypatch.setattr(probe.episode, "normalized_action_for_waypoint", lambda *_args, **_kwargs: np.zeros(7))
+    monkeypatch.setattr(
+        settling,
+        "_telemetry",
+        lambda _env, _settings: {
+            "eef_name": "gripper0_eef",
+            "output_scale_m": np.array([0.01, 0.02, 0.03]),
+            "controller": {
+                "controller_ee_pos_m": np.array([0.1, 0.2, 0.5]),
+                "controller_goal_pos_m": np.array([0.1, 0.2, 0.5]),
+                "output_scale": np.array([0.01, 0.02, 0.03]),
+                "bounds": {"input_min": np.array([-1.0, -1.0, -1.0])},
+            },
+        },
+    )
+
+    audit = probe._settle_to_original_hover(
+        env,
+        hover_audit={"hover_world_m": [0.1, 0.2, 0.5], "region_q90_world_z_m": 0.42},
+        initial_hover_observation={"eef_pos": [0.1, 0.2, 0.5], "eef_quat": [0.0, 0.0, 0.0, 1.0]},
+        output_dir=tmp_path,
+        motion_settings={},
+    )
+
+    # The helper publishes exactly what the matrix collector later serializes.
+    json.dumps(env._molmo_opening_settling_audit)
+    assert isinstance(audit["actions"][0]["controller_telemetry"]["output_scale_m"], list)
+    assert isinstance(audit["actions"][0]["controller_telemetry"]["controller"]["bounds"]["input_min"], list)
+    persisted = json.loads((tmp_path / "opening_settling_audit.json").read_text())
+    assert persisted["status"] == "completed"
+    assert isinstance(persisted["actions"][0]["controller_telemetry"]["controller"]["controller_ee_pos_m"], list)
 
 
 def test_control_reproduced_means_the_expected_immediate_failure():
