@@ -380,17 +380,26 @@ def main(argv: list[str] | None = None) -> int:
         "mode": "parked_opening_probe" if args.parked_opening_probe else "settled_opening_probe" if args.settled_opening_probe else "opening_probe" if args.opening_probe else "placement_motion_probe" if args.motion_probe else "candidate_screen",
         "motion_diagnostics": bool(args.motion_probe),
         "observation_profile": observation_profile,
-        "motion_profile": "paired_probe" if args.motion_probe else motion_profile,
+        "motion_profile": (
+            "failure_led_per_arm" if args.failure_stratified_screen
+            else "paired_probe" if args.motion_probe else motion_profile
+        ),
         "opening_probe": bool(args.opening_probe or args.settled_opening_probe or args.parked_opening_probe),
         "settled_opening_probe": bool(args.settled_opening_probe),
         "parked_opening_probe": bool(args.parked_opening_probe),
-        "opening_profile": "parked_paired_probe" if args.parked_opening_probe else "settled_paired_probe" if args.settled_opening_probe else "paired_probe" if args.opening_probe else "full_open",
+        "opening_profile": (
+            "failure_led_per_arm" if args.failure_stratified_screen
+            else "parked_paired_probe" if args.parked_opening_probe
+            else "settled_paired_probe" if args.settled_opening_probe
+            else "paired_probe" if args.opening_probe else "full_open"
+        ),
         "opening_profile_params": (
             {
                 profile: canary.resolve_opening_profile(profile, region_backend="rgbd", camera_name=canary.AGENTVIEW)
                 for profile in (("full_open", "preshape40mm") if args.parked_opening_probe else ("full_open_settled", "preshape40mm_settled") if args.settled_opening_probe else ("full_open", "preshape40mm"))
             }
             if args.opening_probe or args.settled_opening_probe or args.parked_opening_probe
+            else None if args.failure_stratified_screen
             else canary.resolve_opening_profile("full_open", region_backend="rgbd", camera_name=canary.AGENTVIEW)
         ),
         "screen_planned_per_arm": 12, "screen": [], "finalists": [],
@@ -405,6 +414,14 @@ def main(argv: list[str] | None = None) -> int:
         "historical_comparison_note": "Historical commits differ; compare matching task/seed/suite cells. No baseline rerun or default promotion.",
         "repair_gate": {"status": "pending" if args.repair_gate else "disabled"},
     }
+    if args.failure_stratified_screen:
+        report["failure_screen_contract"] = {
+            "screen_cells_per_suite": 6,
+            "canonical_cells_per_suite": 30,
+            "selection": "retrospective_failure_stratified",
+            "arms": [asdict(arm) for arm in arms],
+            "comparison_baseline": {"successes": 4, "planned": 12, "note": "matching historical prefix cells"},
+        }
     if args.motion_probe:
         report["comparison"] = "paired exploratory placement-response probe; same dense-agentview perception, prompt and 12 canary cells; only bounded placement correction differs"
         report["motion_probe_contract"] = {
