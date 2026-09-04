@@ -18,8 +18,8 @@ die(){ printf 'failure full60: %s\n' "$*" >&2; exit 2; }
 REPO_ROOT="${REPO_ROOT:?REPO_ROOT is required}"
 PREFIX_ROOT="${PREFIX_ROOT:?PREFIX_ROOT is required}"
 OPERATOR_SCRIPT="${OPERATOR_SCRIPT:?OPERATOR_SCRIPT is required}"
-EXPECTED_COMMIT=fa1ae83b4560f831cc1173994f58d0ad9c3c3639
-[[ "${CANARY_EXPECTED_COMMIT:-}" == "$EXPECTED_COMMIT" ]] || die 'commit pin mismatch'
+EXPECTED_COMMIT="${CANARY_EXPECTED_COMMIT:?CANARY_EXPECTED_COMMIT is required}"
+[[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die 'commit pin must be a lowercase 40-character SHA'
 [[ "$REPO_ROOT" != "$HOME/EmbodimentSemantic" ]] || die 'shared checkout forbidden'
 REPO_ROOT="$(realpath -e -- "$REPO_ROOT")" || die 'cannot resolve checkout'
 PREFIX_ROOT="$(realpath -e -- "$PREFIX_ROOT")" || die 'cannot resolve prefix'

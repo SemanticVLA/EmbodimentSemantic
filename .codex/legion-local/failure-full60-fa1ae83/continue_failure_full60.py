@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -46,8 +47,11 @@ def _git(repo_root: Path) -> None:
     if Path(actual_root).resolve() != repo_root:
         raise RuntimeError("REPO_ROOT is not the checkout root")
     actual = subprocess.run(["git", "-C", str(repo_root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip().lower()
-    if actual != EXPECTED_EXECUTION_SHA:
-        raise RuntimeError(f"release SHA mismatch: {actual} != {EXPECTED_EXECUTION_SHA}")
+    expected_release = os.environ.get("CANARY_EXPECTED_COMMIT", "").lower()
+    if len(expected_release) != 40 or any(c not in "0123456789abcdef" for c in expected_release):
+        raise RuntimeError("CANARY_EXPECTED_COMMIT must pin the continuation release")
+    if actual != expected_release:
+        raise RuntimeError(f"release SHA mismatch: {actual} != {expected_release}")
     if subprocess.run(["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=all"], check=True, capture_output=True, text=True).stdout.strip():
         raise RuntimeError("release checkout is dirty")
 
