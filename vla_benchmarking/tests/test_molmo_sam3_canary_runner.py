@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,29 @@ def test_rgbd_main_passes_frozen_v9d_matrix_selection(tmp_path, monkeypatch):
         "--output-dir", str(tmp_path),
     ]) == 0
     assert selected == [matrix.DEFAULT_CONTROLLER_VARIANT] * 2
+
+
+def test_sealed_100_scope_is_exact_and_model_free_preflight(tmp_path, monkeypatch):
+    from molmo_sam3.molmopoint import MolmoPointRuntime, MolmoPointRuntimeConfig
+
+    monkeypatch.setattr(runner, "_execution_provenance", lambda **_kwargs: {
+        "execution_sha": "e" * 40, "checkout_clean": True,
+        "live_verified": True, "provenance_status": "live_verified", "dirty_paths": [],
+    })
+    runtime = MolmoPointRuntime(MolmoPointRuntimeConfig())
+    assert runner.main([
+        "--sealed-100", "--phase", "full60", "--variant", "molmo_dense_agentview",
+        "--region-backend", "rgbd", "--motion-profile", "release_plus20mm",
+        "--observation-profile", "parked", "--opening-profile", "full_open",
+        "--molmopoint-prompt-id", "rim_clearance", "--output-dir", str(tmp_path),
+        "--task-ids", "0,1,2,3,4,5,6,7,8,9", "--suite-modes", "sealed_randomized",
+        "--dry-run",
+    ], molmo_runtime=runtime) == 0
+    manifest = json.loads((tmp_path / "molmo_sam3_canary_preflight.json").read_text())
+    assert manifest["evaluation_scope"] == "sealed_100_cells"
+    assert manifest["task_ids"] == list(range(10))
+    assert manifest["suite_modes"] == ["sealed_randomized"]
+    assert manifest["episodes_per_task"] == 10
 
 
 @dataclass
