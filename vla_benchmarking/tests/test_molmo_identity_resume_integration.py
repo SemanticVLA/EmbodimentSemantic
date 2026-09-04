@@ -19,7 +19,7 @@ def _identity_metadata() -> dict:
     return {
         "scientific_identity_hash": "h0",
         "scientific_identity_payload": {
-            "schema": "molmo_sam3_scientific_identity.v1",
+            "schema": "canonical_grasp_controller_identity.v1",
             "execution_sha": "a" * 40,
             "controller_config_digest": "b" * 64,
             "model": {
@@ -33,7 +33,7 @@ def _identity_metadata() -> dict:
             "task_seed": {"task_ids": list(TASKS), "seed_base": 1000},
         },
         "region_backend": "rgbd",
-        "backend": "v9d_rgbd_region",
+        "backend": "rgbd_region",
     }
 
 

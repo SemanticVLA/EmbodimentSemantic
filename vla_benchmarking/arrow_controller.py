@@ -1751,11 +1751,11 @@ def derive_rgbd_region_mask(
     max_region_fraction: float = 0.15,
     seed_radius_px: int = 3,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    """Return the exact arrow-seeded metric-depth component used by v9d.
+    """Return the canonical arrow-seeded metric-depth component.
 
     This is the mask-only companion to :func:`derive_rgbd_region_grasp_candidates`.
     It intentionally duplicates the established seed/growth arithmetic so the
-    no-SAM perception path can reuse v9d's numeric region contract without
+    RGB-D perception path can reuse the established numeric region contract without
     changing the legacy candidate generator's return type or behavior.
     """
     _validate_images(clean_rgb, clean_rgb)

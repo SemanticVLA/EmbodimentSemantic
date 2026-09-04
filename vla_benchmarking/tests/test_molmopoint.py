@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from molmo_sam3.molmopoint import (
+from grasp_controller.molmopoint import (
     DEFAULT_PROMPT_ID,
     MOLMOPOINT_MODEL_ID,
     MOLMOPOINT_MODEL_REVISION,
@@ -150,10 +150,10 @@ def test_config_rejects_non_bfloat16_and_provenance_is_hashed():
 
 def test_default_prompt_requests_executable_contact_alternatives():
     config = MolmoPointRuntimeConfig()
-    assert DEFAULT_PROMPT_ID == "rim_downward_approach"
-    assert "parallel-jaw" in config.prompt
-    assert "contact" in config.prompt
-    assert "distinct" in config.prompt
+    assert DEFAULT_PROMPT_ID == "rim_clearance"
+    assert "exposed parts" in config.prompt
+    assert "robot fingers" in config.prompt
+    assert "nearby objects" in config.prompt
     assert config.provenance()["prompt_id"] == DEFAULT_PROMPT_ID
 
 

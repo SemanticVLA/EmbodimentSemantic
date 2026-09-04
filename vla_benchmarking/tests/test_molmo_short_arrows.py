@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from vla_benchmarking import run_molmo_sam3_canary as runner
+from grasp_controller import runner
 
 
 class _Episode:
@@ -70,7 +70,8 @@ def test_tiny_arrow_stays_decoder_gated_and_long_arrow_keeps_defaults():
     assert long["line_width"] == 2
     assert long["head_length"] == 16
     assert long["render_policy"] == "adaptive_short_v1_long_default"
-    assert runner.resolve_observation_profile("baseline")["name"] == "baseline"
+    with pytest.raises(ValueError):
+        runner.resolve_observation_profile("baseline")
 
 
 def test_parked_profile_identity_records_adaptive_render_rule():

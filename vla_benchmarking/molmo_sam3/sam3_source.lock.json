@@ -1,7 +1,0 @@
-{
-  "repository": "https://github.com/facebookresearch/sam3",
-  "commit": "96914d2425f90a64f45ca977c2b5165418099543",
-  "checkpoint_sha256": "0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6",
-  "integration": "sam3.model_builder.build_sam3_image_model + sam3.model.sam3_image_processor.Sam3Processor",
-  "source_policy": "local_project_checkout_only; omnis_paths_forbidden"
-}

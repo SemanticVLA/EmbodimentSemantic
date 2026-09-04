@@ -20,7 +20,7 @@ def _write_image(path: Path, value: int) -> None:
 
 
 def test_forensics_classifies_controller_phase_and_keeps_evaluator_offline(tmp_path):
-    archive = tmp_path / "v9d"
+    archive = tmp_path / "canonical"
     episode = archive / "sealed_randomized" / "task_4" / "episode_2"
     phase = episode / "phase_frames" / "03_lift.png"
     clean = episode / "clean_agentview.png"

@@ -12,10 +12,10 @@ import numpy as np
 import pytest
 
 
-runner = importlib.import_module("run_molmo_sam3_canary")
+runner = importlib.import_module("grasp_controller.runner")
 matrix = importlib.import_module("run_arrow_pick_place_matrix")
 episode = importlib.import_module("run_arrow_pick_place_eval")
-molmopoint = importlib.import_module("molmo_sam3.molmopoint")
+molmopoint = importlib.import_module("grasp_controller.molmopoint")
 
 
 @dataclass
@@ -40,7 +40,7 @@ class _Capture:
 
 class _Env:
     def __init__(self):
-        self._molmo_sam3_action_count = 0
+        self._grasp_controller_action_count = 0
 
 
 class _Worker:
@@ -59,10 +59,7 @@ class _Worker:
         }]}
 
 
-@pytest.mark.parametrize("opening_profile, expected_preshape", [("full_open", 0), ("preshape40mm", 4)])
-def test_parked_main_skips_hover_and_refreshes_retry_capture(
-    tmp_path, monkeypatch, opening_profile, expected_preshape
-):
+def test_parked_main_skips_hover_and_refreshes_retry_capture(tmp_path, monkeypatch):
     events: list[str] = []
     capture_serial = 0
     run_count = 0
@@ -88,9 +85,6 @@ def test_parked_main_skips_hover_and_refreshes_retry_capture(
         events.append("open")
         return {"status": "completed", "steps": 1}
 
-    def hover(*_args, **_kwargs):
-        pytest.fail("parked profile must not invoke observation hover")
-
     def preshape(_env, **_kwargs):
         events.append("preshape")
         return {"status": "completed", "final_opening_m": 0.04}
@@ -109,7 +103,7 @@ def test_parked_main_skips_hover_and_refreshes_retry_capture(
         env = kwargs["env_builder"](4, 1000, 8, suite_mode=kwargs["suite_mode"], controller_variant=kwargs["controller_variant"])
         result = kwargs["episode_runner"](
             env=env, task_id=4, seed=1000, output_dir=tmp_path / kwargs["suite_mode"],
-            variant="molmo_dense_agentview", resolution=8, dry_run=False,
+            variant="canonical", resolution=8, dry_run=False,
             suite_mode=kwargs["suite_mode"], controller_variant=kwargs["controller_variant"],
             bboxes=kwargs["arrow_input_builder"](env, 4, 8)["bboxes"], subject="bowl", goal_object="plate",
         )
@@ -132,7 +126,6 @@ def test_parked_main_skips_hover_and_refreshes_retry_capture(
     monkeypatch.setattr(runner, "ModelPerceptionWorker", _Worker)
     monkeypatch.setattr(runner, "probe_robot_calibration", calibration)
     monkeypatch.setattr(runner, "_perform_gripper_open", open_gripper)
-    monkeypatch.setattr(runner, "_perform_observation_hover", hover)
     monkeypatch.setattr(episode, "build_libero_env", build_env)
     monkeypatch.setattr(episode, "capture_agentview", capture)
     monkeypatch.setattr(episode, "render_exactly_one_arrow", lambda rgb, *_a, **_k: (rgb, {}))
@@ -148,16 +141,16 @@ def test_parked_main_skips_hover_and_refreshes_retry_capture(
         return {"bboxes": {"bowl": [1, 1, 4, 4], "plate": [5, 5, 7, 7]}, "subject": "bowl", "goal_object": "plate"}
 
     monkeypatch.setattr(matrix, "_default_arrow_inputs", current_arrow_inputs)
-    preshape_module = importlib.import_module("molmo_sam3.preshape")
+    preshape_module = importlib.import_module("grasp_controller.preshape")
     monkeypatch.setattr(preshape_module, "perform_preshape", preshape)
 
     assert runner.main([
-        "--region-backend", "rgbd", "--variant", "molmo_dense_agentview",
+        "--region-backend", "rgbd", "--variant", "canonical",
         "--output-dir", str(tmp_path / "main"), "--phase", "prefix", "--episodes-per-task", "1",
-        "--observation-profile", "parked", "--opening-profile", opening_profile,
+        "--observation-profile", "parked", "--opening-profile", "preshape40mm",
     ], molmo_runtime=fake_runtime) == 0
     assert events.count("run:1") == 2 and events.count("run:2") == 2
-    assert events.count("preshape") == expected_preshape
+    assert events.count("preshape") == 4
     assert capture_serial >= 6
     # Matrix input generation occurs once before each episode and the parked
     # retry refresh may request it again; both suites must exercise that seam.

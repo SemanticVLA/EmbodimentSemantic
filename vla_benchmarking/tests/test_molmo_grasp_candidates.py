@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from vla_benchmarking.molmo_sam3.grasp_candidates import (
+from grasp_controller.grasp_candidates import (
     CameraCalibration,
     CandidatePolicy,
     RobotGraspCalibration,

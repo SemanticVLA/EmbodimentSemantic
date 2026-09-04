@@ -477,7 +477,7 @@ def test_normalized_osc_action_is_finite_and_bounded(runner):
     assert np.all(bounded <= 1.0)
 
 
-def test_dry_run_writes_auditable_artifact_without_step(runner, tmp_path: Path):
+def test_dry_run_writes_auditable_artifact_without_step(runner, monkeypatch, tmp_path: Path):
     class _NoMotionEnv(_Env):
         def step(self, action):  # pragma: no cover - failure proves dry-run moved
             raise AssertionError("dry-run must not call env.step")
@@ -518,15 +518,15 @@ def test_dry_run_writes_auditable_artifact_without_step(runner, tmp_path: Path):
         def get_real_depth_map(sim, depth):
             return np.asarray(depth, dtype=np.float32)
 
-    runner.camera_utils = _CameraUtils
-    runner.decode_arrow = lambda **kwargs: type(
+    monkeypatch.setattr(runner, "camera_utils", _CameraUtils)
+    monkeypatch.setattr(runner, "decode_arrow", lambda **kwargs: type(
         "Arrow", (), {"source_xy": (8.0, 8.0), "target_xy": (24.0, 24.0)}
-    )()
-    runner.deproject_endpoint = lambda point, depth, K, T: np.asarray(
+    )())
+    monkeypatch.setattr(runner, "deproject_endpoint", lambda point, depth, K, T: np.asarray(
         [point[0] / 10.0, point[1] / 10.0, float(np.asarray(depth).flat[0])]
-    )
-    runner.build_bowl_waypoints = lambda *args: np.zeros((6, 3), dtype=np.float64)
-    runner.normalized_osc_action = lambda **kwargs: np.zeros(7, dtype=np.float32)
+    ))
+    monkeypatch.setattr(runner, "build_bowl_waypoints", lambda *args: np.zeros((6, 3), dtype=np.float64))
+    monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
     try:
         result = run(**kwargs)
     except TypeError:
@@ -855,20 +855,9 @@ def test_controller_variant_provenance_is_canonical_and_suite_scoped(runner):
         runner.ControllerVariantConfig(suite_mode="unknown")
 
 
-def test_retired_controller_variants_are_rejected_before_execution(runner):
-    """Historical experiments remain readable in archives, never executable."""
-    for retired_name in (
-        "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v1",
-        "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2",
-        "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3",
-        "libero_spatial_akita_bowl_agentview_candidate_lowerq_gain_v4",
-        "libero_spatial_akita_bowl_agentview_candidate_visible_anchor_v5",
-        "libero_spatial_akita_bowl_agentview_candidate_directional_approach_v6",
-        "libero_spatial_akita_bowl_agentview_candidate_patient_control_v7",
-        "libero_spatial_akita_bowl_agentview_candidate_grasp_retry_v8",
-    ):
-        with pytest.raises(Exception, match="only the active v9d controller"):
-            runner._resolve_controller_variant(retired_name, suite_mode="vanilla")
+def test_noncanonical_controller_is_rejected_before_execution(runner):
+    with pytest.raises(Exception, match="only the active canonical controller"):
+        runner._resolve_controller_variant("obsolete_controller", suite_mode="vanilla")
 
     active = runner._resolve_controller_variant("default", suite_mode="vanilla")
     assert active.name == runner.DEFAULT_PROFILE_NAME
@@ -960,35 +949,6 @@ def test_endpoint_depth_statistics_and_candidate_tolerance_are_audited(
     assert audit["endpoint_depth_statistics"]["source_tail"]["statistic"] == "lower_quantile"
     assert audit["controller_variant"]["canonical"]["endpoint_depth_quantile"] == 0.25
     assert audit["phases"][1]["policy"]["tolerance_m"] == 0.015
-
-
-def test_v3_tolerance_applies_to_all_positional_phases(runner, monkeypatch, tmp_path: Path):
-    _patch_episode_controller(runner, monkeypatch)
-    with pytest.raises(Exception, match="only the active v9d controller"):
-        runner.run_episode(
-            env=_MotionEnv(),
-            task_id=0,
-            seed=1000,
-            resolution=256,
-            output_dir=tmp_path,
-            arrow_rgb=np.zeros((256, 256, 3), dtype=np.uint8),
-            capture=_episode_capture(runner),
-            dry_run=True,
-            controller_variant="libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v3",
-        )
-
-
-def test_v2_mask_gate_and_workspace_override_are_audited(
-    runner, monkeypatch, tmp_path: Path
-):
-    del monkeypatch, tmp_path
-    with pytest.raises(Exception, match="only the active v9d controller"):
-        runner._resolve_controller_variant(
-            "libero_spatial_akita_bowl_agentview_candidate_lowerq_relaxed_v2", suite_mode="vanilla"
-        )
-    active = runner._resolve_controller_variant("default", suite_mode="vanilla")
-    assert active.max_mask_fraction_for_motion == pytest.approx(0.4)
-    assert active.workspace_bounds_m["z"] == [0.0, 1.8]
 
 
 def test_randomization_dimensions_are_task_actual_not_suite_wide(runner):
@@ -1198,7 +1158,7 @@ def _patch_episode_controller(runner, monkeypatch, *, point=(0.0, 0.0, 1.0)):
         lambda **kwargs: type("Arrow", (), {"source_xy": (8.0, 8.0), "target_xy": (24.0, 24.0)})(),
     )
     monkeypatch.setattr(runner, "deproject_endpoint", lambda *args: np.asarray(point, dtype=np.float64))
-    # The frozen v9d default enables its RGB-D retry policy.  Keep these
+    # The canonical default enables its RGB-D retry policy. Keep these
     # controller-fake tests focused on the phase under test by supplying a
     # deterministic, in-workspace retry candidate instead of running the real
     # region planner on the synthetic all-ones depth fixture.
@@ -1215,11 +1175,11 @@ def _patch_episode_controller(runner, monkeypatch, *, point=(0.0, 0.0, 1.0)):
     )
     monkeypatch.setattr(runner, "build_bowl_waypoints", lambda *args: np.zeros((6, 3)))
     monkeypatch.setattr(runner, "normalized_osc_action", lambda **kwargs: np.zeros(7, dtype=np.float32))
-    # v9d's bounded retry asks for a fresh proprioception sample before its
+    # The bounded retry asks for a fresh proprioception sample before its
     # open/retreat reset.  The tiny fake environment has no observation hook,
     # so provide the contract-level sample explicitly.
     monkeypatch.setattr(runner, "_raw_observation", lambda _env: _motion_proprio())
-    # Keep generic motion/video tests out of the v9d retry trigger itself; the
+    # Keep generic motion/video tests out of the retry trigger itself; the
     # dedicated retry test below supplies its own explicit trigger.
     monkeypatch.setattr(runner, "_empty_gripper_likely", lambda *args, **kwargs: False)
 
@@ -1469,42 +1429,24 @@ def test_run_motion_preserves_gripper_timeout_and_marks_motion(runner, monkeypat
     assert env._arrow_phase_audit[-1]["steps"] == 1
 
 
-def test_frozen_v9d_disables_legacy_recovery_overrides(runner):
+def test_canonical_policy_disables_legacy_recovery_overrides(runner):
     active = runner._resolve_controller_variant("default", suite_mode="vanilla")
     assert active.recovery_attempts == 0
     assert active.recovery_steps == 0
 
 
-def test_external_v9_config_inheritance_and_hash_are_stable(runner, tmp_path: Path):
-    base = tmp_path / "base.json"
-    child = tmp_path / "child.json"
-    base.write_text(json.dumps({"name": "base", "phase_timeout_steps": 12, "grasp_search": {"enabled": False}}), encoding="utf-8")
-    child.write_text(json.dumps({"extends": "base.json", "name": "child", "grasp_search": {"enabled": True, "offsets_m": [[0, 0, -0.01]], "max_attempts": 1}}), encoding="utf-8")
-    expanded = runner.load_controller_config(child)
-    variant = runner.controller_variant_from_config(expanded)
-    assert expanded["phase_timeout_steps"] == 12
-    assert "extends" not in expanded
-    assert expanded["config_hash"] == runner.controller_config_hash(expanded)
-    assert variant.grasp_search.enabled is True
-    assert variant.canonical()["grasp_search"]["offsets_m"] == [[0.0, 0.0, -0.01]]
-
-
-def test_v9d_rgbd_region_config_is_the_only_active_policy(runner):
+def test_canonical_config_is_the_only_active_policy(runner):
     config_root = Path(runner.__file__).parent / "controller_configs"
-    v9d_expanded = runner.load_controller_config(config_root / "v9d_rgbd_region_grasp_search.json")
-    v9d = runner.controller_variant_from_config(v9d_expanded)
-    assert v9d.grasp_search.strategy == "rgbd_region"
-    assert v9d.grasp_search.offsets_m == ()
-    assert v9d.grasp_search.max_attempts == 3
-    assert v9d.grasp_search.region_candidate_height_quantiles == ()
-    assert v9d.micro_correction.enabled is False
-    for retired_name in (
-        "v9e_rgbd_region_with_micro_correction.json",
-        "v9f_rgbd_region_height_sweep.json",
-        "v10_zg_grasp_only.json",
-    ):
-        with pytest.raises(Exception, match="retired|not found"):
-            runner.load_controller_config(config_root / retired_name)
+    expanded = runner.load_controller_config(config_root / "canonical_molmo_rgbd_grasp.json")
+    canonical = runner.controller_variant_from_config(expanded)
+    assert canonical.name == runner.DEFAULT_PROFILE_NAME
+    assert canonical.grasp_search.strategy == "rgbd_region"
+    assert canonical.grasp_search.offsets_m == ()
+    assert canonical.grasp_search.max_attempts == 3
+    assert canonical.grasp_search.region_candidate_height_quantiles == ()
+    assert canonical.micro_correction.enabled is False
+    with pytest.raises(Exception, match="not found|only canonical"):
+        runner.load_controller_config(config_root / "obsolete.json")
 
 
 def test_rgbd_region_retry_uses_only_capture_geometry_and_proprioception(
@@ -1579,7 +1521,7 @@ def test_rgbd_region_retry_uses_only_capture_geometry_and_proprioception(
         ),
     )
     # This is an isolated retry-mechanics test, not an executable policy
-    # selection.  Bypass the production v9d resolver only at this seam so the
+    # selection. Bypass the production resolver only at this seam so the
     # historical custom fixture can exercise the bounded retry loop.
     monkeypatch.setattr(runner, "_resolve_controller_variant", lambda value, **kwargs: value)
     capture = _episode_capture(runner)
@@ -1607,20 +1549,11 @@ def test_rgbd_region_retry_uses_only_capture_geometry_and_proprioception(
     assert audit["grasp_search"][1]["selected_pixel_xy"] == [9, 8]
 
 
-def test_external_v9_config_cycle_rejected_before_motion(runner, tmp_path: Path):
-    left = tmp_path / "left.json"
-    right = tmp_path / "right.json"
-    left.write_text(json.dumps({"extends": "right.json"}), encoding="utf-8")
-    right.write_text(json.dumps({"extends": "left.json"}), encoding="utf-8")
-    with pytest.raises(ValueError, match="cycle"):
-        runner.load_controller_config(left)
-
-
 def test_invalid_explicit_controller_config_fails_before_environment_build(runner, monkeypatch, tmp_path: Path):
     invalid = tmp_path / "invalid.json"
     invalid.write_text(json.dumps({"grasp_search": {"enabled": True, "offsets_m": [[0, 0, 0]], "max_attempts": 1}, "unknown": 1}), encoding="utf-8")
     monkeypatch.setattr(runner, "build_libero_env", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("environment built")))
-    with pytest.raises(ValueError, match="unknown"):
+    with pytest.raises(ValueError, match="only canonical"):
         runner.main(["--controller-config", str(invalid)])
 
 
@@ -1662,7 +1595,7 @@ def test_micro_correction_event_records_trigger_and_post_residual(runner, monkey
 
 
 @pytest.mark.parametrize("field,value", [("enabled", "true"), ("max_attempts", 1.5), ("phase_timeout_steps", True)])
-def test_v9_policy_rejects_weakly_typed_limits(runner, field, value):
+def test_policy_rejects_weakly_typed_limits(runner, field, value):
     with pytest.raises(ValueError):
         runner.GraspSearchPolicy(**{field: value})
 
@@ -1678,7 +1611,7 @@ def test_v9_policy_rejects_weakly_typed_limits(runner, field, value):
         {"region_candidate_height_quantiles": [0.7]},
     ],
 )
-def test_v9_dynamic_policy_rejects_invalid_geometry_contract(runner, kwargs):
+def test_dynamic_policy_rejects_invalid_geometry_contract(runner, kwargs):
     with pytest.raises(ValueError):
         runner.GraspSearchPolicy(**kwargs)
 

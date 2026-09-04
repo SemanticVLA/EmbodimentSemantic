@@ -93,7 +93,7 @@ def _resolve_controller_selection(
             # Planning can remain dependency-light, but no historical policy
             # may silently become executable through the matrix boundary.
             raise ValueError(
-                "only the active v9d controller is selectable; "
+                "only the active canonical controller is selectable; "
                 f"got retired controller {variant_label!r}"
             )
         expanded = load_controller_config()
@@ -121,7 +121,7 @@ def _resolve_controller_selection(
     variant = converter(expanded, suite_mode=suite_mode)
     if variant.name != ACTIVE_CONTROLLER_NAME:
         raise ValueError(
-            "only the active v9d controller is executable; "
+            "only the active canonical controller is executable; "
             f"got retired controller {variant.name!r}"
         )
     expected = _episode_module._resolve_controller_variant(
@@ -129,7 +129,7 @@ def _resolve_controller_selection(
     )
     if variant.canonical() != expected.canonical():
         raise ValueError(
-            "active v9d controller payload does not match the checked-in policy"
+            "active canonical controller payload does not match the checked-in policy"
         )
     canonical = variant.canonical()
     source = expanded.get("config_source")
@@ -278,14 +278,17 @@ def _source_file_hashes() -> dict[str, str | None]:
         "run_arrow_pick_place_matrix.py",
         "run_arrow_pick_place_eval.py",
         "arrow_controller.py",
-        "controller_configs/v9d_rgbd_region_grasp_search.json",
+        "controller_configs/canonical_molmo_rgbd_grasp.json",
         "config.py",
         "bddl_utils.py",
         "radomize_scenes.py",
         "visual_scene_graph.py",
         "libero_live_semantic_context.py",
         "preview_visual_arrows.py",
-        "legion/run_arrow_pick_place_dual_matrix.sbatch",
+        "grasp_controller/runner.py",
+        "grasp_controller/grasp_candidates.py",
+        "grasp_controller/molmopoint.py",
+        "legion/run_grasp_controller.sbatch",
     )
     return {
         relative_path: _sha256_file(root / relative_path)
@@ -780,10 +783,9 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
         ("_arrow_canary_video", "canary_video"),
         ("_arrow_input_budget", "input_budget"),
         ("_arrow_forbidden_input_audit", "forbidden_input_audit"),
-        ("_molmo_sam3_opening_preshape", "opening_preshape"),
-        ("_molmo_opening_settling_audit", "opening_settling"),
-        ("_molmo_sam3_observation_hover", "observation_hover"),
-        ("_molmo_sam3_gripper_open", "gripper_open"),
+        ("_grasp_controller_opening_preshape", "opening_preshape"),
+        ("_grasp_controller_observation_hover", "observation_hover"),
+        ("_grasp_controller_gripper_open", "gripper_open"),
     ):
         try:
             value = getattr(env, attribute, None)
@@ -799,7 +801,7 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
     # zero distinct from missing evidence and do not inspect ordinary runner
     # counters when the experimental budget attribute is absent.
     try:
-        budget = getattr(env, "_molmo_sam3_action_budget", None)
+        budget = getattr(env, "_grasp_controller_action_budget", None)
         if not isinstance(budget, _episode_module._ActionBudget):
             raise ValueError("not a shared action budget")
         used_value = getattr(budget, "used", None)
@@ -1283,7 +1285,7 @@ def _run_matrix_impl(
         "launcher_path": Path(__file__).resolve().as_posix(),
         "repository_root": Path(__file__).resolve().parents[1].as_posix(),
         "episode_runner": (
-            "run_molmo_sam3_canary.episode_runner"
+            "grasp_controller.runner.episode_runner"
             if experiment_metadata is not None
             else "run_arrow_pick_place_eval.run_episode"
         ),
@@ -2016,7 +2018,7 @@ def _run_matrix_impl(
 
 
 def run_matrix(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Run the frozen v9d matrix with no external model lifecycle."""
+    """Internal persistence/evaluation matrix used by the canonical runner."""
     return _run_matrix_impl(*args, **kwargs)
 
 
@@ -2091,5 +2093,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__":  # pragma: no cover - operator guard
+    raise SystemExit(
+        "run_arrow_pick_place_matrix.py is an internal persistence engine; "
+        "use run_grasp_controller.py"
+    )

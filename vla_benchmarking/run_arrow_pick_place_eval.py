@@ -515,6 +515,10 @@ class ControllerVariantConfig:
     micro_correction: MicroCorrectionPolicy | Mapping[str, Any] | None = None
     source_approach: Mapping[str, Any] | None = None
     destination_placement: Mapping[str, Any] | None = None
+    # Immutable provenance for the promoted perception/controller treatment.
+    # These fields are descriptive and do not alter the motion engine; keeping
+    # them in the canonical payload prevents an accidental partial promotion.
+    policy_metadata: Mapping[str, Any] | None = None
     config_source: str | None = None
     external_config_hash: str | None = None
 
@@ -527,6 +531,13 @@ class ControllerVariantConfig:
         object.__setattr__(self, "destination_placement", _optional_rgbd_policy(
             self.destination_placement, "destination_placement", {"enabled", "patch_radius_px", "min_valid_fraction", "max_residual_m", "release_clearance_m"}
         ))
+        if self.policy_metadata is not None:
+            if not isinstance(self.policy_metadata, Mapping):
+                raise ValueError("policy_metadata must be a mapping")
+            try:
+                json.dumps(self.policy_metadata, sort_keys=True, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("policy_metadata must be JSON serializable") from exc
         if self.suite_mode not in SUITE_MODES:
             raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {self.suite_mode!r}")
         if self.phase_timeout_steps <= 0 or self.gripper_dwell_steps <= 0:
@@ -659,6 +670,8 @@ class ControllerVariantConfig:
             result["source_approach"] = json.loads(json.dumps(self.source_approach, sort_keys=True))
         if self.destination_placement is not None:
             result["destination_placement"] = json.loads(json.dumps(self.destination_placement, sort_keys=True))
+        if self.policy_metadata is not None:
+            result["policy_metadata"] = json.loads(json.dumps(self.policy_metadata, sort_keys=True))
         return result
 
     @property
@@ -706,15 +719,8 @@ def controller_variant_from_config(
         "max_mask_fraction_for_motion", "workspace_bounds_m", "grasp_search",
         "micro_correction",
         "source_approach", "destination_placement",
+        "policy_metadata",
     }
-    retired_keys = {
-        "grasp_provider", "placement_provider", "zerograsp", "zerograsp_policy"
-    }
-    if retired_keys.intersection(data):
-        raise ControllerConfigError(
-            "ZeroGrasp is a retired side experiment and cannot be selected by "
-            "the active arrow runtime"
-        )
     unknown = set(data) - allowed
     if unknown:
         raise ControllerConfigError(f"unknown controller config keys: {sorted(unknown)}")
@@ -743,7 +749,7 @@ def _resolve_controller_variant(
     def require_active(variant: ControllerVariantConfig) -> ControllerVariantConfig:
         if variant.name != DEFAULT_PROFILE_NAME:
             raise ControllerConfigError(
-                "only the active v9d controller is executable; "
+                "only the active canonical controller is executable; "
                 f"got retired controller {variant.name!r}"
             )
         expected = controller_variant_from_config(
@@ -751,7 +757,7 @@ def _resolve_controller_variant(
         )
         if variant.canonical() != expected.canonical():
             raise ControllerConfigError(
-                "active v9d controller payload does not match the checked-in policy"
+                "active canonical controller payload does not match the checked-in policy"
             )
         return variant
 
@@ -760,7 +766,7 @@ def _resolve_controller_variant(
     if isinstance(value, Mapping):
         return require_active(controller_variant_from_config(value, suite_mode=suite_mode))
     if value is None:
-        # The active v9d document is the single source of truth for the
+        # The active canonical document is the single source of truth for the
         # default.  Loading it here keeps nested RGB-D policy defaults and
         # provenance identical for direct episodes and matrix runs.
         return require_active(controller_variant_from_config(
@@ -777,7 +783,7 @@ def _resolve_controller_variant(
             load_controller_config(name), suite_mode=suite_mode
         ))
     raise ControllerConfigError(
-        "only the active v9d controller is executable; "
+        "only the active canonical controller is executable; "
         f"got retired controller {name!r}"
     )
 
@@ -1452,7 +1458,7 @@ def _experimental_candidate_pose(candidate: Any) -> tuple[np.ndarray, np.ndarray
 
     Experimental candidates are deliberately duck-typed so the frozen runner
     remains independent of MolmoPoint/SAM3.  The position is the measured
-    ``grip_site`` target (not the legacy v9d source anchor); the orientation is
+    ``grip_site`` target (not the legacy arrow source anchor); the orientation is
     a world-frame grip-site rotation and the aperture is audit-only because
     Panda gripper commands remain signed incremental actions.
     """
@@ -2878,7 +2884,7 @@ def run_episode(
         else:
             experimental_empty_gripper_threshold = 0.0015
         # The experimental runner owns bounded candidate retries.  Disable the
-        # legacy v9d RGB-D search for this call so a failed Molmo/SAM3 contact
+        # legacy arrow RGB-D search for this call so a failed Molmo contact
         # can never silently switch to the old anchor policy.
         variant = replace(variant, grasp_search=None, grasp_retry_offsets_m=None, grasp_contact_threshold=None)
         candidate_point, candidate_rotation, candidate_aperture, candidate_pregrasp, experimental_candidate_audit = _experimental_candidate_pose(experimental_candidate)
@@ -3073,7 +3079,7 @@ def run_episode(
     if experimental_candidate_pose is not None:
         # The default policy preserves the frozen transfer displacement while
         # the opt-in visual_endpoints policy replaces only its XY component.
-        # Both policies replace the physical source contact; the v9d source
+        # Both policies replace the physical source contact; the legacy source
         # offset is never applied to the candidate itself.
         candidate_point, candidate_rotation, candidate_aperture, candidate_pregrasp = experimental_candidate_pose
         legacy_transfer_displacement = classical_destination_point - classical_source_point
@@ -4357,14 +4363,14 @@ def build_libero_env(
     if isinstance(controller_variant, ControllerVariantConfig):
         if controller_variant.name != DEFAULT_PROFILE_NAME:
             raise ControllerConfigError(
-                "only the active v9d controller may construct a runtime environment; "
+                "only the active canonical controller may construct a runtime environment; "
                 f"got retired controller {controller_variant.name!r}"
             )
     elif controller_variant is not None:
         requested_name = str(controller_variant).strip()
         if requested_name not in {"default", DEFAULT_PROFILE_NAME, DEFAULT_CONTROLLER_CONFIG_FILENAME}:
             raise ControllerConfigError(
-                "only the active v9d controller may construct a runtime environment; "
+                "only the active canonical controller may construct a runtime environment; "
                 f"got retired controller {requested_name!r}"
             )
     if suite_mode is None:
@@ -4630,7 +4636,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{DEFAULT_CONTROLLER_CONFIG_FILENAME}"
             )
     elif args.controller_variant in {"default", DEFAULT_PROFILE_NAME}:
-        # No-config execution must use the same fully expanded v9d policy as
+        # No-config execution must use the same fully expanded canonical policy as
         # an explicit config path, including its real source and semantic hash.
         external_variant = controller_variant_from_config(
             load_controller_config(), suite_mode=args.suite_mode
@@ -4642,12 +4648,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "retired controller selection rejected; use "
             f"{DEFAULT_CONTROLLER_CONFIG_FILENAME}"
         )
-    # The checked-in v9d document is the sole executable policy.  Its expanded
+    # The checked-in canonical document is the sole executable policy.  Its expanded
     # values are authoritative; command-line knobs remain for historical
     # parsing compatibility but cannot silently create a second controller.
     selected_variant = external_variant
     if selected_variant is None:  # defensive: both resolution branches above must set it
-        raise ControllerConfigError("active v9d controller could not be resolved")
+        raise ControllerConfigError("active canonical controller could not be resolved")
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode,
         controller_variant=selected_variant,
@@ -4708,5 +4714,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__":  # pragma: no cover - operator guard
+    raise SystemExit(
+        "run_arrow_pick_place_eval.py is an internal motion engine; "
+        "use run_grasp_controller.py"
+    )
