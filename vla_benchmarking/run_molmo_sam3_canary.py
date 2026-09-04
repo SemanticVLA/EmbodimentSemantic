@@ -97,6 +97,12 @@ OBSERVATION_PROFILE_PARAMS = {
         "min_actual_height_margin_m": None,
         "require_actual_height_margin": False,
         "arrow_refresh": "current_matrix_inputs_after_opening",
+        "arrow_render_policy": "adaptive_short_v1",
+        "arrow_short_span_threshold_px": 32,
+        "arrow_short_line_width": 1,
+        "arrow_short_head_length_rule": "max(3,min(16,round(0.35*span_px)))",
+        "arrow_long_line_width": 2,
+        "arrow_long_head_length": 16,
     },
 }
 
@@ -202,6 +208,53 @@ def resolve_observation_profile(name: str) -> dict[str, Any]:
     if name not in OBSERVATION_PROFILE_NAMES:
         raise ValueError(f"observation profile must be one of {OBSERVATION_PROFILE_NAMES}")
     return {"name": name, **dict(OBSERVATION_PROFILE_PARAMS[name])}
+
+
+def _parked_arrow_render_params(
+    episode_module: Any,
+    bboxes: Mapping[str, Sequence[float]],
+    *,
+    subject: str,
+    goal_object: str,
+    image_shape: Sequence[int],
+) -> dict[str, Any]:
+    """Resolve the parked short-arrow rendering from renderer anchor semantics."""
+    anchor_fn = getattr(episode_module, "_arrow_anchor_bboxes", None)
+    if not callable(anchor_fn):
+        raise RuntimeError("parked short-arrow policy requires the canonical arrow anchor helper")
+    anchored = anchor_fn(
+        bboxes, subject=subject, image_shape=image_shape, policy="bbox_center"
+    )
+    if subject not in anchored or goal_object not in anchored:
+        raise ValueError("parked short-arrow policy requires subject and goal bboxes")
+    # This is the same rounded bbox-center operation used by
+    # visual_scene_graph.draw_scene_graph_arrows; keep it local so the policy
+    # remains importable on dependency-light canary hosts.
+    def rounded_center(bbox: Sequence[float]) -> tuple[int, int]:
+        x1, y1, x2, y2 = bbox
+        return round((float(x1) + float(x2)) / 2), round((float(y1) + float(y2)) / 2)
+    source_center = rounded_center(anchored[subject])
+    target_center = rounded_center(anchored[goal_object])
+    span = float(np.linalg.norm(np.asarray(target_center, dtype=np.float64) - np.asarray(source_center, dtype=np.float64)))
+    if not math.isfinite(span):
+        raise ValueError("parked arrow endpoint span is non-finite")
+    if span < 32.0:
+        return {
+            "line_width": 1,
+            "head_length": max(3, min(16, round(0.35 * span))),
+            "endpoint_span_px": span,
+            "rounded_source_center": list(source_center),
+            "rounded_target_center": list(target_center),
+            "render_policy": "adaptive_short_v1",
+        }
+    return {
+        "line_width": 2,
+        "head_length": 16,
+        "endpoint_span_px": span,
+        "rounded_source_center": list(source_center),
+        "rounded_target_center": list(target_center),
+        "render_policy": "adaptive_short_v1_long_default",
+    }
 
 
 def _stable_model_identity(model_provenance: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -2666,6 +2719,8 @@ def main(
             "goal_object": kwargs.get("goal_object", "plate"),
         }
         first_capture: dict[str, Any] = {AGENTVIEW: fresh}
+        arrow_refresh_index = 0
+        arrow_refresh_attempt = 1
 
         def refresh_current_arrow_inputs(target_env: Any) -> None:
             """Refresh privileged matrix arrow inputs at the current robot pose."""
@@ -2686,12 +2741,84 @@ def main(
             })
 
         def refresh_arrow(capture: Any) -> tuple[np.ndarray, Sequence[float], Sequence[float] | None]:
-            rendered, _ = episode.render_exactly_one_arrow(
-                capture.rgb, arrow_input_state["bboxes"], subject=arrow_input_state["subject"],
-                goal_object=arrow_input_state["goal_object"], anchor_policy="bbox_center",
-            )
-            source_point, target_point = episode.decode_arrow_pixels(capture.rgb, rendered)
-            arrow_state.update({"rgb": rendered, "source_uv": source_point, "destination_uv": target_point})
+            nonlocal arrow_refresh_index
+            arrow_refresh_index += 1
+            arrow_state.update({"rgb": None, "source_uv": None, "destination_uv": None})
+            render_params: dict[str, Any] = {}
+            refresh_audit: dict[str, Any] = {
+                "refresh_index": arrow_refresh_index,
+                "attempt_index": arrow_refresh_attempt,
+            }
+            refresh_dir = output_dir / "arrow_refreshes"
+            if parked_observation:
+                render_params = _parked_arrow_render_params(
+                    episode, arrow_input_state["bboxes"],
+                    subject=arrow_input_state["subject"], goal_object=arrow_input_state["goal_object"],
+                    image_shape=np.asarray(capture.rgb).shape[:2],
+                )
+                refresh_audit.update(render_params)
+                clean_rgb = np.asarray(capture.rgb)
+                refresh_audit["capture_provenance"] = _observation_capture_provenance(capture)
+                refresh_audit["clean_rgb_sha256"] = hashlib.sha256(clean_rgb.tobytes()).hexdigest()
+                try:
+                    from PIL import Image
+                    refresh_dir.mkdir(parents=True, exist_ok=True)
+                    clean_path = refresh_dir / f"refresh_{arrow_refresh_index:02d}_clean.png"
+                    Image.fromarray(np.asarray(capture.rgb, dtype=np.uint8), mode="RGB").save(clean_path)
+                    refresh_audit["clean_rgb_path"] = clean_path.as_posix()
+                except Exception as exc:  # evidence persistence cannot alter rendering semantics
+                    refresh_audit["clean_rgb_persist_error"] = type(exc).__name__
+            try:
+                if parked_observation:
+                    rendered, renderer_audit = episode.render_exactly_one_arrow(
+                        capture.rgb, arrow_input_state["bboxes"], subject=arrow_input_state["subject"],
+                        goal_object=arrow_input_state["goal_object"], anchor_policy="bbox_center",
+                        line_width=int(render_params["line_width"]), head_length=int(render_params["head_length"]),
+                    )
+                else:
+                    rendered, renderer_audit = episode.render_exactly_one_arrow(
+                        capture.rgb, arrow_input_state["bboxes"], subject=arrow_input_state["subject"],
+                        goal_object=arrow_input_state["goal_object"], anchor_policy="bbox_center",
+                    )
+            except Exception as exc:
+                refresh_audit.update({"render_status": "failed", "render_error_type": type(exc).__name__, "render_error": str(exc)})
+                if parked_observation:
+                    try:
+                        _write_json(refresh_dir / f"refresh_{arrow_refresh_index:02d}.json", refresh_audit)
+                    except Exception:
+                        pass
+                raise
+            refresh_audit.update({"render_status": "completed", "renderer_audit": renderer_audit})
+            if parked_observation:
+                refresh_audit["rendered_rgb_sha256"] = hashlib.sha256(np.asarray(rendered).tobytes()).hexdigest()
+                try:
+                    from PIL import Image
+                    refresh_dir.mkdir(parents=True, exist_ok=True)
+                    rendered_path = refresh_dir / f"refresh_{arrow_refresh_index:02d}_arrow.png"
+                    Image.fromarray(np.asarray(rendered, dtype=np.uint8), mode="RGB").save(rendered_path)
+                    refresh_audit["rendered_rgb_path"] = rendered_path.as_posix()
+                except Exception as exc:
+                    refresh_audit["rendered_rgb_persist_error"] = type(exc).__name__
+            try:
+                source_point, target_point = episode.decode_arrow_pixels(capture.rgb, rendered)
+            except Exception as exc:
+                refresh_audit.update({"decode_status": "failed", "decode_error_type": type(exc).__name__, "decode_error": str(exc)})
+                arrow_state["render_audit"] = refresh_audit
+                if parked_observation:
+                    try:
+                        _write_json(refresh_dir / f"refresh_{arrow_refresh_index:02d}.json", refresh_audit)
+                    except Exception:
+                        pass
+                raise
+            refresh_audit["decode_status"] = "completed"
+            refresh_audit["decoded_source_uv"] = np.asarray(source_point, dtype=np.float64).tolist()
+            refresh_audit["decoded_target_uv"] = np.asarray(target_point, dtype=np.float64).tolist()
+            arrow_state.update({"rgb": rendered, "source_uv": source_point, "destination_uv": target_point, "render_audit": refresh_audit})
+            if parked_observation:
+                try:
+                    _write_json(refresh_dir / f"refresh_{arrow_refresh_index:02d}.json", refresh_audit)
+                except Exception:
+                    pass
             return rendered, source_point, target_point
 
         if parked_observation:
@@ -2723,9 +2850,10 @@ def main(
             # Recovery has already completed before this callback.  Settled
             # retries plan from a new observation/arrow, hover, settle, shape,
             # then capture; no motion is allowed after the returned frame.
-            nonlocal opening_audit
+            nonlocal opening_audit, arrow_refresh_attempt
             profile_name = resolved_opening_profile["name"]
             if parked_observation:
+                arrow_refresh_attempt = int(attempt_index)
                 retry_output = output_dir / "attempts" / f"attempt_{int(attempt_index):02d}"
                 if profile_name == "preshape40mm":
                     opening_audit = run_preshape(_env, retry_output / "opening_preshape")
@@ -2908,6 +3036,7 @@ def main(
             "opening_profile_params": _json_safe(resolved_opening_profile),
             "opening_preshape": _json_safe(opening_audit),
             "opening_settling": _json_safe(getattr(env, "_molmo_opening_settling_audit", None)),
+            "arrow_refresh_audit": _json_safe(arrow_state.get("render_audit")),
             "phases": audit.get("phases", []) if isinstance(audit, Mapping) else [],
             "motion_phases_reached": final.get("motion_phases_reached", []) if isinstance(final, Mapping) else [],
             "grasp_search": [], "canary_manifest": result,

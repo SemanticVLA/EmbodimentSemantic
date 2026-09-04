@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import math
+import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -143,7 +145,7 @@ def test_parked_main_skips_hover_and_refreshes_retry_capture(
     monkeypatch.setattr(matrix, "run_matrix", fake_matrix_run)
     def current_arrow_inputs(*_a):
         events.append("provider")
-        return {"bboxes": {"bowl": [1, 1, 4, 4]}, "subject": "bowl", "goal_object": "plate"}
+        return {"bboxes": {"bowl": [1, 1, 4, 4], "plate": [5, 5, 7, 7]}, "subject": "bowl", "goal_object": "plate"}
 
     monkeypatch.setattr(matrix, "_default_arrow_inputs", current_arrow_inputs)
     preshape_module = importlib.import_module("molmo_sam3.preshape")
@@ -161,3 +163,92 @@ def test_parked_main_skips_hover_and_refreshes_retry_capture(
     # retry refresh may request it again; both suites must exercise that seam.
     assert events.count("provider") >= 4
     assert events.count("calibration") >= 4
+    for suite_mode in ("vanilla", "sealed_randomized"):
+        refresh_dir = tmp_path / suite_mode / "arrow_refreshes"
+        for refresh_index in (1, 2):
+            record_path = refresh_dir / f"refresh_{refresh_index:02d}.json"
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            assert record["render_status"] == "completed"
+            assert record["decode_status"] == "completed"
+            assert (refresh_dir / f"refresh_{refresh_index:02d}_clean.png").exists()
+            assert (refresh_dir / f"refresh_{refresh_index:02d}_arrow.png").exists()
+
+
+@pytest.mark.parametrize("angle_degrees", list(range(0, 360, 15)))
+def test_actual_arrow_wrapper_and_decoder_preserve_short_arrow_targets(angle_degrees):
+    pytest.importorskip("cv2")
+    span = 20
+    radians = math.radians(angle_degrees)
+    source = np.asarray([64, 64], dtype=int)
+    target = source + np.rint(span * np.asarray([math.cos(radians), math.sin(radians)])).astype(int)
+    bboxes = {
+        "bowl": [source[0] - 1, source[1] - 1, source[0] + 1, source[1] + 1],
+        "plate": [target[0] - 1, target[1] - 1, target[0] + 1, target[1] + 1],
+    }
+    clean = np.full((128, 128, 3), 100, dtype=np.uint8)
+    render_params = runner._parked_arrow_render_params(
+        episode, bboxes, subject="bowl", goal_object="plate", image_shape=clean.shape[:2]
+    )
+    rendered, audit = episode.render_exactly_one_arrow(
+        clean, bboxes, subject="bowl", goal_object="plate",
+        line_width=render_params["line_width"], head_length=render_params["head_length"],
+    )
+    decoded_source, decoded_target = episode.decode_arrow_pixels(clean, rendered)
+
+    assert render_params["line_width"] == 1
+    assert render_params["head_length"] == max(3, min(16, round(0.35 * render_params["endpoint_span_px"])))
+    assert audit["relation_count"] == 1
+    assert np.linalg.norm(np.asarray(decoded_source) - source) <= 2.0
+    assert np.linalg.norm(np.asarray(decoded_target) - target) <= 2.0
+
+
+@pytest.mark.parametrize("source,target", [((204, 68), (194, 66)), ((193, 85), (200, 72))])
+def test_actual_arrow_wrapper_and_decoder_preserve_known_bbox_center_pairs(source, target):
+    pytest.importorskip("cv2")
+    source = np.asarray(source, dtype=int)
+    target = np.asarray(target, dtype=int)
+    bboxes = {
+        "bowl": [source[0] - 1, source[1] - 1, source[0] + 1, source[1] + 1],
+        "plate": [target[0] - 1, target[1] - 1, target[0] + 1, target[1] + 1],
+    }
+    clean = np.full((256, 256, 3), 90, dtype=np.uint8)
+    render_params = runner._parked_arrow_render_params(
+        episode, bboxes, subject="bowl", goal_object="plate", image_shape=clean.shape[:2]
+    )
+    rendered, _ = episode.render_exactly_one_arrow(
+        clean, bboxes, subject="bowl", goal_object="plate",
+        line_width=render_params["line_width"], head_length=render_params["head_length"],
+    )
+    decoded_source, decoded_target = episode.decode_arrow_pixels(clean, rendered)
+    assert np.linalg.norm(np.asarray(decoded_source) - source) <= 2.0
+    assert np.linalg.norm(np.asarray(decoded_target) - target) <= 2.0
+
+
+def test_actual_arrow_decoder_fails_closed_for_tiny_line_and_long_defaults_are_invariant():
+    pytest.importorskip("cv2")
+    clean = np.full((128, 128, 3), 100, dtype=np.uint8)
+
+    tiny_bboxes = {"bowl": [63, 64, 65, 66], "plate": [69, 64, 71, 66]}
+    tiny = clean.copy()
+    tiny[65, 64:80, 0] = 255  # plain shaft: no pointy head, so decode must reject it
+    with pytest.raises(ValueError):
+        episode.decode_arrow_pixels(clean, tiny)
+    tiny_params = runner._parked_arrow_render_params(
+        episode, tiny_bboxes, subject="bowl", goal_object="plate", image_shape=clean.shape[:2]
+    )
+    assert tiny_params["line_width"] == 1 and tiny_params["head_length"] == 3
+
+    long_bboxes = {"bowl": [39, 63, 41, 65], "plate": [79, 63, 81, 65]}
+    implicit, implicit_audit = episode.render_exactly_one_arrow(
+        clean, long_bboxes, subject="bowl", goal_object="plate"
+    )
+    explicit, explicit_audit = episode.render_exactly_one_arrow(
+        clean, long_bboxes, subject="bowl", goal_object="plate", line_width=2, head_length=16
+    )
+    assert np.array_equal(implicit, explicit)
+    assert implicit_audit["line_width"] == explicit_audit["line_width"] == 2
+    assert implicit_audit["head_length"] == explicit_audit["head_length"] == 16
+    long_params = runner._parked_arrow_render_params(
+        episode, long_bboxes, subject="bowl", goal_object="plate", image_shape=clean.shape[:2]
+    )
+    assert (long_params["line_width"], long_params["head_length"]) == (2, 16)

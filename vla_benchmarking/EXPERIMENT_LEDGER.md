@@ -1,5 +1,99 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Parked paired screen terminal — 2026-09-04 02:16:30 UTC
+
+Job1919322 is terminal, exit2, durable archive VERIFIED. Both arms stopped
+after11attempted cells on the same repeated retry arrow-decode failure.
+Final40mm5/12planned versus full-open3/12planned. Full-open: vanilla2/6,
+sealed1/6,retained-lift evidence4,retry successes0,1783actions,453.688s
+perception; failuresno_candidates4,input_failure2,recovery_failed1,task_failure1.
+No active experimental allocations at this audit. Keep failed/unattempted cells
+and do not extend or restamp this stopped cohort. The input-only rendering
+repair is implemented and undergoing independent targeted validation.
+
+## Short-arrow input repair preparation — 2026-09-04 02:14 UTC
+
+Release gate APPROVED for the prefix via the existing no-SAM launcher:
+independent tester60passed/27OpenCVskipped in lightPython and29passed in the
+actual OpenCV environment; reviewer independently passed168actualrender cases
+and found no HIGH/BLOCKER. Decode-failure artifact handling was inspected,
+not independently executed. No further review round before this bounded run.
+
+Root validation:45 focused tests passed in the installed vla_bench_py312 conda
+environment with real OpenCV4.13 (pytest plugin autoload disabled to avoid an
+unrelated Hydra plugin error). A separate actual-renderer/decoder sweep passed
+168 span12-31px/orientation cases,max endpoint error0.5px. The10.2pxT6 arrow
+still fails closed on some backgrounds (including uniformgray100); both exact
+pairs pass the testedgray90 background. Do not claim universal short-arrow
+repair or Legion-version equivalence before runtime evidence.
+
+An optional future60-cell launcher-forwarding patch was excluded and reverted:
+its existing setup still required SAM even for RGB-D. The upcoming paired
+prefix uses the unchanged proven no-SAM campaign launcher. No extension
+readiness is claimed; eligible same-SHA full60 launch needs a scoped no-SAM
+job setup, not changes to scientific code or restamping old results.
+
+Reproduced both parked retry failures using the existing renderer and unchanged
+decoder with rounded source/goal centers(204,68)->(194,66) and
+(193,85)->(200,72). Both legacy2px shaft/16px head arrows fail; adaptive1px
+shaft and4/5px heads decode with less than0.5px endpoint error. Both prior
+attempts had lifted, reached preplace160-step timeout(residual32.757/16.667mm),
+then opened and retreated. Thus retries genuinely need short source-to-goal
+arrows; do not infer task success from privileged relation data.
+
+Approved input-only rule for both parked arms: rounded endpoint span<32px
+uses width1 and head=max(3,min(16,round(.35*span))); longer arrows preserve
+width2/head16 exactly. No endpoint movement, direct bbox targets, decoder
+relaxation, geometry/motion change or evaluator shortcut. Architect reproduced
+24/24 orientations at each tested span12,15,16,20,24,28,31px; tiny ambiguous
+arrows still fail closed. Add explicit scientific identity and fresh frame/render
+audits including decode failures. Test and review only this delta, then rerun
+the paired12-cell screens at a new immutable identity; do not resume1919322.
+
+## Parked 40 mm screen stopped with five placements — 2026-09-04 02:04:57 UTC
+
+Job1919322 continues with the full-open arm. The40mm arm is terminal:
+**5/12 planned,11 attempted**, vanilla3/6 and sealed2/6,retained-lift evidence6,
+zero successful retries,2687actions,474.009s perception. Failure categories:
+no_candidates2,input_failure2,recovery_failed1,task_failure1. The screen stopped
+on two retry arrow-decode errors (sealedT6/1000,T9/1000), leaving sealedT9/1001
+unattempted. Do not extend this incomplete stopped cohort or replace its failures.
+Full-open is partial0/12,2 finished,40actions,64.851s perception,T6/1000 running.
+
+Five placements exceeds the matching historical3/12 count, but this remains
+an exploratory incomplete screen at a different commit, not a full60-cell win.
+The new operational failure is after recovery, not initial perception. Current
+retry bbox-center arrow spans are10.688px(T6) and15.207px(T9), versus the
+fixed16px arrowhead. Preserve decoder guards and endpoint/transfer meaning;
+investigate only an endpoint-preserving short-glyph rendering correction.
+
+## Parked canary first placement — 2026-09-04 01:53:08 UTC
+
+Job1919322 is actively evaluating the40mm arm. Two cells finished:
+vanilla/T4/1000 placed successfully on the first grasp; T4/1001 produced no
+candidates. T6/1000 is running. Current score **1/12 planned,2 finished**,
+one retained-lift signal,zero successful retries,286actions,88.402s perception.
+The full-open arm has not started. Both first cells completed44 shaping
+actions at40.88649mm,total64actions before perception,without hover/settling.
+This confirms the new path can place a bowl, not overall baseline improvement.
+
+## Parked agentview paired canary launched — 2026-09-04 01:50:31 UTC
+
+Job **1919322** is RUNNING on compute-3-12. Submitted01:50:03, started
+01:50:22 UTC, one A40/eight CPUs/64GB, two-hour limit. Clean immutable release
+`da9b1985a826544854b84916fe23ace91c769fe1` and BF16/Torch2.10.0/
+Transformers4.57.1 runtime were verified. Frozen v9d configuration is unchanged.
+Label `v9d_molmo_parked_da9b198`; no SAM. The reviewed parked protocol below
+tests40mm then full-open,12 planned cells each, without automatic extension.
+No completed task result at this startup audit; no improvement claimed.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_parked_da9b198_1919322/results`.
+Archive target: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_parked_da9b198_1919322`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919322.out`.
+Transfer bundle SHA256: `a99ee36ca6f2e11c2f24abea04e0d00065e634abec6fba1ef0d05799907374b6`.
+Do not resubmit this job. Inspect actual parked shaping/candidate motion
+before interpreting results; preserve stopped cells and all revision identities.
+
 ## Parked agentview pivot preparation — 2026-09-04 01:40 UTC
 
 Release gate APPROVED: independent tester80passed5.45s, reviewer13focused
