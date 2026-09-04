@@ -40,7 +40,9 @@ archive(){ local rc=$?; trap - EXIT; set +e; mkdir -p "$ARCHIVE_ROOT"; rsync -a 
 trap archive EXIT
 [[ -x "$PYTHON" ]] || die "Python missing: $PYTHON"
 [[ -d "${LIBERO_CONFIG_PATH:-$HOME/EmbodimentSemantic_runtime/config}" ]] || die 'LIBERO_CONFIG_PATH missing'
-export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$HOME/EmbodimentSemantic_runtime/config}" LIBERO_CONFIG="$LIBERO_CONFIG_PATH/config.yaml"
+ LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$HOME/EmbodimentSemantic_runtime/config}"
+ export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl LIBERO_CONFIG_PATH
+ export LIBERO_CONFIG="$LIBERO_CONFIG_PATH/config.yaml"
 export PYTHONPATH="$REPO_ROOT/vla_benchmarking" TMPDIR="$RUN_ROOT/tmp" XDG_CACHE_HOME="$RUNTIME_ROOT/cache/xdg" TORCH_HOME="$RUNTIME_ROOT/cache/torch" HF_HOME="$RUNTIME_ROOT/cache/huggingface" HF_HUB_CACHE="$HF_HOME/hub" TRANSFORMERS_CACHE="$RUNTIME_ROOT/cache/transformers"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$TORCH_HOME" "$HF_HOME"
 "$PYTHON" -c 'import torch, transformers, libero, mujoco, robosuite; assert torch.cuda.is_available() and torch.cuda.device_count()==1 and torch.cuda.is_bf16_supported(); assert transformers.__version__=="4.57.1"; print(torch.cuda.get_device_name(0))' || die 'runtime preflight failed'
