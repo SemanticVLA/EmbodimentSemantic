@@ -18,6 +18,7 @@
 #   V9D_MOLMO_ARCHIVE_ROOT    persistent archive root under $HOME by default
 #   V9D_MOLMO_MOTION_PROBE    1 selects the paired 24-cell placement diagnostic
 #   V9D_MOLMO_OPENING_PROBE   1 selects the paired full-open/40mm-opening screen
+#   V9D_MOLMO_HANDOFF_PROBE   1 selects the model-free robot hover/preshape diagnostic
 #   V9D_MOLMO_ARMS            comma-separated existing screen arm names
 #   V9D_MOLMO_OBSERVATION_PROFILE baseline (default) or hover20mm
 #   V9D_MOLMO_MOTION_PROFILE  baseline (default), placement_micro5mm, release_plus20mm or release20_visual_xy
@@ -52,6 +53,16 @@ CANARY_LABEL="${CANARY_LABEL:-${1:-}}"
 [[ "$CANARY_LABEL" =~ ^[A-Za-z0-9_.-]{1,96}$ ]] || die 'CANARY_LABEL contains unsafe characters'
 
 # Validate mode combinations before any environment setup or model loading.
+case "${V9D_MOLMO_HANDOFF_PROBE:-0}" in
+  0) ;;
+  1)
+    for incompatible in V9D_MOLMO_OPENING_PROBE V9D_MOLMO_MOTION_PROBE V9D_MOLMO_REPAIR_GATE V9D_MOLMO_GEOMETRY_PROBE V9D_MOLMO_SCREEN_ONLY; do
+      [[ "${!incompatible:-0}" == 0 ]] || die "handoff diagnostic cannot enable $incompatible"
+    done
+    [[ -z "${V9D_MOLMO_ARMS:-}" ]] || die 'handoff diagnostic fixes its cases'
+    ;;
+  *) die 'V9D_MOLMO_HANDOFF_PROBE must be 0 or 1' ;;
+esac
 case "${V9D_MOLMO_OPENING_PROBE:-0}" in
   0) ;;
   1)
@@ -85,6 +96,9 @@ case "${V9D_MOLMO_GEOMETRY_PROBE:-0}" in
   1) CAMPAIGN_SCRIPT="$REPO_ROOT/vla_benchmarking/run_molmo_geometry_probe.py" ;;
   *) die 'V9D_MOLMO_GEOMETRY_PROBE must be 0 or 1' ;;
 esac
+if [[ "${V9D_MOLMO_HANDOFF_PROBE:-0}" == 1 ]]; then
+  CAMPAIGN_SCRIPT="$REPO_ROOT/vla_benchmarking/run_molmo_opening_probe.py"
+fi
 REQUIREMENTS_FILE="$REPO_ROOT/vla_benchmarking/legion/molmo_requirements.txt"
 [[ -f "$CAMPAIGN_SCRIPT" ]] || die "campaign entrypoint is missing: $CAMPAIGN_SCRIPT"
 [[ -f "$REQUIREMENTS_FILE" ]] || die "Molmo requirements are missing: $REQUIREMENTS_FILE"
@@ -249,6 +263,10 @@ if [[ "$opening_probe" == 1 ]]; then
   observation_profile=hover20mm
   motion_profile=release_plus20mm
 fi
+if [[ "${V9D_MOLMO_HANDOFF_PROBE:-0}" == 1 ]]; then
+  observation_profile=hover20mm
+  motion_profile=not_applicable_robot_only_diagnostic
+fi
 cat > "$RUN_ROOT/job_context.env" <<EOF
 schema=v9d_molmo_campaign_job.v1
 job_id=$SLURM_JOB_ID
@@ -275,7 +293,7 @@ setup_started_epoch=$setup_started_epoch
 setup_finished_epoch=$setup_finished_epoch
 setup_elapsed_seconds=$((setup_finished_epoch - setup_started_epoch))
 model_load_owner=$(basename "$CAMPAIGN_SCRIPT")
-model_load_count_expected=1
+model_load_count_expected=$((1 - ${V9D_MOLMO_HANDOFF_PROBE:-0}))
 repair_gate=${V9D_MOLMO_REPAIR_GATE:-0}
 motion_probe=${V9D_MOLMO_MOTION_PROBE:-0}
 opening_probe=$opening_probe
@@ -284,9 +302,10 @@ observation_profile=$observation_profile
 motion_profile=$motion_profile
 screen_only=${V9D_MOLMO_SCREEN_ONLY:-0}
 geometry_probe=${V9D_MOLMO_GEOMETRY_PROBE:-0}
+handoff_probe=${V9D_MOLMO_HANDOFF_PROBE:-0}
 EOF
 
-if [[ "${V9D_MOLMO_GEOMETRY_PROBE:-0}" == 1 ]]; then
+if [[ "${V9D_MOLMO_GEOMETRY_PROBE:-0}" == 1 || "${V9D_MOLMO_HANDOFF_PROBE:-0}" == 1 ]]; then
   "$PYTHON" "$CAMPAIGN_SCRIPT" --output-dir "$OUTPUT_ROOT" --label "$CANARY_LABEL"
   exit $?
 fi

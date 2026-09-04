@@ -132,6 +132,51 @@ def test_metrics_reconstructs_retained_lift_after_placement_failure(tmp_path):
     }
 
 
+def test_metrics_aggregates_partial_shared_budget_without_double_counting(tmp_path):
+    def cell(seed, used):
+        return {
+            "status": "failed", "suite_mode": "vanilla", "task_id": 4,
+            "seed": seed, "evaluator_result": None,
+            "partial_audit": {"total_actions": used, "experimental_action_budget": {"used": used, "limit": 1200}},
+        }
+
+    campaign.write_json(tmp_path / "vanilla" / "arrow_pick_place_matrix_status.json", {"cells": [
+        cell(1000, 61), cell(1001, 57),
+    ]})
+    result = campaign.metrics(tmp_path, 12)
+    assert result["reported_actions"] == 118
+    assert result["reported_action_count_cells"] == 2
+    assert result["unknown_action_count_cells"] == 0
+
+
+def test_metrics_preserves_valid_zero_and_marks_missing_counts_unknown(tmp_path):
+    campaign.write_json(tmp_path / "vanilla" / "arrow_pick_place_matrix_status.json", {"cells": [
+        {"status": "completed", "suite_mode": "vanilla", "task_id": 4, "seed": 1000,
+         "audit": {"total_actions": 0}},
+        {"status": "failed", "suite_mode": "vanilla", "task_id": 4, "seed": 1001,
+         "audit": None, "partial_audit": None},
+    ]})
+    result = campaign.metrics(tmp_path, 12)
+    assert result["reported_actions"] == 0
+    assert result["reported_action_count_cells"] == 1
+    assert result["unknown_action_count_cells"] == 1
+
+
+@pytest.mark.parametrize("wrapper_total", [61, 0])
+def test_metrics_prefers_live_wrapper_total_over_nested_final_count(tmp_path, wrapper_total):
+    campaign.write_json(tmp_path / "vanilla" / "arrow_pick_place_matrix_status.json", {"cells": [{
+        "status": "completed", "suite_mode": "vanilla", "task_id": 4, "seed": 1000,
+        "audit": {
+            "total_actions": wrapper_total,
+            "canary_manifest": {"final_result": {"total_actions": 40}},
+        },
+    }]})
+    result = campaign.metrics(tmp_path, 12)
+    assert result["reported_actions"] == wrapper_total
+    assert result["reported_action_count_cells"] == 1
+    assert result["unknown_action_count_cells"] == 0
+
+
 def test_operational_stop_requires_two_distinct_cells():
     rules = campaign.StopRules()
     record = dict(status="failed", stage="build_env", error_type="ImportError", error="missing dependency", suite_mode="vanilla", task_id=4, seed=1000)

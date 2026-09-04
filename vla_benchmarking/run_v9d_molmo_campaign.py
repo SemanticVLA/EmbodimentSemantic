@@ -148,6 +148,59 @@ def write_json(path: Path, data: Any) -> None:
     temporary.replace(path)
 
 
+def _valid_action_count(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        count = int(value)
+        if count < 0 or float(value) != float(count):
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return count
+
+
+def _reported_action_count(record: Mapping[str, Any]) -> int | None:
+    """Select one per-cell count, preferring final audit evidence."""
+    audit = record.get("audit")
+    audit = audit if isinstance(audit, Mapping) else None
+    episode = audit.get("canary_manifest") if audit else None
+    episode = episode if isinstance(episode, Mapping) else None
+    final = episode.get("final_result") if episode else None
+    final = final if isinstance(final, Mapping) else None
+    final_audit = final.get("audit") if final else None
+    final_audit = final_audit if isinstance(final_audit, Mapping) else None
+    partial = record.get("partial_audit")
+    partial = partial if isinstance(partial, Mapping) else None
+
+    # The canary wrapper's top-level total is the live shared-budget count,
+    # including when a retry's nested final result is stale or absent.
+    for source in (audit, record, partial):
+        if source is not None:
+            count = _valid_action_count(source.get("total_actions"))
+            if count is not None:
+                return count
+    # Nested final evidence is a fallback for older records without a wrapper
+    # total, including exact zero values.
+    for source in (final_audit, final):
+        if source is not None:
+            for key in ("total_actions", "experimental_total_actions"):
+                count = _valid_action_count(source.get(key))
+                if count is not None:
+                    return count
+    # Finally use an explicitly valid shared experimental budget snapshot.
+    for source in (final_audit, final, audit, partial, record):
+        if source is None:
+            continue
+        budget = source.get("experimental_action_budget")
+        if isinstance(budget, Mapping):
+            count = _valid_action_count(budget.get("used"))
+            limit = _valid_action_count(budget.get("limit"))
+            if count is not None and limit is not None and count <= limit:
+                return count
+    return None
+
+
 def metrics(root: Path, planned: int) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     for suite in ("vanilla", "sealed_randomized"):
@@ -157,6 +210,7 @@ def metrics(root: Path, planned: int) -> dict[str, Any]:
     terminal = [r for r in records if r.get("status") in TERMINAL]
     successes = sum(r.get("status") == "completed" and r.get("evaluator_result") is True for r in terminal)
     retained, retry_successes, actions, perception_s = 0, 0, 0, 0.0
+    unknown_action_count_cells = 0
     retention_sources: Counter[str] = Counter()
     failure_counts: Counter[str] = Counter()
     for record in terminal:
@@ -199,11 +253,11 @@ def metrics(root: Path, planned: int) -> dict[str, Any]:
             perception_s += float(attempt.get("candidate_diagnostics", {}).get("perception_latency_s", 0.0))
         # Matrix phases record the last attempt; the experimental audit stores
         # a shared count when provided. Never infer total action counts from time.
-        count = audit.get("total_actions", final.get("total_actions"))
+        count = _reported_action_count(record)
         if count is None:
-            count = (final.get("audit") or {}).get("experimental_total_actions")
-        if count is not None:
-            actions += int(count)
+            unknown_action_count_cells += 1
+        else:
+            actions += count
         if record.get("evaluator_result") is not True:
             category = record.get("failure_class") or final.get("status") or (attempts[-1].get("status") if attempts else None) or record.get("status")
             failure_counts[str(category)] += 1
@@ -215,6 +269,8 @@ def metrics(root: Path, planned: int) -> dict[str, Any]:
             "cells_by_source": dict(retention_sources),
         },
         "successful_retries": retry_successes, "reported_actions": actions,
+        "reported_action_count_cells": len(terminal) - unknown_action_count_cells,
+        "unknown_action_count_cells": unknown_action_count_cells,
         "perception_latency_s": perception_s, "failure_categories": dict(failure_counts),
         "per_suite": {suite: {"successes": sum(r.get("status") == "completed" and r.get("evaluator_result") is True for r in terminal if r.get("suite_mode") == suite), "planned": planned // 2} for suite in ("vanilla", "sealed_randomized")},
     }

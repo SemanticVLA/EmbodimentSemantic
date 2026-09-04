@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,6 +45,25 @@ def test_default_plan_has_100_cells_unique_seeds_and_paths(matrix, tmp_path: Pat
     assert Path(randomized["output_dir"]).parts[-4:-2] == (
         "sealed_randomized", matrix.DEFAULT_CONTROLLER_VARIANT
     )
+
+
+def test_early_runtime_diagnostics_preserve_opening_audits_and_exact_budget(matrix):
+    env = SimpleNamespace(
+        _molmo_sam3_opening_preshape={"status": "failed", "failure_reason": "timeout", "budget_used": 61},
+        _molmo_sam3_observation_hover={"status": "completed"},
+        _molmo_sam3_gripper_open={"status": "completed"},
+        _molmo_sam3_action_budget=matrix._episode_module._ActionBudget(1200, used=61),
+    )
+    observed = matrix._early_runtime_diagnostics(env)
+    assert observed["opening_preshape"]["failure_reason"] == "timeout"
+    assert observed["observation_hover"]["status"] == "completed"
+    assert observed["gripper_open"]["status"] == "completed"
+    assert observed["total_actions"] == 61
+    assert observed["experimental_action_budget"] == {"used": 61, "limit": 1200, "remaining": 1139}
+
+
+def test_early_runtime_diagnostics_does_not_add_experimental_fields_to_baseline(matrix):
+    assert matrix._early_runtime_diagnostics(SimpleNamespace()) == {}
 
 
 def test_condition_labels_are_validated(matrix):

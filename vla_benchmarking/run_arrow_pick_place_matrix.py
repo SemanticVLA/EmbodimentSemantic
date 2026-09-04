@@ -732,6 +732,9 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
         ("_arrow_canary_video", "canary_video"),
         ("_arrow_input_budget", "input_budget"),
         ("_arrow_forbidden_input_audit", "forbidden_input_audit"),
+        ("_molmo_sam3_opening_preshape", "opening_preshape"),
+        ("_molmo_sam3_observation_hover", "observation_hover"),
+        ("_molmo_sam3_gripper_open", "gripper_open"),
     ):
         try:
             value = getattr(env, attribute, None)
@@ -743,6 +746,27 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
             diagnostics[field] = [
                 dict(item) if isinstance(item, Mapping) else item for item in value
             ]
+    # The Molmo canary's shared budget is intentionally opt-in.  Keep an exact
+    # zero distinct from missing evidence and do not inspect ordinary runner
+    # counters when the experimental budget attribute is absent.
+    try:
+        budget = getattr(env, "_molmo_sam3_action_budget", None)
+        if not isinstance(budget, _episode_module._ActionBudget):
+            raise ValueError("not a shared action budget")
+        used_value = getattr(budget, "used", None)
+        limit_value = getattr(budget, "limit", None)
+        if type(used_value) is not int or type(limit_value) is not int:
+            raise ValueError("non-integral action budget")
+        used, limit = used_value, limit_value
+        if used < 0 or limit <= 0 or used > limit:
+            raise ValueError("invalid action budget range")
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        pass
+    else:
+        diagnostics["total_actions"] = used
+        diagnostics["experimental_action_budget"] = {
+            "used": used, "limit": limit, "remaining": limit - used,
+        }
     return diagnostics
 
 

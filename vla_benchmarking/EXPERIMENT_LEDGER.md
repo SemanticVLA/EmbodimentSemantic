@@ -1,5 +1,82 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Handoff diagnostic release gate — 2026-09-04
+
+Implemented standalone `run_molmo_opening_probe.py` and isolated
+`V9D_MOLMO_HANDOFF_PROBE=1` launcher mode. Normal canary/default dispatch is
+unchanged. Four fresh cases record immediate versus original-target settling;
+numeric controller telemetry and failure traces are retained. Exit0 means
+four durable diagnostic records, not successful opening or task completion.
+`treatment_passed` requires both treatment openings completed; separately
+`control_reproduced` requires both expected immediate pose_drift failures.
+
+Also fixed future early-failure reporting: valid experimental shared budget
+and opening/hover audits flow into partial_audit; campaign totals prefer live
+wrapper totals over stale nested retry results and count each cell once.
+Missing action evidence is reported explicitly, not assumed zero. Historical
+job1919318 raw artifacts are unchanged; its two opening failures used118actions.
+
+Final combined gate **89 passed in7.89s**, independent tester **12 passed**,
+focused reviewer **22 passed** and **APPROVE**, no HIGH/BLOCKER. Actual Bash
+mode selection/context/dispatch/rejection tested; compilation, shell syntax,
+diff check and frozen canonical-config comparison passed. One review finding
+in failure-trace construction was fixed and narrowly regression-tested.
+Approval covers only this bounded diagnostic. Do not deploy settling into
+the production canary unless both treatment cases pass their unchanged guards.
+
+## Opening arm stopped; bounded handoff diagnostic next — 2026-09-04
+
+Fresh live audit **00:40:09 UTC**: job1919318 remains RUNNING; narrowed-opening
+arm stopped after two distinct vanillaT4 cells (seeds1000/1001), both
+`preshape_failed:pose_drift`, before perception/candidates/evaluator. Thus
+**0 successes /12 planned, 2 attempted**, not an executable completed screen.
+Control continues; later artifact read showed **1 success /8 terminal /12
+planned**, four retention-evidence cells, one successful retry,2060actions,
+692.257s perception. These control numbers are partial.
+
+Failed helper traces show13/10shaping actions and shared totals61/57.
+The current campaign incorrectly reports0actions for these early failures;
+**118 total actions are verified from the two durable preshape audits**.
+Preserve original artifacts; repair only future partial-audit reporting.
+
+Pose drift reaches20.0719/20.0811mm; last available opening69.42/71.03mm.
+Hover had satisfied its20mm positional tolerance but was still translating
+about6mm in its last50ms policy step. Immediate shaping anchored its hold
+to that transient measured pose. This suggests a handoff dynamics problem;
+it does not prove a scale/frame defect. Installed OSC config is delta mode,
+XYZscale50mm and rotationscale0.5rad; helper and hover use the same conversion.
+
+Architect-approved next diagnostic: two fresh vanillaT4 seeds, immediate
+preshape versus settle at the ORIGINAL nominal hover target then unchanged
+preshape. No Molmo/SAM inference, candidates, grasp execution or evaluator.
+Settling requires five consecutive steps with <=0.5mm displacement and
+<=0.01rad orientation increment, within original20mm/.12rad hover tolerance
+and >=80mm above observed regionq90; max160settlingactions/shared1200.
+Keep all preshape guards unchanged. Require completed35-45mm measured opening
+on BOTH settled cases before considering a production repair. If not, pivot;
+no iterative threshold/gain tuning. Read robot-only controller telemetry.
+
+## Fixed-opening paired screen launched — 2026-09-04 00:27 UTC
+
+Job **1919318**, submitted **00:27:14 UTC**, verified **RUNNING** at
+**00:27:41 UTC** on compute-3-12 (one NVIDIA A40, eight CPUs, 64GB, two-hour
+limit). Exact clean execution source **97e428fcaec7030b17b8186afdb67356c81b9989**;
+label `v9d_molmo_opening_97e428f`. Final combined gate **101 passed**;
+independent focused review approved, no remaining HIGH/BLOCKER findings.
+
+Ordered screen: **opening40mm first**, then **opening_control**, 12 planned
+cells each; same rim_clearance prompt, hover20mm, release_plus20mm, pinned
+MolmoPoint/BF16. Runtime verified torch2.10.0, Transformers4.57.1, actual A40,
+matching expected/actual SHA. First arm started; no completed results yet.
+Opening-probe mode is inherently screen-only; raw `screen_only=0` in job
+context is an explicit mode-validation requirement, not extension permission.
+No SAM, default promotion, threshold relaxation, or evaluator change.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_opening_97e428f_1919318/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_opening_97e428f_1919318`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919318.out`.
+Bundle SHA256: `a08d91b286551fcd2eacb7a4de6e08aca22cb596c24f5257a4f470f79bd2268a`.
+
 ## Fixed-opening paired screen — launch-ready 2026-09-04
 
 Validation: final combined gate **101 passed in 9.41s**, including the corrected
