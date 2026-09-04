@@ -51,6 +51,29 @@ def test_motion_profile_resolution_is_explicit_and_rgbd_gated():
         runner.resolve_motion_profile("placement_micro5mm", region_backend="sam3")
 
 
+def test_opening_profile_is_explicit_and_rgbd_agentview_gated():
+    control = runner.resolve_opening_profile(
+        "full_open", region_backend="sam3", camera_name=runner.AGENTVIEW,
+    )
+    assert control["name"] == "full_open"
+    assert control["target_opening_m"] is None
+    treatment = runner.resolve_opening_profile(
+        "preshape40mm", region_backend="rgbd", camera_name=runner.AGENTVIEW,
+    )
+    assert treatment["target_opening_m"] == pytest.approx(0.040)
+    assert treatment["accepted_opening_band_m"] == (0.035, 0.045)
+    assert treatment["settled_range_m"] == pytest.approx(0.00025)
+    assert treatment["max_actions"] == 160
+    with pytest.raises(ValueError, match="RGB-D agentview"):
+        runner.resolve_opening_profile(
+            "preshape40mm", region_backend="sam3", camera_name=runner.AGENTVIEW,
+        )
+    with pytest.raises(ValueError, match="RGB-D agentview"):
+        runner.resolve_opening_profile(
+            "preshape40mm", region_backend="rgbd", camera_name=runner.WRIST_CAMERA,
+        )
+
+
 def test_release_profile_passes_only_bounded_height_offset_to_candidate_runner():
     baseline = runner.resolve_motion_profile("baseline", region_backend="sam3")
     micro = runner.resolve_motion_profile("placement_micro5mm", region_backend="rgbd")

@@ -24,6 +24,7 @@ class Arm:
     variant: str
     prompt: str = "rim_downward_approach"
     motion_profile: str = "baseline"
+    opening_profile: str = "full_open"
 
 
 ARMS = (
@@ -38,6 +39,10 @@ MOTION_PROBE_ARMS = (
     Arm("placement_control", "molmo_dense_agentview"),
     Arm("placement_burst5mm", "molmo_dense_agentview", motion_profile="placement_micro5mm"),
 )
+OPENING_PROBE_ARMS = (
+    Arm("opening40mm", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "preshape40mm"),
+    Arm("opening_control", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "full_open"),
+)
 TERMINAL = {"completed", "failed", "interrupted"}
 CONTRACT_ERRORS = (
     "evaluator called before retreat", "evaluator use before retreat",
@@ -45,6 +50,7 @@ CONTRACT_ERRORS = (
     "action budget exceeded", "rgb and metric depth are not aligned",
     "evaluator failure",
 )
+PRESHAPE_FAILURE_CATEGORIES = ("below_band", "timeout", "pose_drift", "missing_measurement", "motion_failed", "unsupported_budget", "opening_guard")
 
 
 class ArmStop(RuntimeError):
@@ -117,6 +123,13 @@ class StopRules:
             for result in attempt.get("results", []):
                 if result.get("error_type") in {"ImportError", "ModuleNotFoundError", "NameError", "TypeError", "AttributeError", "FileNotFoundError"} or "calibration failed closed" in str(result.get("error", "")).lower():
                     operational.append(result)
+        # Preshape failures carry a stable helper category; avoid keying stop
+        # accounting on measured numeric details that differ across cells.
+        audit_text = json.dumps(record.get("audit", {}), default=str).lower() + " " + error.lower()
+        for category in PRESHAPE_FAILURE_CATEGORIES:
+            if f"preshape_failed:{category}" in audit_text or f"preshape {category}" in audit_text:
+                operational.append({"stage": "preshape", "error_type": "PreshapeError", "error": category})
+                break
         # Empty closes, timeouts, no candidates and retention failures remain
         # grasp outcomes. Wrapped programming/calibration failures still pause.
         for failure in operational:
@@ -218,26 +231,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", default="v9d_molmo_rgbd")
     parser.add_argument("--screen-only", action="store_true")
     parser.add_argument("--arms", help="comma-separated subset of existing screen arms; fresh run identity required")
-    parser.add_argument("--observation-profile", choices=("baseline", "hover20mm"), default="baseline")
-    parser.add_argument("--motion-profile", choices=canary.MOTION_PROFILE_NAMES, default="baseline")
+    parser.add_argument("--observation-profile", choices=("baseline", "hover20mm"), default=None)
+    parser.add_argument("--motion-profile", choices=canary.MOTION_PROFILE_NAMES, default=None)
     parser.add_argument("--motion-probe", action="store_true", help="paired 12-cell placement-control/bounded-correction diagnostic; never extends to 60")
+    parser.add_argument("--opening-probe", action="store_true", help="paired 12-cell full-open versus measured 40mm preshape diagnostic")
     parser.add_argument("--repair-gate", action="store_true", help="require the first T4/T6 cells to clear hover and contact before continuing the campaign")
     args = parser.parse_args(argv)
     if args.motion_probe and args.repair_gate:
         parser.error("--motion-probe cannot enable the obsolete global repair gate")
-    if args.motion_probe and (args.arms is not None or args.observation_profile != "baseline" or args.motion_profile != "baseline"):
+    if args.opening_probe and (args.motion_probe or args.repair_gate or args.arms is not None or args.screen_only):
+        parser.error("--opening-probe fixes its paired arms and screen-only execution")
+    if args.opening_probe and (args.observation_profile not in (None, "hover20mm") or args.motion_profile not in (None, "release_plus20mm")):
+        parser.error("--opening-probe requires --observation-profile hover20mm and --motion-profile release_plus20mm")
+    observation_profile = "hover20mm" if args.opening_probe else (args.observation_profile or "baseline")
+    motion_profile = "release_plus20mm" if args.opening_probe else (args.motion_profile or "baseline")
+    if args.motion_probe and (args.arms is not None or args.observation_profile not in (None, "baseline") or args.motion_profile not in (None, "baseline")):
         parser.error("--motion-probe fixes its paired arms and baseline observation/profile selection")
     if args.arms is not None and args.repair_gate:
         parser.error("--arms cannot enable the obsolete global repair gate")
-    arms = MOTION_PROBE_ARMS if args.motion_probe else ARMS
+    arms = OPENING_PROBE_ARMS if args.opening_probe else MOTION_PROBE_ARMS if args.motion_probe else ARMS
     if args.arms is not None:
         names = args.arms.split(",")
         available = {arm.name: arm for arm in ARMS}
         if len(names) != len(set(names)) or any(name not in available for name in names):
             parser.error("--arms must contain unique existing screen arm names")
         arms = tuple(available[name] for name in names)
-    if not args.motion_probe:
-        arms = tuple(Arm(arm.name, arm.variant, arm.prompt, args.motion_profile) for arm in arms)
+    if not args.motion_probe and not args.opening_probe:
+        arms = tuple(Arm(arm.name, arm.variant, arm.prompt, motion_profile, arm.opening_profile) for arm in arms)
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
     report_path = root / "campaign.json"
@@ -247,10 +267,20 @@ def main(argv: list[str] | None = None) -> int:
         "schema": "v9d_molmo_rgbd_campaign.v1", "label": args.label,
         "baseline_commit": canary.BASELINE_COMMIT, "sam3_used": False,
         "region_backend": "v9d_rgbd_region", "arms": [asdict(a) for a in arms],
-        "mode": "placement_motion_probe" if args.motion_probe else "candidate_screen",
+        "mode": "opening_probe" if args.opening_probe else "placement_motion_probe" if args.motion_probe else "candidate_screen",
         "motion_diagnostics": bool(args.motion_probe),
-        "observation_profile": args.observation_profile,
-        "motion_profile": "paired_probe" if args.motion_probe else args.motion_profile,
+        "observation_profile": observation_profile,
+        "motion_profile": "paired_probe" if args.motion_probe else motion_profile,
+        "opening_probe": bool(args.opening_probe),
+        "opening_profile": "paired_probe" if args.opening_probe else "full_open",
+        "opening_profile_params": (
+            {
+                "full_open": canary.resolve_opening_profile("full_open", region_backend="rgbd", camera_name=canary.AGENTVIEW),
+                "preshape40mm": canary.resolve_opening_profile("preshape40mm", region_backend="rgbd", camera_name=canary.AGENTVIEW),
+            }
+            if args.opening_probe
+            else canary.resolve_opening_profile("full_open", region_backend="rgbd", camera_name=canary.AGENTVIEW)
+        ),
         "screen_planned_per_arm": 12, "screen": [], "finalists": [],
         "status": "running", "started_unix": time.time(),
         "comparison": "exploratory grasp pipeline comparison; geometry control shares motion and hover",
@@ -267,6 +297,15 @@ def main(argv: list[str] | None = None) -> int:
             "phase_step_limit": 160, "cell_action_limit": 1200,
             "convergence_target": "original_waypoint", "finalist_extension": False,
             "interpretation": "motion response and available robot load diagnostics; no response without load evidence is inconclusive; unchanged evaluator determines task success",
+        }
+    if args.opening_probe:
+        report["comparison"] = "paired exploratory opening-response probe; same dense-agentview perception, rim-clearance prompt, hover and release profiles; only measured preshape opening differs"
+        report["opening_probe_contract"] = {
+            "planned_cells": 24, "arm_order": [arm.name for arm in OPENING_PROBE_ARMS],
+            "control_profile": "full_open", "treatment_profile": "preshape40mm",
+            "observation_profile": "hover20mm", "motion_profile": "release_plus20mm",
+            "screen_only": True, "finalist_extension": False,
+            "interpretation": "whole opening-policy comparison; shaping occurs before each fresh RGB-D proposal capture and candidate geometry uses fresh measured calibration",
         }
     write_json(report_path, report)
     runtime = MolmoPointRuntime()
@@ -294,8 +333,10 @@ def main(argv: list[str] | None = None) -> int:
             canary_args.extend(["--motion-profile", arm.motion_profile, "--motion-diagnostics"])
         elif arm.motion_profile != "baseline":
             canary_args.extend(["--motion-profile", arm.motion_profile])
-        if args.observation_profile != "baseline":
-            canary_args.extend(["--observation-profile", args.observation_profile])
+        if args.opening_probe or arm.opening_profile != "full_open":
+            canary_args.extend(["--opening-profile", arm.opening_profile])
+        if observation_profile != "baseline":
+            canary_args.extend(["--observation-profile", observation_profile])
         rc = canary.main(canary_args, molmo_runtime=runtime, cell_completed_callback=on_cell)
         result = {"arm": asdict(arm), "phase": phase, "returncode": rc,
                   "stop_reason": rules.reason, "fatal": rules.fatal,
@@ -318,9 +359,9 @@ def main(argv: list[str] | None = None) -> int:
             report["finished_unix"] = time.time()
             write_json(report_path, report)
             return 2
-    if args.motion_probe:
+    if args.motion_probe or args.opening_probe:
         complete = all(r["returncode"] == 0 and r["metrics"]["terminal_cells"] == 12 for r in report["screen"])
-        report["status"] = "motion_probe_completed" if complete else "motion_probe_stopped"
+        report["status"] = ("opening_probe_completed" if args.opening_probe else "motion_probe_completed") if complete else ("opening_probe_stopped" if args.opening_probe else "motion_probe_stopped")
         report["finished_unix"] = time.time()
         write_json(report_path, report)
         return 0 if complete else 2

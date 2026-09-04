@@ -1,5 +1,112 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Fixed-opening paired screen — launch-ready 2026-09-04
+
+Validation: final combined gate **101 passed in 9.41s**, including the corrected
+shell regression; independent test-only cleanup gate **43 passed in 1.70s**.
+Previously 97 focused tests passed before the final launcher correction;
+independent reviewer ran 47 targeted tests and approved the bounded paired
+canary with no remaining HIGH/BLOCKER findings. Actual job-context rendering
+under strict shell settings passed with opening mode unset, 0 and 1.
+The shell heredoc correction was rechecked independently. Frozen canonical
+config diff remains empty. Approval is for execution, not grasp improvement.
+
+Next hypothesis: full-open fingers block candidate approaches that may fit with
+a narrower opening. Exact local replay of the archived T4 capture reproduces
+baseline0/144; translating only the two finger/pad groups to fixed40mm admits
+1/144, sampled clearance6.063mm. Separate required-opening+2mm sensitivity
+admits2/144, minimum6.843mm. These hypothetical poses preserve palm, box
+shapes, seed/grid and original full-open robot exclusion; neither establishes
+a successful grasp or actuator accuracy. All original candidates required
+about15–22mm, versus observed full usable opening78.56mm.
+
+Architect-approved production design uses NO synthetic box translation:
+`opening_profile=full_open|preshape40mm`, defaultfull_open. Treatment shapes
+at the converged observation hover, before fresh RGB-D, then uses actual
+measured contact-pad geometry and the unchanged6mm candidate filter.
+Retry shaping is after completed open/retreat and before fresh capture.
+Fixed nominal40mm, accepted35–45mm; one +1 close pulse, at least5 zero-hold
+actions, last3 measurements stable within0.25mm. Below35mm/missing data/pose
+drift/budget exhaustion fail closed. Limit160 total shaping actions, all
+charged to the shared1200. No absolute gripper command or magnitude scaling.
+
+Runtime evidence: installed robosuite PandaGripper.format_action increments
+its normalized target by sign(action)*.01 on EVERY physics substep;
+SingleArm.control calls grip_action regardless policy_step. Zero holds the
+target; fractional nonzero command magnitudes do not meter a smaller change.
+Measured stopping/settling is therefore required.
+
+Planned one-job paired12+12 screen: opening40mm/preshape40mm first, then
+opening_control/full_open; both dense_agentview_clearance policy, rim_clearance
+prompt, hover20mm, release_plus20mm, same pinned MolmoPoint and canonical
+tasks/seeds/suites. No automatic60 extension. Opening change affects visible
+robot configuration as well as attainable candidate geometry; this is a
+whole opening-policy comparison, not an isolated static-box experiment.
+
+Known remaining limitation: raw RGB identifies some frequent blocker pixels
+as robot wrist/forearm. Current exclusion only covers the hand; full-robot
+exclusion requires measured robot-owned geometry and is deferred, not mixed
+into this ablation. Evaluator/object ground truth stays excluded.
+
+## Final placement and clearance-probe results — 2026-09-03 23:53 UTC
+
+Both jobs are terminal with workload exit0 and archive VERIFIED.
+**1919241: 2/12 successes**, eight retention-evidence cells, two successful
+retries, 3,593 actions, 2,058.286s perception; each suite1/6. Failures: four
+no_candidates, three grasp_failed, three evaluator-rejected placements.
+Visual-XY placement does not improve the observed screen over prior2/12 or
+historical matching3/12. No60-cell extension or default promotion.
+
+**1919242: diagnostic completed, not a task-success score.** Same captured
+geometry yields **0 admitted /144 rejected** at BOTH6mm and5mm admission;
+all are approach_obstruction. Robot exclusion is fixed6mm, seed/upper-rim
+audits identical. Final controlled_stop true; first cell completed vanillaT4
+seed1000 with null evaluator; motion/evaluator guards each0. Input hash
+`c60a3ea83cb4bcd717587125b2f4ec9b4342c9d6bca3476bb847450579c08231`;
+NPZ SHA256 `ef5651d9fdbf045b78c849ad8acaa6b995348029925053fa7c099eea39cdbd87`.
+The canary's deliberate callback creates a failed-status marker internally;
+the probe's final controlled-stop proof and exit0 establish diagnostic success.
+This is not a failed task evaluation or candidate-motion run.
+
+Decision: DROP the5mm-margin idea; do not launch its motion canary. Inspect
+observed obstruction/contact/opening geometry for a different targeted repair.
+At6mm,84first blockers are already at the pregrasp sample; at5mm,69. The
+finger/hand boxes are the blocking primitives. These locate an issue but do
+not alone prove an erroneous calibration or identify obstacles semantically.
+
+## T4 perception-only diagnostic submitted — 2026-09-03
+
+Fresh audit **23:41:06 UTC**: **1919242 RUNNING on compute-4-11**, elapsed45s.
+Exact source SHA, one NVIDIA A40, BF16, torch2.10.0 and Transformers4.57.1
+verified from emitted runtime record. Job1919241 also remains RUNNING.
+
+Job **1919242** submitted at **23:39:48 UTC**, exact source
+`c818ed9a59a12af0c86107f1081d1f2d5e0a7d3e`, label
+`v9d_molmo_geometry_probe_c818ed9`. This is a diagnostic, not a grasp-success
+canary. One A40, eight CPUs, 64GB, bounded 30-minute allocation. Bundle SHA-256
+`dac9640bb09512bb0f185bccc42c105649735eb5bf70c5b74767091c5d4cc77a`
+and clean immutable release were verified before submission; frozen config is
+unchanged. Same-frame geometry compares 6mm versus 5mm admission, fixing robot
+exclusion at 6mm. Normal observation is allowed; grasp execution and evaluator
+are guarded. No claim that a smaller margin is safe or improves task success.
+
+Launch: `V9D_MOLMO_GEOMETRY_PROBE=1`, `V9D_MOLMO_ARMS=dense_agentview_clearance`,
+`V9D_MOLMO_OBSERVATION_PROFILE=hover20mm`, `V9D_MOLMO_MOTION_PROFILE=baseline`,
+`V9D_MOLMO_SCREEN_ONLY=1`, repair gate and motion probe both 0;
+`sbatch --parsable --time=00:30:00 vla_benchmarking/legion/v9d_molmo_campaign.sbatch`.
+The probe fixes the actual cell to vanilla T4 seed1000 and rim_clearance.
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_geometry_probe_c818ed9_1919242/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_geometry_probe_c818ed9_1919242`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919242.out`.
+No automatic resume or duplicate submission. Use actual admitted counts and
+final zero-guard-invocation proof to decide the next experiment.
+
+At **23:39:53 UTC**, placement job **1919241** has **2 successes /11 terminal
+/12 planned**, seven retention-evidence cells, two successful retries,
+3,304 actions and 1,887.026s perception. Failures: four no_candidates, two
+grasp_failed, three evaluator-rejected placements. Each suite currently 1/6.
+Not yet terminal; no improvement established against historical matching 3/12.
+
 ## Bounded T4 perception replay and resume repair — preparation 2026-09-03
 
 Final local gate:80 focused tests passed; independent tester63checks including

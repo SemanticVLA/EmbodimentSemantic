@@ -88,6 +88,34 @@ OBSERVATION_PROFILE_PARAMS = {
     },
 }
 
+OPENING_PROFILE_NAMES = ("full_open", "preshape40mm")
+PRESHAPE40MM_PARAMS = {
+    "target_opening_m": 0.040,
+    "accepted_opening_band_m": (0.035, 0.045),
+    "settled_range_m": 0.00025,
+    "settle_steps": 5,
+    "close_pulse": 1.0,
+    "max_actions": 160,
+    "shared_action_budget": 1200,
+}
+
+
+def resolve_opening_profile(
+    name: str,
+    *,
+    region_backend: str,
+    camera_name: str,
+) -> dict[str, Any]:
+    """Resolve the bounded opening treatment without changing full-open behavior."""
+    if name not in OPENING_PROFILE_NAMES:
+        raise ValueError(f"opening profile must be one of {OPENING_PROFILE_NAMES}")
+    if name == "preshape40mm":
+        if region_backend != "rgbd" or camera_name != AGENTVIEW:
+            raise ValueError("preshape40mm requires the RGB-D agentview path")
+        return {"name": name, **dict(PRESHAPE40MM_PARAMS)}
+    return {"name": name, "target_opening_m": None, "accepted_opening_band_m": None,
+            "settled_range_m": None, "max_actions": 0}
+
 
 def resolve_motion_profile(name: str, *, region_backend: str) -> dict[str, Any]:
     """Resolve the bounded motion treatment without changing baseline knobs."""
@@ -165,6 +193,8 @@ def build_scientific_identity(
     task_ids: Sequence[int],
     seed_base: int,
     suite_modes: Sequence[str],
+    opening_profile: str = "full_open",
+    opening_profile_params: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Build a stable scientific identity, excluding operational run metadata."""
     payload = {
@@ -185,6 +215,10 @@ def build_scientific_identity(
         "observation": {
             "profile": str(observation_profile),
             "params": _json_safe(observation_profile_params),
+        },
+        "opening": {
+            "profile": str(opening_profile),
+            "params": _json_safe(opening_profile_params or {}),
         },
         "task_seed": {"task_ids": [int(value) for value in task_ids], "seed_base": int(seed_base)},
         "suite_modes": [str(value) for value in suite_modes],
@@ -679,6 +713,9 @@ def run_canary_episode(
     motion_diagnostics: bool = False,
     observation_profile: str = "baseline",
     observation_profile_params: Mapping[str, Any] | None = None,
+    opening_profile: str = "full_open",
+    opening_profile_params: Mapping[str, Any] | None = None,
+    before_capture_fn: Callable[[Any, int], Any] | None = None,
 ) -> dict[str, Any]:
     """Run one bounded canary episode, regenerating candidates after failure."""
     selected_variant = VARIANTS[variant] if isinstance(variant, str) else variant
@@ -714,7 +751,13 @@ def run_canary_episode(
     final_result: Mapping[str, Any] | None = None
     for attempt_index in range(1, MAX_ATTEMPTS + 1):
         if attempt_index > 1:
-            av_capture = capture_fn(env, resolution=resolution, camera_name=AGENTVIEW)
+            if before_capture_fn is not None:
+                refreshed_capture = before_capture_fn(env, attempt_index)
+                if refreshed_capture is None:
+                    raise RuntimeError("before_capture_fn must return a fresh agentview capture")
+                av_capture = refreshed_capture
+            else:
+                av_capture = capture_fn(env, resolution=resolution, camera_name=AGENTVIEW)
             source_capture = av_capture if selected_variant.camera_name == AGENTVIEW else capture_fn(
                 env, resolution=resolution, camera_name=selected_variant.camera_name
             )
@@ -837,6 +880,8 @@ def run_canary_episode(
         "motion_diagnostics": bool(motion_diagnostics),
         "observation_profile": observation_profile,
         "observation_profile_params": _json_safe(observation_profile_params or {}),
+        "opening_profile": str(opening_profile),
+        "opening_profile_params": _json_safe(opening_profile_params or {}),
     }
     digest = hashlib.sha256(json.dumps(_json_safe(manifest), sort_keys=True).encode()).hexdigest()
     manifest["experiment_config_hash"] = digest
@@ -2156,6 +2201,7 @@ def main(
     parser.add_argument("--motion-profile", choices=MOTION_PROFILE_NAMES, default="baseline")
     parser.add_argument("--motion-diagnostics", action="store_true", help="record bounded motion diagnostics")
     parser.add_argument("--observation-profile", choices=OBSERVATION_PROFILE_NAMES, default="baseline")
+    parser.add_argument("--opening-profile", choices=OPENING_PROFILE_NAMES, default="full_open")
     parser.add_argument("--sam3-source", type=Path, required=False)
     parser.add_argument("--sam3-checkpoint", type=Path, required=False)
     parser.add_argument("--sam3-source-commit", required=False)
@@ -2173,6 +2219,10 @@ def main(
     try:
         resolved_motion_profile = resolve_motion_profile(args.motion_profile, region_backend=args.region_backend)
         resolved_observation_profile = resolve_observation_profile(args.observation_profile)
+        resolved_opening_profile = resolve_opening_profile(
+            args.opening_profile, region_backend=args.region_backend,
+            camera_name=VARIANTS[args.variant].camera_name,
+        )
         if VARIANTS[args.variant].region_backend == "rgbd" and args.region_backend != "rgbd":
             raise ValueError("rgbd_geometry_agentview requires --region-backend rgbd")
         tasks = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
@@ -2270,6 +2320,8 @@ def main(
         motion_diagnostics=bool(args.motion_diagnostics),
         observation_profile=resolved_observation_profile["name"],
         observation_profile_params=resolved_observation_profile,
+        opening_profile=resolved_opening_profile["name"],
+        opening_profile_params=resolved_opening_profile,
         task_ids=tasks,
         seed_base=args.seed_base,
         suite_modes=suites,
@@ -2292,6 +2344,8 @@ def main(
         "motion_diagnostics": bool(args.motion_diagnostics),
         "observation_profile": resolved_observation_profile["name"],
         "observation_profile_params": _json_safe(resolved_observation_profile),
+        "opening_profile": resolved_opening_profile["name"],
+        "opening_profile_params": _json_safe(resolved_opening_profile),
         "execution_provenance": execution_provenance,
         "scientific_identity_payload": scientific_identity_payload,
         "scientific_identity_hash": scientific_identity_hash,
@@ -2409,6 +2463,7 @@ def main(
         motion_settings["motion_profile"] = resolved_motion_profile["name"]
         motion_settings["motion_profile_params"] = _json_safe(resolved_motion_profile)
         motion_settings["observation_profile"] = resolved_observation_profile
+        motion_settings["opening_profile"] = resolved_opening_profile
         bboxes = kwargs.get("bboxes")
         if not isinstance(bboxes, Mapping):
             raise ValueError("canary episode requires existing arrow input-generation bboxes")
@@ -2444,6 +2499,61 @@ def main(
             motion_started_callback=motion_callback,
             motion_settings=motion_settings,
         )
+
+        opening_audit: Mapping[str, Any] | None = None
+
+        def measure_opening(measure_env: Any = env) -> float:
+            # The shaping helper measures the real contact-pad geometry before
+            # and after its bounded pulses.  Do not derive this from commands
+            # or from the candidate's requested aperture.
+            measured_calibration, measured_transform, measured_probe = probe_robot_calibration(measure_env)
+            worker_state["robot_calibration"] = measured_calibration
+            worker_state["transform"] = measured_transform
+            geometry = measured_probe.get("gripper_geometry") if isinstance(measured_probe, Mapping) else None
+            if not isinstance(geometry, Mapping) or geometry.get("measured_opening_m") is None:
+                raise RuntimeError("preshape opening measurement is unavailable")
+            opening = float(geometry["measured_opening_m"])
+            if not math.isfinite(opening):
+                raise RuntimeError("preshape opening measurement is non-finite")
+            worker_state["opening_m"] = opening
+            if worker_state.get("worker") is not None:
+                worker_state["worker"].robot_calibration = measured_calibration
+            setattr(measure_env, "_molmo_sam3_robot_calibration_probe", measured_probe)
+            return opening
+
+        def run_preshape(target_env: Any, target_output: Path) -> Mapping[str, Any]:
+            try:
+                from .molmo_sam3.preshape import perform_preshape
+            except ImportError:  # pragma: no cover - direct script use
+                from molmo_sam3.preshape import perform_preshape
+            try:
+                audit = perform_preshape(
+                    target_env, measure_opening_fn=measure_opening,
+                    output_dir=target_output,
+                    motion_started_callback=motion_callback,
+                    motion_settings=motion_settings,
+                )
+            except Exception as exc:
+                # Keep retry/stop accounting stable across helper versions:
+                # backend failures are categorized by the helper, not by the
+                # incidental numeric details in their exception text.
+                audit = getattr(exc, "audit", None)
+                if not isinstance(audit, Mapping):
+                    raise RuntimeError("preshape_failed:motion_failed") from exc
+                setattr(target_env, "_molmo_sam3_opening_preshape", dict(audit))
+                category = str(getattr(exc, "category", audit.get("failure_reason", "motion_failed")))
+                raise RuntimeError(f"preshape_failed:{category}") from exc
+            if not isinstance(audit, Mapping):
+                raise RuntimeError("preshape helper returned an invalid audit")
+            if str(audit.get("status", "")).lower() != "completed":
+                category = str(audit.get("failure_reason", "motion_failed"))
+                setattr(target_env, "_molmo_sam3_opening_preshape", dict(audit))
+                raise RuntimeError(f"preshape_failed:{category}")
+            setattr(target_env, "_molmo_sam3_opening_preshape", dict(audit))
+            return audit
+
+        if resolved_opening_profile["name"] == "preshape40mm":
+            opening_audit = run_preshape(env, output_dir / "opening_preshape")
         fresh = episode.capture_agentview(env, resolution=resolution, camera_name=AGENTVIEW)
         hover_audit = getattr(env, "_molmo_sam3_observation_hover", None)
         if isinstance(hover_audit, dict):
@@ -2483,6 +2593,17 @@ def main(
             worker_state["worker"].robot_calibration = calibration
             setattr(_env, "_molmo_sam3_robot_calibration_probe", probe)
 
+        def before_capture(_env: Any, attempt_index: int) -> Any:
+            # Recovery has already completed before this callback.  Shape first,
+            # then capture; no motion is allowed after this returned frame.
+            nonlocal opening_audit
+            if resolved_opening_profile["name"] != "preshape40mm":
+                return None
+            opening_audit = run_preshape(
+                _env, output_dir / "attempts" / f"attempt_{int(attempt_index):02d}" / "opening_preshape"
+            )
+            return episode.capture_agentview(_env, resolution=resolution, camera_name=AGENTVIEW)
+
         transform = worker_state.get("transform")
         if transform is None or worker_state.get("worker") is None:
             raise RuntimeError("Panda calibration/model worker was not initialized")
@@ -2514,6 +2635,23 @@ def main(
                 return {"status": "recovery_failed", "grasp_retained": False,
                         "retreat_complete": False, "total_actions": action_count_before,
                         "error": "live contact calibration unavailable before candidate"}
+            if resolved_opening_profile["name"] == "preshape40mm":
+                try:
+                    actual_opening = float(measure_opening(env))
+                    low, high = (float(value) for value in resolved_opening_profile["accepted_opening_band_m"])
+                    required_opening = float(context.candidate.opening_m)
+                    if not math.isfinite(actual_opening) or not low <= actual_opening <= high or actual_opening < required_opening:
+                        raise ValueError(
+                            f"measured opening {actual_opening:.6f} m outside [{low:.6f}, {high:.6f}] "
+                            f"or below candidate requirement {required_opening:.6f} m"
+                        )
+                except Exception as exc:
+                    return {
+                        "status": "recovery_failed", "grasp_retained": False,
+                        "retreat_complete": False, "total_actions": action_count_before,
+                        "error_type": "PreshapeOpeningGuardError",
+                        "error": f"preshape_failed:opening_guard: {exc}",
+                    }
             try:
                 candidate_motion_kwargs = _candidate_motion_kwargs(
                     resolved_motion_profile,
@@ -2531,7 +2669,7 @@ def main(
                     canary_video_dir=kwargs.get("canary_video_dir"),
                     experimental_candidate=context.candidate,
                     experimental_eef_orientation_transform=transform,
-                    experimental_gripper_opening_m=worker_state.get("opening_m"),
+                    experimental_gripper_opening_m=(actual_opening if resolved_opening_profile["name"] == "preshape40mm" else worker_state.get("opening_m")),
                     post_lift_retention_gate=retention_gate,
                     retreat_completed_callback=retreat_completed_callback,
                     experimental_action_budget=getattr(env, "_molmo_sam3_action_budget", None),
@@ -2591,6 +2729,9 @@ def main(
             motion_diagnostics=bool(args.motion_diagnostics),
             observation_profile=resolved_observation_profile["name"],
             observation_profile_params=resolved_observation_profile,
+            opening_profile=resolved_opening_profile["name"],
+            opening_profile_params=resolved_opening_profile,
+            before_capture_fn=(before_capture if resolved_opening_profile["name"] == "preshape40mm" else None),
         )
         final = result.get("final_result") if isinstance(result.get("final_result"), Mapping) else {}
         audit = final.get("audit") if isinstance(final, Mapping) else None
@@ -2600,6 +2741,9 @@ def main(
             "total_actions": int(getattr(env, "_molmo_sam3_action_count", 0)),
             "gripper_open_preflight": getattr(env, "_molmo_sam3_gripper_open", None),
             "observation_hover": getattr(env, "_molmo_sam3_observation_hover", None),
+            "opening_profile": resolved_opening_profile["name"],
+            "opening_profile_params": _json_safe(resolved_opening_profile),
+            "opening_preshape": _json_safe(opening_audit),
             "phases": audit.get("phases", []) if isinstance(audit, Mapping) else [],
             "motion_phases_reached": final.get("motion_phases_reached", []) if isinstance(final, Mapping) else [],
             "grasp_search": [], "canary_manifest": result,
@@ -2642,6 +2786,8 @@ def main(
                     "scientific_identity_payload": scientific_identity_payload,
                     "observation_profile": resolved_observation_profile["name"],
                     "observation_profile_params": _json_safe(resolved_observation_profile),
+                    "opening_profile": resolved_opening_profile["name"],
+                    "opening_profile_params": _json_safe(resolved_opening_profile),
                     **({
                         "sam3_source_commit": args.sam3_source_commit,
                         "sam3_checkpoint_sha256": args.sam3_checkpoint_sha256,
