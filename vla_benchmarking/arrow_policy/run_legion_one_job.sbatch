@@ -154,6 +154,11 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 export PATH="$(dirname "$PYTHON"):$PATH"
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
+# The shared Legion environment contains optional pytest entry-point plugins
+# whose dependency versions are not compatible with Python 3.12 (Hydra is one
+# example).  The experiment only needs the package's own tests, so keep the
+# preflight deterministic and isolated from unrelated site-wide plugins.
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
 export LIBERO_CONFIG_PATH
