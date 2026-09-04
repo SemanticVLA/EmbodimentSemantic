@@ -19,6 +19,7 @@
 #   V9D_MOLMO_MOTION_PROBE    1 selects the paired 24-cell placement diagnostic
 #   V9D_MOLMO_OPENING_PROBE   1 selects the paired full-open/40mm-opening screen
 #   V9D_MOLMO_SETTLED_OPENING_PROBE 1 selects the paired settled opening screen
+#   V9D_MOLMO_PARKED_OPENING_PROBE 1 selects agentview opening without hover
 #   V9D_MOLMO_HANDOFF_PROBE   1 selects the model-free robot hover/preshape diagnostic
 #   V9D_MOLMO_ARMS            comma-separated existing screen arm names
 #   V9D_MOLMO_OBSERVATION_PROFILE baseline (default) or hover20mm
@@ -57,7 +58,7 @@ CANARY_LABEL="${CANARY_LABEL:-${1:-}}"
 case "${V9D_MOLMO_HANDOFF_PROBE:-0}" in
   0) ;;
   1)
-    for incompatible in V9D_MOLMO_OPENING_PROBE V9D_MOLMO_SETTLED_OPENING_PROBE V9D_MOLMO_MOTION_PROBE V9D_MOLMO_REPAIR_GATE V9D_MOLMO_GEOMETRY_PROBE V9D_MOLMO_SCREEN_ONLY; do
+    for incompatible in V9D_MOLMO_OPENING_PROBE V9D_MOLMO_SETTLED_OPENING_PROBE V9D_MOLMO_PARKED_OPENING_PROBE V9D_MOLMO_MOTION_PROBE V9D_MOLMO_REPAIR_GATE V9D_MOLMO_GEOMETRY_PROBE V9D_MOLMO_SCREEN_ONLY; do
       [[ "${!incompatible:-0}" == 0 ]] || die "handoff diagnostic cannot enable $incompatible"
     done
     [[ -z "${V9D_MOLMO_ARMS:-}" ]] || die 'handoff diagnostic fixes its cases'
@@ -67,7 +68,7 @@ esac
 case "${V9D_MOLMO_SETTLED_OPENING_PROBE:-0}" in
   0) ;;
   1)
-    for incompatible in V9D_MOLMO_OPENING_PROBE V9D_MOLMO_HANDOFF_PROBE V9D_MOLMO_MOTION_PROBE V9D_MOLMO_REPAIR_GATE V9D_MOLMO_GEOMETRY_PROBE V9D_MOLMO_SCREEN_ONLY; do
+    for incompatible in V9D_MOLMO_OPENING_PROBE V9D_MOLMO_PARKED_OPENING_PROBE V9D_MOLMO_HANDOFF_PROBE V9D_MOLMO_MOTION_PROBE V9D_MOLMO_REPAIR_GATE V9D_MOLMO_GEOMETRY_PROBE V9D_MOLMO_SCREEN_ONLY; do
       [[ "${!incompatible:-0}" == 0 ]] || die "settled opening probe cannot enable $incompatible"
     done
     [[ -z "${V9D_MOLMO_ARMS:-}" ]] || die 'settled opening probe fixes its paired arms'
@@ -75,6 +76,18 @@ case "${V9D_MOLMO_SETTLED_OPENING_PROBE:-0}" in
     [[ "${V9D_MOLMO_MOTION_PROFILE:-baseline}" == baseline || "${V9D_MOLMO_MOTION_PROFILE:-baseline}" == release_plus20mm ]] || die 'settled opening probe requires baseline or release_plus20mm motion profile'
     ;;
   *) die 'V9D_MOLMO_SETTLED_OPENING_PROBE must be 0 or 1' ;;
+esac
+case "${V9D_MOLMO_PARKED_OPENING_PROBE:-0}" in
+  0) ;;
+  1)
+    for incompatible in V9D_MOLMO_OPENING_PROBE V9D_MOLMO_SETTLED_OPENING_PROBE V9D_MOLMO_HANDOFF_PROBE V9D_MOLMO_MOTION_PROBE V9D_MOLMO_REPAIR_GATE V9D_MOLMO_GEOMETRY_PROBE V9D_MOLMO_SCREEN_ONLY; do
+      [[ "${!incompatible:-0}" == 0 ]] || die "parked opening probe cannot enable $incompatible"
+    done
+    [[ -z "${V9D_MOLMO_ARMS:-}" ]] || die 'parked opening probe fixes its paired arms'
+    [[ "${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}" == baseline || "${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}" == parked ]] || die 'parked opening probe requires baseline or parked observation profile'
+    [[ "${V9D_MOLMO_MOTION_PROFILE:-baseline}" == baseline || "${V9D_MOLMO_MOTION_PROFILE:-baseline}" == release_plus20mm ]] || die 'parked opening probe requires baseline or release_plus20mm motion profile'
+    ;;
+  *) die 'V9D_MOLMO_PARKED_OPENING_PROBE must be 0 or 1' ;;
 esac
 case "${V9D_MOLMO_OPENING_PROBE:-0}" in
   0) ;;
@@ -271,10 +284,15 @@ requirements_sha256="$(sha256sum -- "$REQUIREMENTS_FILE" | awk '{print $1}')"
 campaign_sha256="$(sha256sum -- "$CAMPAIGN_SCRIPT" | awk '{print $1}')"
 opening_probe="${V9D_MOLMO_OPENING_PROBE:-0}"
 settled_opening_probe="${V9D_MOLMO_SETTLED_OPENING_PROBE:-0}"
+parked_opening_probe="${V9D_MOLMO_PARKED_OPENING_PROBE:-0}"
 observation_profile="${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}"
 motion_profile="${V9D_MOLMO_MOTION_PROFILE:-baseline}"
 if [[ "$opening_probe" == 1 || "$settled_opening_probe" == 1 ]]; then
   observation_profile=hover20mm
+  motion_profile=release_plus20mm
+fi
+if [[ "$parked_opening_probe" == 1 ]]; then
+  observation_profile=parked
   motion_profile=release_plus20mm
 fi
 if [[ "${V9D_MOLMO_HANDOFF_PROBE:-0}" == 1 ]]; then
@@ -312,6 +330,7 @@ repair_gate=${V9D_MOLMO_REPAIR_GATE:-0}
 motion_probe=${V9D_MOLMO_MOTION_PROBE:-0}
 opening_probe=$opening_probe
 settled_opening_probe=$settled_opening_probe
+parked_opening_probe=$parked_opening_probe
 selected_arms=${V9D_MOLMO_ARMS:-all}
 observation_profile=$observation_profile
 motion_profile=$motion_profile
@@ -332,6 +351,9 @@ fi
 if [[ "$settled_opening_probe" == 1 ]]; then
   campaign_args+=(--settled-opening-probe --observation-profile hover20mm --motion-profile release_plus20mm)
 fi
+if [[ "$parked_opening_probe" == 1 ]]; then
+  campaign_args+=(--parked-opening-probe --observation-profile parked --motion-profile release_plus20mm)
+fi
 case "${V9D_MOLMO_REPAIR_GATE:-0}" in
   1) campaign_args+=(--repair-gate) ;;
   0) ;;
@@ -347,7 +369,7 @@ if [[ -n "${V9D_MOLMO_ARMS:-}" ]]; then
   [[ "$V9D_MOLMO_ARMS" =~ ^[a-z0-9_]+(,[a-z0-9_]+)*$ ]] || die 'V9D_MOLMO_ARMS contains unsafe characters'
   campaign_args+=(--arms "$V9D_MOLMO_ARMS")
 fi
-if [[ "${V9D_MOLMO_OPENING_PROBE:-0}" == 0 && "$settled_opening_probe" == 0 ]]; then
+if [[ "${V9D_MOLMO_OPENING_PROBE:-0}" == 0 && "$settled_opening_probe" == 0 && "$parked_opening_probe" == 0 ]]; then
   case "${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}" in
     baseline|hover20mm) campaign_args+=(--observation-profile "${V9D_MOLMO_OBSERVATION_PROFILE:-baseline}") ;;
     *) die 'V9D_MOLMO_OBSERVATION_PROFILE must be baseline or hover20mm' ;;
@@ -358,7 +380,7 @@ case "${V9D_MOLMO_SCREEN_ONLY:-0}" in
   0) ;;
   *) die 'V9D_MOLMO_SCREEN_ONLY must be 0 or 1' ;;
 esac
-if [[ "${V9D_MOLMO_OPENING_PROBE:-0}" == 0 && "$settled_opening_probe" == 0 ]]; then
+if [[ "${V9D_MOLMO_OPENING_PROBE:-0}" == 0 && "$settled_opening_probe" == 0 && "$parked_opening_probe" == 0 ]]; then
   case "${V9D_MOLMO_MOTION_PROFILE:-baseline}" in
     baseline|placement_micro5mm|release_plus20mm|release20_visual_xy) campaign_args+=(--motion-profile "${V9D_MOLMO_MOTION_PROFILE:-baseline}") ;;
     *) die 'V9D_MOLMO_MOTION_PROFILE must be baseline, placement_micro5mm, release_plus20mm or release20_visual_xy' ;;

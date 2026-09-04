@@ -84,6 +84,14 @@ def test_opening_profile_is_explicit_and_rgbd_agentview_gated():
     assert settled_treatment["preshape_required"] is True
 
 
+def test_parked_observation_profile_is_explicit_and_hover_free():
+    parked = runner.resolve_observation_profile("parked")
+    assert parked["skip_hover"] is True
+    assert parked["arrow_refresh"] == "current_matrix_inputs_after_opening"
+    assert parked["target_offset_m"] is None
+    assert runner.resolve_observation_profile("baseline")["name"] == "baseline"
+
+
 def test_release_profile_passes_only_bounded_height_offset_to_candidate_runner():
     baseline = runner.resolve_motion_profile("baseline", region_backend="sam3")
     micro = runner.resolve_motion_profile("placement_micro5mm", region_backend="rgbd")

@@ -1,5 +1,94 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Parked agentview pivot preparation — 2026-09-04 01:40 UTC
+
+Release gate APPROVED: independent tester80passed5.45s, reviewer13focused
+passed and no HIGH/BLOCKER. Root72profile/campaign/Bash checks plus14parked,
+settled, preshape and frozen-isolation checks passed; compilation, Bashsyntax,
+diff and frozenconfig comparison passed. Only the new parked delta reviewed.
+Proceed directly to the bounded paired canary; live performance is unproven.
+
+Architecture review approved omitting the entire observation-hover/settling
+procedure for both matched agentview arms. Existing candidate execution
+already starts from measured current EEF and stages vertical clearance,
+rotation, translation, pregrasp and descent independently of observation
+hover. No assertion that parked poses are universally safer or that the
+previous source region was wrong is supported.
+
+New `parked` observation profile is RGB-D agentview only and rejects settled
+opening profiles. Initial full-open dwell, optional unchanged 40 mm preshape,
+fresh RGB-D/current privileged arrow provider/no-motion calibration, then
+ordinary candidate execution. After existing open/retreat, repeat the same
+optional shaping and fresh perception. No added settling, no reuse of hover
+q90 or old images; shaping drift guards and160/1200/four-grasp limits remain.
+
+`--parked-opening-probe` tests `parked_opening40mm` then
+`parked_opening_control`, 12 planned cells each, no extension. Both keep the
+same MolmoPoint revision, dense agentview, rim_clearance prompt and
+release_plus20mm motion profile. The comparison between these new arms
+isolates opening policy under parked observation; comparison with older
+hover arms is a broader observation-procedure change. Use a new immutable
+identity and preserve all stopped results. Focused fake/contract tests and one
+review precede the direct guarded simulator canary; no separate diagnostic.
+
+## Settled opening screen stopped — 2026-09-04 01:33:03 UTC
+
+Job **1919320** is terminal, `settled_opening_probe_stopped`, exit2,
+archiveVERIFIED. Both arms attempted the same five vanilla cells, then stopped
+on initial `opening_settling_failed` in T6/1000 and T9/1000. No sealed cells
+were attempted. Preserve the incomplete 12-cell denominators; no extension.
+
+- 40 mm: **2 successes /12 planned**, five attempted, two retained lifts,
+  both successful on retry2;1299actions,229.126s perception. Successes
+  T4/1000 and T6/1001; one no-candidate cell and two controller failures.
+- Full-open: **1 success /12 planned**, five attempted, one retained lift,
+  successful on retry2;684actions,176.695s perception. Success T6/1001;
+  two no-candidate cells and two controller failures.
+
+Narrowed opening admitted grasps and added one matched-cell placement, but
+the screens are incomplete and do not establish improvement over historical
+matching3/12 or full15/60 and14/60. All three successful cells first timed
+out in translate_clearance, then succeeded after fresh-frame recovery.
+
+Failure evidence: T6/1000 has normal-looking observed support q90=.945800m,
+hover1.045800m, then3settling actions descend to1.026269m and21.094mm target
+error. T9/1000 q90=1.176055m, hover1.276055m, then9settling actions reach
+21.976mm error. Both retain just over80mm observed height margin at stop.
+The20mm envelope correctly rejects both. T9 support touches image border;
+robot contamination is a hypothesis, not verified object identity. Do not
+generalize it to T6 or loosen guards. Next decision: a distinct observation
+procedure rather than another settling threshold adjustment.
+
+## First live canary clears repaired handoff — 2026-09-04 01:21:21 UTC
+
+Job1919320 remains RUNNING. First treatment cell vanilla/T4/seed1000 is
+running with evaluator result null. Its actual production settling completed
+in15 actions (shared total63); preshape completed in44 actions (shared total107)
+at40.88649mm. This reproduces the diagnostic repair inside the full canary,
+without the former immediate pose_drift stop. No completed grasp/task result
+yet; do not infer success from the repaired handoff alone.
+
+## Settled opening canary RUNNING — 2026-09-04 01:19:49 UTC
+
+Job **1919320**, submitted **01:19:18 UTC**, started **01:19:22 UTC** on
+compute-3-12. One A40, eight CPUs, 64 GB, two-hour limit. Immutable clean
+source **e9885480d3a7226d9b31e29df716fdc666cb1dab**, label
+`v9d_molmo_settled_e988548`; remote source, CUDA device, BF16, torch 2.10.0,
+Transformers 4.57.1 and first `settled_opening40mm` arm startup verified.
+No completed task results at this startup audit. Do not resubmit.
+
+Treatment then control, 12 planned cells each, screen only. Submit mode
+`V9D_MOLMO_SETTLED_OPENING_PROBE=1` forces the paired campaign; raw
+`V9D_MOLMO_SCREEN_ONLY=0` is expected because the paired mode itself prohibits
+extension. Both use hover20mm/release_plus20mm and the same model/prompt.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_settled_e988548_1919320/results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_settled_e988548_1919320`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919320.out`.
+Bundle SHA256: `a270ae620eccbe4e9498650f50cfa83237345ff2da1cee4bd32b35729112cf1c`.
+Scheduler wait: four seconds. Runtime package setup: one second; model loading
+and perception timings remain separate. Frozen v9d and main checkout untouched.
+
 ## Settled opening comparison preparation — 2026-09-04 01:05 UTC
 
 Final gate APPROVED: independent tester 18 passed, reviewer 20 focused checks

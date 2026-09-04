@@ -70,7 +70,7 @@ PLACEMENT_MICRO_CORRECTION_PARAMS = {
     "max_actions": 16,
 }
 
-OBSERVATION_PROFILE_NAMES = ("baseline", "hover20mm")
+OBSERVATION_PROFILE_NAMES = ("baseline", "hover20mm", "parked")
 OBSERVATION_PROFILE_PARAMS = {
     "baseline": {
         "phase_tolerance_m": 0.015,
@@ -85,6 +85,18 @@ OBSERVATION_PROFILE_PARAMS = {
         "target_offset_m": OBSERVATION_HOVER_OFFSET_M,
         "min_actual_height_margin_m": 0.080,
         "require_actual_height_margin": True,
+    },
+    "parked": {
+        # Parked skips the observation-hover controller path entirely.  The
+        # explicit fields keep the profile identity auditable without
+        # fabricating a completed hover audit.
+        "skip_hover": True,
+        "target_offset_m": None,
+        "phase_tolerance_m": None,
+        "orientation_tolerance_rad": None,
+        "min_actual_height_margin_m": None,
+        "require_actual_height_margin": False,
+        "arrow_refresh": "current_matrix_inputs_after_opening",
     },
 }
 
@@ -1972,6 +1984,14 @@ def _perform_observation_hover(
         "observation_profile": observation_policy["name"],
         "observation_profile_params": observation_policy,
     }
+    if observation_policy["name"] == "parked":
+        audit = {
+            "status": "skipped_by_parked_profile",
+            **profile_audit,
+            "reason": "parked profile does not execute observation-hover motion",
+        }
+        setattr(env, "_molmo_sam3_observation_hover", audit)
+        return audit
     try:
         try:
             from . import run_arrow_pick_place_eval as episode
@@ -2253,6 +2273,11 @@ def main(
             args.opening_profile, region_backend=args.region_backend,
             camera_name=VARIANTS[args.variant].camera_name,
         )
+        if args.observation_profile == "parked":
+            if args.region_backend != "rgbd" or VARIANTS[args.variant].camera_name != AGENTVIEW:
+                raise ValueError("parked observation profile requires the RGB-D agentview path")
+            if resolved_opening_profile["name"].endswith("_settled"):
+                raise ValueError("parked observation profile cannot be combined with settled opening profiles")
         if VARIANTS[args.variant].region_backend == "rgbd" and args.region_backend != "rgbd":
             raise ValueError("rgbd_geometry_agentview requires --region-backend rgbd")
         tasks = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
@@ -2497,12 +2522,16 @@ def main(
         bboxes = kwargs.get("bboxes")
         if not isinstance(bboxes, Mapping):
             raise ValueError("canary episode requires existing arrow input-generation bboxes")
+        parked_observation = resolved_observation_profile["name"] == "parked"
         initial = episode.capture_agentview(env, resolution=resolution, camera_name=AGENTVIEW)
-        provisional_arrow, _ = episode.render_exactly_one_arrow(
-            initial.rgb, bboxes, subject=kwargs.get("subject", "bowl"),
-            goal_object=kwargs.get("goal_object", "plate"), anchor_policy="bbox_center",
-        )
-        provisional_source, _ = episode.decode_arrow_pixels(initial.rgb, provisional_arrow)
+        if parked_observation:
+            provisional_source = None
+        else:
+            provisional_arrow, _ = episode.render_exactly_one_arrow(
+                initial.rgb, bboxes, subject=kwargs.get("subject", "bowl"),
+                goal_object=kwargs.get("goal_object", "plate"), anchor_policy="bbox_center",
+            )
+            provisional_source, _ = episode.decode_arrow_pixels(initial.rgb, provisional_arrow)
         hover_output = output_dir / "observation_hover"
         motion_callback = kwargs.get("motion_started_callback")
         # Contact-pad aperture is measured only after a full open dwell.  The
@@ -2524,12 +2553,21 @@ def main(
         if worker_state.get("worker") is None:
             raise RuntimeError("gripper-open preflight completed without an initialized perception worker")
         worker_state["worker"].robot_calibration = calibration
-        initial_hover_observation = episode._raw_observation(env)
-        _perform_observation_hover(
-            env, initial, provisional_source, output_dir=hover_output,
-            motion_started_callback=motion_callback,
-            motion_settings=motion_settings,
-        )
+        if parked_observation:
+            parked_audit = {
+                "status": "skipped_by_parked_profile",
+                "observation_profile": resolved_observation_profile["name"],
+                "reason": "direct guarded canary keeps the robot at its post-open parked pose",
+            }
+            setattr(env, "_molmo_sam3_observation_hover", parked_audit)
+            initial_hover_observation = None
+        else:
+            initial_hover_observation = episode._raw_observation(env)
+            _perform_observation_hover(
+                env, initial, provisional_source, output_dir=hover_output,
+                motion_started_callback=motion_callback,
+                motion_settings=motion_settings,
+            )
 
         opening_audit: Mapping[str, Any] | None = None
 
@@ -2629,6 +2667,24 @@ def main(
         }
         first_capture: dict[str, Any] = {AGENTVIEW: fresh}
 
+        def refresh_current_arrow_inputs(target_env: Any) -> None:
+            """Refresh privileged matrix arrow inputs at the current robot pose."""
+            try:
+                try:
+                    from . import run_arrow_pick_place_matrix as current_matrix
+                except ImportError:  # pragma: no cover - direct script use
+                    import run_arrow_pick_place_matrix as current_matrix
+                current_inputs = current_matrix._default_arrow_inputs(target_env, task_id, resolution)
+            except Exception as exc:
+                raise RuntimeError("parked opening arrow refresh failed") from exc
+            if not isinstance(current_inputs, Mapping) or not isinstance(current_inputs.get("bboxes"), Mapping):
+                raise RuntimeError("parked opening arrow inputs are invalid")
+            arrow_input_state.update({
+                "bboxes": current_inputs["bboxes"],
+                "subject": current_inputs.get("subject", "bowl"),
+                "goal_object": current_inputs.get("goal_object", "plate"),
+            })
+
         def refresh_arrow(capture: Any) -> tuple[np.ndarray, Sequence[float], Sequence[float] | None]:
             rendered, _ = episode.render_exactly_one_arrow(
                 capture.rgb, arrow_input_state["bboxes"], subject=arrow_input_state["subject"],
@@ -2638,6 +2694,8 @@ def main(
             arrow_state.update({"rgb": rendered, "source_uv": source_point, "destination_uv": target_point})
             return rendered, source_point, target_point
 
+        if parked_observation:
+            refresh_current_arrow_inputs(env)
         refresh_arrow(fresh)
 
         def capture_fn(capture_env: Any, *, resolution: int, camera_name: str) -> Any:
@@ -2667,6 +2725,14 @@ def main(
             # then capture; no motion is allowed after the returned frame.
             nonlocal opening_audit
             profile_name = resolved_opening_profile["name"]
+            if parked_observation:
+                retry_output = output_dir / "attempts" / f"attempt_{int(attempt_index):02d}"
+                if profile_name == "preshape40mm":
+                    opening_audit = run_preshape(_env, retry_output / "opening_preshape")
+                retry_capture = episode.capture_agentview(_env, resolution=resolution, camera_name=AGENTVIEW)
+                refresh_current_arrow_inputs(_env)
+                refresh_arrow(retry_capture)
+                return retry_capture
             if not (profile_name.endswith("_settled") or profile_name == "preshape40mm"):
                 return None
             retry_output = output_dir / "attempts" / f"attempt_{int(attempt_index):02d}"
@@ -2828,7 +2894,7 @@ def main(
             observation_profile_params=resolved_observation_profile,
             opening_profile=resolved_opening_profile["name"],
             opening_profile_params=resolved_opening_profile,
-            before_capture_fn=(before_capture if (resolved_opening_profile.get("preshape_required") or resolved_opening_profile.get("settling_required") or resolved_opening_profile["name"] == "preshape40mm") else None),
+            before_capture_fn=(before_capture if (parked_observation or resolved_opening_profile.get("preshape_required") or resolved_opening_profile.get("settling_required") or resolved_opening_profile["name"] == "preshape40mm") else None),
         )
         final = result.get("final_result") if isinstance(result.get("final_result"), Mapping) else {}
         audit = final.get("audit") if isinstance(final, Mapping) else None

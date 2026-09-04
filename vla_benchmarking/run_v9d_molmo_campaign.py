@@ -47,6 +47,10 @@ SETTLED_OPENING_PROBE_ARMS = (
     Arm("settled_opening40mm", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "preshape40mm_settled"),
     Arm("settled_opening_control", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "full_open_settled"),
 )
+PARKED_OPENING_PROBE_ARMS = (
+    Arm("parked_opening40mm", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "preshape40mm"),
+    Arm("parked_opening_control", "molmo_dense_agentview", "rim_clearance", "release_plus20mm", "full_open"),
+)
 TERMINAL = {"completed", "failed", "interrupted"}
 CONTRACT_ERRORS = (
     "evaluator called before retreat", "evaluator use before retreat",
@@ -291,35 +295,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", default="v9d_molmo_rgbd")
     parser.add_argument("--screen-only", action="store_true")
     parser.add_argument("--arms", help="comma-separated subset of existing screen arms; fresh run identity required")
-    parser.add_argument("--observation-profile", choices=("baseline", "hover20mm"), default=None)
+    parser.add_argument("--observation-profile", choices=("baseline", "hover20mm", "parked"), default=None)
     parser.add_argument("--motion-profile", choices=canary.MOTION_PROFILE_NAMES, default=None)
     parser.add_argument("--motion-probe", action="store_true", help="paired 12-cell placement-control/bounded-correction diagnostic; never extends to 60")
     parser.add_argument("--opening-probe", action="store_true", help="paired 12-cell full-open versus measured 40mm preshape diagnostic")
     parser.add_argument("--settled-opening-probe", action="store_true", help="paired settled-hover full-open versus measured 40mm opening diagnostic")
+    parser.add_argument("--parked-opening-probe", action="store_true", help="paired no-hover full-open versus measured 40mm opening diagnostic")
     parser.add_argument("--repair-gate", action="store_true", help="require the first T4/T6 cells to clear hover and contact before continuing the campaign")
     args = parser.parse_args(argv)
     if args.motion_probe and args.repair_gate:
         parser.error("--motion-probe cannot enable the obsolete global repair gate")
-    if (args.opening_probe or args.settled_opening_probe) and (args.motion_probe or args.repair_gate or args.arms is not None or args.screen_only):
+    if (args.opening_probe or args.settled_opening_probe or args.parked_opening_probe) and (args.motion_probe or args.repair_gate or args.arms is not None or args.screen_only):
         parser.error("--opening-probe fixes its paired arms and screen-only execution")
-    if args.opening_probe and args.settled_opening_probe:
+    if sum(bool(value) for value in (args.opening_probe, args.settled_opening_probe, args.parked_opening_probe)) > 1:
         parser.error("opening probe modes are mutually exclusive")
     if (args.opening_probe or args.settled_opening_probe) and (args.observation_profile not in (None, "hover20mm") or args.motion_profile not in (None, "release_plus20mm")):
         parser.error("--opening-probe requires --observation-profile hover20mm and --motion-profile release_plus20mm")
-    observation_profile = "hover20mm" if (args.opening_probe or args.settled_opening_probe) else (args.observation_profile or "baseline")
-    motion_profile = "release_plus20mm" if (args.opening_probe or args.settled_opening_probe) else (args.motion_profile or "baseline")
+    if args.parked_opening_probe and (args.observation_profile not in (None, "parked") or args.motion_profile not in (None, "release_plus20mm")):
+        parser.error("--parked-opening-probe requires --observation-profile parked and --motion-profile release_plus20mm")
+    observation_profile = "parked" if args.parked_opening_probe else "hover20mm" if (args.opening_probe or args.settled_opening_probe) else (args.observation_profile or "baseline")
+    motion_profile = "release_plus20mm" if (args.opening_probe or args.settled_opening_probe or args.parked_opening_probe) else (args.motion_profile or "baseline")
     if args.motion_probe and (args.arms is not None or args.observation_profile not in (None, "baseline") or args.motion_profile not in (None, "baseline")):
         parser.error("--motion-probe fixes its paired arms and baseline observation/profile selection")
     if args.arms is not None and args.repair_gate:
         parser.error("--arms cannot enable the obsolete global repair gate")
-    arms = SETTLED_OPENING_PROBE_ARMS if args.settled_opening_probe else OPENING_PROBE_ARMS if args.opening_probe else MOTION_PROBE_ARMS if args.motion_probe else ARMS
+    arms = PARKED_OPENING_PROBE_ARMS if args.parked_opening_probe else SETTLED_OPENING_PROBE_ARMS if args.settled_opening_probe else OPENING_PROBE_ARMS if args.opening_probe else MOTION_PROBE_ARMS if args.motion_probe else ARMS
     if args.arms is not None:
         names = args.arms.split(",")
         available = {arm.name: arm for arm in ARMS}
         if len(names) != len(set(names)) or any(name not in available for name in names):
             parser.error("--arms must contain unique existing screen arm names")
         arms = tuple(available[name] for name in names)
-    if not args.motion_probe and not args.opening_probe and not args.settled_opening_probe:
+    if not args.motion_probe and not args.opening_probe and not args.settled_opening_probe and not args.parked_opening_probe:
         arms = tuple(Arm(arm.name, arm.variant, arm.prompt, motion_profile, arm.opening_profile) for arm in arms)
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -330,19 +337,20 @@ def main(argv: list[str] | None = None) -> int:
         "schema": "v9d_molmo_rgbd_campaign.v1", "label": args.label,
         "baseline_commit": canary.BASELINE_COMMIT, "sam3_used": False,
         "region_backend": "v9d_rgbd_region", "arms": [asdict(a) for a in arms],
-        "mode": "settled_opening_probe" if args.settled_opening_probe else "opening_probe" if args.opening_probe else "placement_motion_probe" if args.motion_probe else "candidate_screen",
+        "mode": "parked_opening_probe" if args.parked_opening_probe else "settled_opening_probe" if args.settled_opening_probe else "opening_probe" if args.opening_probe else "placement_motion_probe" if args.motion_probe else "candidate_screen",
         "motion_diagnostics": bool(args.motion_probe),
         "observation_profile": observation_profile,
         "motion_profile": "paired_probe" if args.motion_probe else motion_profile,
-        "opening_probe": bool(args.opening_probe or args.settled_opening_probe),
+        "opening_probe": bool(args.opening_probe or args.settled_opening_probe or args.parked_opening_probe),
         "settled_opening_probe": bool(args.settled_opening_probe),
-        "opening_profile": "settled_paired_probe" if args.settled_opening_probe else "paired_probe" if args.opening_probe else "full_open",
+        "parked_opening_probe": bool(args.parked_opening_probe),
+        "opening_profile": "parked_paired_probe" if args.parked_opening_probe else "settled_paired_probe" if args.settled_opening_probe else "paired_probe" if args.opening_probe else "full_open",
         "opening_profile_params": (
             {
                 profile: canary.resolve_opening_profile(profile, region_backend="rgbd", camera_name=canary.AGENTVIEW)
-                for profile in (("full_open_settled", "preshape40mm_settled") if args.settled_opening_probe else ("full_open", "preshape40mm"))
+                for profile in (("full_open", "preshape40mm") if args.parked_opening_probe else ("full_open_settled", "preshape40mm_settled") if args.settled_opening_probe else ("full_open", "preshape40mm"))
             }
-            if args.opening_probe or args.settled_opening_probe
+            if args.opening_probe or args.settled_opening_probe or args.parked_opening_probe
             else canary.resolve_opening_profile("full_open", region_backend="rgbd", camera_name=canary.AGENTVIEW)
         ),
         "screen_planned_per_arm": 12, "screen": [], "finalists": [],
@@ -381,6 +389,16 @@ def main(argv: list[str] | None = None) -> int:
             "retry_protocol": "new_agentview_arrow_hover_settle_fresh_capture",
             "interpretation": "settling is robot-only revalidation at the original hover before each fresh RGB-D proposal; optional 40mm shaping is measured and bounded",
         }
+    if args.parked_opening_probe:
+        report["comparison"] = "paired exploratory parked-opening probe; same dense-agentview perception, rim-clearance prompt, parked observation policy and release profile; the paired arms differ only in measured opening"
+        report["parked_opening_probe_contract"] = {
+            "planned_cells": 24, "arm_order": [arm.name for arm in PARKED_OPENING_PROBE_ARMS],
+            "control_profile": "full_open", "treatment_profile": "preshape40mm",
+            "observation_profile": "parked", "motion_profile": "release_plus20mm",
+            "screen_only": True, "finalist_extension": False,
+            "retry_protocol": "recovered_open_retreat_optional_preshape_fresh_agentview_current_arrow_calibration",
+            "interpretation": "direct guarded canary remains at the post-open parked pose; no observation hover or settling controller is executed",
+        }
     write_json(report_path, report)
     runtime = MolmoPointRuntime()
     repair_gate = RepairGate() if args.repair_gate else None
@@ -407,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
             canary_args.extend(["--motion-profile", arm.motion_profile, "--motion-diagnostics"])
         elif arm.motion_profile != "baseline":
             canary_args.extend(["--motion-profile", arm.motion_profile])
-        if args.opening_probe or args.settled_opening_probe or arm.opening_profile != "full_open":
+        if args.opening_probe or args.settled_opening_probe or args.parked_opening_probe or arm.opening_profile != "full_open":
             canary_args.extend(["--opening-profile", arm.opening_profile])
         if observation_profile != "baseline":
             canary_args.extend(["--observation-profile", observation_profile])
@@ -433,9 +451,11 @@ def main(argv: list[str] | None = None) -> int:
             report["finished_unix"] = time.time()
             write_json(report_path, report)
             return 2
-    if args.motion_probe or args.opening_probe or args.settled_opening_probe:
+    if args.motion_probe or args.opening_probe or args.settled_opening_probe or args.parked_opening_probe:
         complete = all(r["returncode"] == 0 and r["metrics"]["terminal_cells"] == 12 for r in report["screen"])
-        if args.settled_opening_probe:
+        if args.parked_opening_probe:
+            report["status"] = "parked_opening_probe_completed" if complete else "parked_opening_probe_stopped"
+        elif args.settled_opening_probe:
             report["status"] = "settled_opening_probe_completed" if complete else "settled_opening_probe_stopped"
         elif args.opening_probe:
             report["status"] = "opening_probe_completed" if complete else "opening_probe_stopped"
