@@ -2316,6 +2316,14 @@ def main(
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--label", default="molmo_sam3_canary")
     parser.add_argument("--phase", choices=("prefix", "full60"), default="prefix")
+    parser.add_argument(
+        "--sealed-100", action="store_true",
+        help="run a complete 100-cell sealed-randomized evaluation",
+    )
+    parser.add_argument(
+        "--sealed-100-profile", choices=("e8", "failure_opening40_retreat80"), default="e8",
+        help="sealed-100 policy profile (default: frozen e8)",
+    )
     parser.add_argument("--task-ids", default="4,6,9")
     parser.add_argument("--episodes-per-task", type=int, default=None)
     parser.add_argument("--seed-base", type=int, default=1000)
@@ -2363,10 +2371,33 @@ def main(
             raise ValueError("rgbd_geometry_agentview requires --region-backend rgbd")
         tasks = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
         suites = tuple(item.strip() for item in str(args.suite_modes).split(",") if item.strip())
-        if tasks != (4, 6, 9):
-            raise ValueError("canary task IDs must be exactly 4,6,9")
-        if suites != ("vanilla", "sealed_randomized"):
-            raise ValueError("canary suite modes must be exactly vanilla,sealed_randomized")
+        if args.sealed_100:
+            if args.phase != "full60":
+                raise ValueError("--sealed-100 requires --phase full60")
+            if args.region_backend != "rgbd" or args.variant != "molmo_dense_agentview":
+                raise ValueError("--sealed-100 requires the Molmo-dense RGB-D agentview policy")
+            if tasks != tuple(range(10)):
+                raise ValueError("--sealed-100 task IDs must be exactly 0 through 9")
+            if suites != ("sealed_randomized",):
+                raise ValueError("--sealed-100 requires suite mode sealed_randomized only")
+            if args.episodes_per_task != 10:
+                raise ValueError("--sealed-100 requires exactly 10 episodes per task")
+            if args.sealed_100_profile == "e8":
+                expected_profile = ("release_plus20mm", "parked", "full_open")
+            else:
+                expected_profile = ("release20_retreat80mm", "parked", "preshape40mm")
+            if (args.motion_profile, args.observation_profile, args.opening_profile) != expected_profile:
+                raise ValueError(
+                    f"--sealed-100 profile {args.sealed_100_profile} requires "
+                    f"motion={expected_profile[0]}, observation={expected_profile[1]}, opening={expected_profile[2]}"
+                )
+            if args.molmopoint_prompt_id != "rim_clearance":
+                raise ValueError("--sealed-100 requires the pinned rim_clearance prompt")
+        else:
+            if tasks != (4, 6, 9):
+                raise ValueError("canary task IDs must be exactly 4,6,9")
+            if suites != ("vanilla", "sealed_randomized"):
+                raise ValueError("canary suite modes must be exactly vanilla,sealed_randomized")
         if args.seed_base != 1000:
             raise ValueError("canary seed base must be 1000")
         if args.molmopoint_model != MOLMOPOINT_MODEL_ID:
@@ -2474,6 +2505,8 @@ def main(
         "backend": "v9d_rgbd_region" if args.region_backend == "rgbd" else "sam3",
         "sam3_used": bool(args.region_backend == "sam3"),
         "molmopoint_prompt_id": args.molmopoint_prompt_id,
+        "evaluation_scope": "sealed_100_cells" if args.sealed_100 else "canary",
+        "sealed_100_profile": args.sealed_100_profile if args.sealed_100 else None,
         "dry_run": bool(args.dry_run),
         "motion_profile": resolved_motion_profile["name"],
         "motion_profile_params": _json_safe(resolved_motion_profile),
