@@ -121,7 +121,9 @@ export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 export LIBERO_CONFIG_PATH="$LIBERO_CONFIG_ROOT" LIBERO_CONFIG="$LIBERO_CONFIG_ROOT/config.yaml"
 export PYTHONPATH="$REPO_ROOT/vla_benchmarking"
 export TMPDIR="$RUN_ROOT/tmp" XDG_CACHE_HOME="$RUNTIME_ROOT/cache/xdg" TORCH_HOME="$RUNTIME_ROOT/cache/torch"
-export HF_HOME="$RUNTIME_ROOT/cache/huggingface" HF_HUB_CACHE="$HF_HOME/hub" TRANSFORMERS_CACHE="$HF_HOME/transformers"
+export HF_HOME="$RUNTIME_ROOT/cache/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export TRANSFORMERS_CACHE="$HF_HOME/transformers"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$TORCH_HOME" "$HF_HOME" "$HF_HUB_CACHE" "$TRANSFORMERS_CACHE"
 
 command -v nvidia-smi >/dev/null 2>&1 || die 'nvidia-smi is unavailable in the allocation'
