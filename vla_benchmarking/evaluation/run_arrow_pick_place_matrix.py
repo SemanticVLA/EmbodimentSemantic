@@ -1320,7 +1320,7 @@ def _run_matrix_impl(
     contract_hash = _contract_hash(protocol, cells)
     provenance = {
         "launcher_path": Path(__file__).resolve().as_posix(),
-        "repository_root": Path(__file__).resolve().parents[1].as_posix(),
+        "repository_root": Path(__file__).resolve().parents[2].as_posix(),
         # Experimental injected runners must identify themselves explicitly;
         # the historical grasp-controller label is only a compatibility
         # default for the canonical controller campaign.

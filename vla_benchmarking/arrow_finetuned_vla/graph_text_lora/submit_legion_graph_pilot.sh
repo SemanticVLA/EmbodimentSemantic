@@ -268,7 +268,7 @@ finish() {
 mkdir -p "\$EVIDENCE"
 for p in "\$LIBERO_DATA_DIR" "\$DATA_ROOT/sealed_lora_pair_manifest.json" "\$BASE_POLICY/config.json" "\$BASE_POLICY/base_snapshot_manifest.json" "\$LIBERO_CONFIG"; do [[ -e "\$p" ]] || die "required staged artifact missing: \$p"; done
 module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"
-export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG
+export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG
 export BASE_POLICY_REVISION BASE_POLICY GRAPH_BASE_POLICY DATA_ROOT LIBERO_DATA_DIR LIBERO_DIR LIBERO_COMMIT PAIR_MANIFEST="\$DATA_ROOT/sealed_lora_graph_pair_manifest.json" PAIR_SENTINEL="\$DATA_ROOT/sealed_lora_graph_pair_verified.json"
 "\$PYTHON" -m py_compile \
   "\$REPO/vla_benchmarking/arrow_finetuned_vla/graph_text_lora/run_lora_graph_pair_eval.py" \
@@ -435,9 +435,9 @@ import hashlib, inspect, json, pathlib, sys
 import numpy as np
 from libero.libero import benchmark
 from lerobot.envs import libero as lerobot_libero
-from config import TASK_REMOVE_CONFIG
-from radomize_scenes import init_state_evidence, sim_state_sha256
-from run_lerobot_eval_with_context import (
+from vla_benchmarking.shared.config import TASK_REMOVE_CONFIG
+from vla_benchmarking.evaluation.randomize_scenes import init_state_evidence, sim_state_sha256
+from vla_benchmarking.evaluation.run_lerobot_eval_with_context import (
     _patch_libero_env_bddl_selection,
     _patch_libero_env_camera_creation,
     _patch_libero_env_terminal_reset_compensation,
@@ -580,7 +580,7 @@ archive_repro_context() { local d="\$1"; mkdir -p "\$d/input_bundle"; for rel in
 finish() { local workload_rc=\$? archive_rc=0 archive_status=FAILED archive_tree=''; trap - EXIT; set +e; [[ ! -e "\$ARCHIVE_DIR" ]] || archive_rc=1; if [[ \$archive_rc -eq 0 ]]; then copy_tree "\$RUN_ROOT" "\$ARCHIVE_DIR" || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then archive_repro_context "\$ARCHIVE_DIR/repro" || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" build || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then printf 'archive_status=VERIFIED\\n' > "\$ARCHIVE_DIR/archive_status.env"; seal_tree "\$ARCHIVE_DIR" build || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then archive_status=VERIFIED; archive_tree="\$(tr -d '[:space:]' < "\$ARCHIVE_DIR/tree_sha256")"; fi; printf 'train_archive_status=%s\\ntrain_archive_tree_sha256=%s\\n' "\$archive_status" "\$archive_tree" >> "\$STATE_FILE"; if [[ \$workload_rc -eq 0 && \$archive_rc -ne 0 ]]; then workload_rc=90; fi; printf 'train_status=%s\\n' "\$( [[ \$workload_rc -eq 0 ]] && echo OK || echo FAILED )" >> "\$STATE_FILE"; exit "\$workload_rc"; }; trap finish EXIT
 [[ -d "\$SCRATCH_ROOT" && -d "\$REPO/.git" && -x "\$PYTHON" ]] || die 'scratch, repository, or Python runtime missing'; [[ "\$(git -C "\$REPO" rev-parse HEAD)" == "\$EXPECTED_REPO_COMMIT" ]] || die 'repository commit drift'; [[ -z "\$(git -C "\$REPO" status --porcelain --untracked-files=all)" ]] || die 'repository is dirty'; [[ -d "\$BASE_POLICY/policy_preprocessor.json" || -f "\$BASE_POLICY/policy_preprocessor.json" ]] || die 'graph96 policy is missing'; [[ -d "\$DATA_ROOT/graph_treatment" && -f "\$DATA_ROOT/sealed_lora_graph_pair_verified.json" ]] || die 'graph dataset/pair is missing'
 module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"
-export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG
+export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG
 export BASE_POLICY BASE_POLICY_REVISION DATA_ROOT LIBERO_DATA_DIR LIBERO_DIR LIBERO_COMMIT PAIR_MANIFEST="\$DATA_ROOT/sealed_lora_graph_pair_manifest.json" PAIR_SENTINEL="\$DATA_ROOT/sealed_lora_graph_pair_verified.json" TRAINING_PROFILE=graph_treatment TRAINING_MODE=full RUN_ROOT BATCH_SIZE=32 SEED=1000 PEFT_R=16 DEVICE=cuda RESUME=false RESUME_CONFIG_PATH=''
 INPUT_BUNDLE_PATH="\$(state_value input_bundle_path)"; INPUT_BUNDLE_TREE_SHA256="\$(state_value input_bundle_tree_sha256)"
 [[ "\$(state_value input_bundle_status)" == VERIFIED && -d "\$INPUT_BUNDLE_PATH" && "\$INPUT_BUNDLE_TREE_SHA256" =~ ^[0-9a-f]{64}\$ ]] || die 'verified HOME input bundle is missing from setup state'
@@ -641,7 +641,7 @@ archive_repro_context() { local d="\$1"; mkdir -p "\$d/input_bundle"; for rel in
 finish() { local workload_rc=\$? archive_rc=0 archive_status=FAILED archive_tree=''; trap - EXIT; set +e; [[ ! -e "\$ARCHIVE_DIR" ]] || archive_rc=1; if [[ \$archive_rc -eq 0 ]]; then copy_tree "\$OUTPUT_ROOT" "\$ARCHIVE_DIR" || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then archive_repro_context "\$ARCHIVE_DIR/repro" || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" build || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then printf 'archive_status=VERIFIED\\n' > "\$ARCHIVE_DIR/archive_status.env"; seal_tree "\$ARCHIVE_DIR" build || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then seal_tree "\$ARCHIVE_DIR" verify || archive_rc=\$?; fi; if [[ \$archive_rc -eq 0 ]]; then archive_status=VERIFIED; archive_tree="\$(tr -d '[:space:]' < "\$ARCHIVE_DIR/tree_sha256")"; fi; printf 'eval_archive_status=%s\\neval_archive_tree_sha256=%s\\n' "\$archive_status" "\$archive_tree" >> "\$STATE_FILE"; if [[ \$workload_rc -eq 0 && \$archive_rc -ne 0 ]]; then workload_rc=90; fi; printf 'eval_status=%s\\n' "\$( [[ \$workload_rc -eq 0 ]] && echo OK || echo FAILED )" >> "\$STATE_FILE"; exit "\$workload_rc"; }; trap finish EXIT
 [[ -d "\$SCRATCH_ROOT" && -d "\$REPO/.git" && -x "\$PYTHON" ]] || die 'scratch, repository, or Python runtime missing'; [[ "\$(git -C "\$REPO" rev-parse HEAD)" == "\$EXPECTED_REPO_COMMIT" ]] || die 'repository commit drift'; [[ -z "\$(git -C "\$REPO" status --porcelain --untracked-files=all)" ]] || die 'repository is dirty'; [[ -s "\$MANIFEST" && -s "\$ADAPTER/adapter_model.safetensors" ]] || die 'training manifest/checkpoint missing'; [[ -d "\$GRAPH_BASE_POLICY" && -f "\$GRAPH_BASE_POLICY/policy_preprocessor.json" ]] || die 'graph96 policy is missing'
 module purge; module load miniforge/24.3.0-0; source "\$(conda info --base)/etc/profile.d/conda.sh"
-export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO/vla_benchmarking:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG="\$RUNTIME/config/config.yaml" BASE_POLICY="\$GRAPH_BASE_POLICY" TRAINING_PROFILE=graph_treatment PROFILE=graph_treatment VISUAL_CONDITION=none VISUAL_ARROWS=0 RANDOMIZE_SCENES=1 DEVICE=cuda
+export PATH="\$(dirname "\$PYTHON"):\$PATH" PYTHONPATH="\$REPO:\${PYTHONPATH:-}" LIBERO_CONFIG_PATH="\$RUNTIME/config" LIBERO_CONFIG="\$RUNTIME/config/config.yaml" BASE_POLICY="\$GRAPH_BASE_POLICY" TRAINING_PROFILE=graph_treatment PROFILE=graph_treatment VISUAL_CONDITION=none VISUAL_ARROWS=0 RANDOMIZE_SCENES=1 DEVICE=cuda
 export DATA_ROOT LIBERO_DIR LIBERO_COMMIT LIBERO_DATA_DIR="\$SCRATCH_ROOT/vlm_benchmarking/data/libero_spatial_v5"
 INPUT_BUNDLE_PATH="\$(state_value input_bundle_path)"; INPUT_BUNDLE_TREE_SHA256="\$(state_value input_bundle_tree_sha256)"
 [[ "\$(state_value input_bundle_status)" == VERIFIED && -d "\$INPUT_BUNDLE_PATH" && "\$INPUT_BUNDLE_TREE_SHA256" =~ ^[0-9a-f]{64}\$ ]] || die 'verified HOME input bundle is missing from setup state'

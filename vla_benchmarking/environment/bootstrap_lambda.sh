@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VLA_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="${PYTHON:-python3.12}"
-VENV="${LAMBDA_VENV:-$SCRIPT_DIR/.venv-lora}"
+VENV="${LAMBDA_VENV:-$VLA_ROOT/.venv-lora}"
 LIBERO_DIR="${LIBERO_DIR:-$VLA_ROOT/LIBERO}"
 REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-$VLA_ROOT/arrow_finetuned_vla/workflows/requirements-lora.txt}"
 LIBERO_REPO="${LIBERO_REPO:-https://github.com/Lifelong-Robot-Learning/LIBERO.git}"

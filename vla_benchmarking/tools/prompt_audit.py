@@ -7,8 +7,15 @@ import hashlib
 import argparse
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
+
+# Keep direct ``python path/to/prompt_audit.py`` launches independent of the
+# caller's working directory and ambient PYTHONPATH.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from vla_benchmarking.evaluation.scene_graph_formats import GRAPH_TOKENIZER_CONTRACT
 

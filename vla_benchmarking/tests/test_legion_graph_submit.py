@@ -163,6 +163,19 @@ def test_setup_requires_live_checkpoint_and_real_libero_reset_smokes():
     sentinel_gate = "historical pair verification did not produce its sentinel"
     assert text.index(verify_call) < text.index(sentinel_gate)
 
+
+def test_terminal_reset_smoke_uses_organized_imports_and_repo_pythonpath():
+    """The generated runtime heredoc must survive the package reorganization."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'PYTHONPATH="\\$REPO:\\${PYTHONPATH:-}"' in text
+    assert 'PYTHONPATH="\\$REPO/vla_benchmarking:' not in text
+    assert "from vla_benchmarking.shared.config import TASK_REMOVE_CONFIG" in text
+    assert "from vla_benchmarking.evaluation.randomize_scenes import init_state_evidence, sim_state_sha256" in text
+    assert "from vla_benchmarking.evaluation.run_lerobot_eval_with_context import (" in text
+    assert "from config import TASK_REMOVE_CONFIG" not in text
+    assert "from radomize_scenes import" not in text
+    assert "from run_lerobot_eval_with_context import (" not in text
+
 @pytest.mark.skipif(os.name == "nt", reason="fake Legion submission requires a POSIX shell")
 def test_setup_with_fake_sbatch_is_single_submission_and_ambient_safe(tmp_path):
     source = SCRIPT.read_text(encoding="utf-8")

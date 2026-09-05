@@ -18,6 +18,12 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+# Bootstrap the repository root before organized-package imports so direct
+# script launches work with an empty ambient PYTHONPATH.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from vla_benchmarking.shared.config import (
     LEROBOT_CAMERA_KEYS,
     DEFAULT_CAMERAS,

@@ -884,6 +884,11 @@ def test_external_controller_config_is_resolved_once_and_recorded(matrix, tmp_pa
         arrow_input_builder=lambda env, task_id, resolution: {},
     )
 
+    expected_repository_root = Path(matrix.__file__).resolve().parents[2].as_posix()
+    assert summary["provenance"]["repository_root"] == expected_repository_root
+    assert summary["provenance"]["repository_root"] != (
+        Path(matrix.__file__).resolve().parents[1].as_posix()
+    )
     assert "controller_config" not in observed
     assert not isinstance(observed["controller_variant"], str)
     assert observed["environment_controller_variant"] is observed["controller_variant"]

@@ -8,7 +8,7 @@ VLA_ROOT="${VLA_ROOT:-$REPO_ROOT/vla_benchmarking}"
 # explicit because the Windows bash bridge used by local contract tests does
 # not reliably preserve non-exported shell variables across `env ... bash`.
 export REPO_ROOT VLA_ROOT
-PYTHON="${LAMBDA_VENV:-$SCRIPT_DIR/.venv-lora}/bin/python"
+PYTHON="${LAMBDA_VENV:-$VLA_ROOT/.venv-lora}/bin/python"
 ACTION="${1:-}"
 shift || true
 PROFILE=""
@@ -131,6 +131,15 @@ export PYTHON
 case "$ACTION" in
   setup)
     bash "$VLA_ROOT/environment/bootstrap_lambda_runtime.sh"
+    # Bootstrap creates the canonical runtime under VLA_ROOT.  Refresh the
+    # default interpreter after it completes so setup stages cannot retain the
+    # workflow-local path that was computed before bootstrap ran.  An explicit
+    # --python remains authoritative for test doubles and operator overrides.
+    if [[ -z "${SEEN_OPTIONS[python]+seen}" ]]; then
+      bootstrapped_python="$(abs_executable_path "${LAMBDA_VENV:-$VLA_ROOT/.venv-lora}/bin/python")"
+      [[ -x "$bootstrapped_python" ]] && PYTHON="$bootstrapped_python"
+      export PYTHON
+    fi
     if [[ "$PROFILE_CANONICAL" == graph_treatment || "$PROFILE_CANONICAL" == arrow_graph_treatment ]]; then
       # Graph preparation is downstream of the historical pair: it must carry
       # the same source HDF5/provenance contract before adding graph context.

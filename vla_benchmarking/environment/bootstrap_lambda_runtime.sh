@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VLA_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$VLA_ROOT/.." && pwd)"
-ENV_DIR="${LAMBDA_VENV:-$SCRIPT_DIR/.venv-lora}"
+ENV_DIR="${LAMBDA_VENV:-$VLA_ROOT/.venv-lora}"
 PYTHON310="${PYTHON310:-python3}"
 LIBERO_DIR="${LIBERO_DIR:-$VLA_ROOT/LIBERO}"
 REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-$VLA_ROOT/arrow_finetuned_vla/workflows/requirements-lora.txt}"

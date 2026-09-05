@@ -39,7 +39,14 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import sys
 from pathlib import Path
+
+# Bootstrap the repository root before organized-package imports so direct
+# script launches work with an empty ambient PYTHONPATH.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import h5py
 import numpy as np
@@ -64,7 +71,6 @@ from vla_benchmarking.evaluation.visual_scene_graph import (
     select_visual_relations,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 VLA_ROOT = REPO_ROOT / "vla_benchmarking"
 GRAPH_EXTRACTOR_PATH = VLA_ROOT / "evaluation" / "graph_relation_extractor.py"
 DEFAULT_DATA_DIR = REPO_ROOT / "vlm_benchmarking" / "data" / "libero_spatial_v5"
