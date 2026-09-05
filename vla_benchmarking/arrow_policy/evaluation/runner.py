@@ -154,7 +154,9 @@ class ArrowStudentRuntime:
         if sha256_file(model_file) != EXPECTED_MODEL_SHA256:
             raise RuntimeError("student model.pt hash does not match the pinned Stage D artifact")
         source = load_pinned_smolvla(self.source_checkpoint, base_policy=self.base_policy, device=str(self.device))
-        self.policy = ArrowSmolVLAPolicy(source).to(self.device).eval()
+        # Stage D was trained with the retained student in FP32; preserve
+        # that dtype when reconstructing before loading its strict weights.
+        self.policy = ArrowSmolVLAPolicy(source).float().to(self.device).eval()
         try:
             weights = torch.load(model_file, map_location=self.device, weights_only=True)
         except TypeError:  # pinned Legion torch may predate weights_only
