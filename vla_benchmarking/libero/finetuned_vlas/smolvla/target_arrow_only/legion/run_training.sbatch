@@ -20,7 +20,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=2-00:00:00
+# Legion's gpu_a40 partition is capped below 24 hours.  Keep the full sealed
+# training run schedulable; resume support preserves progress if it ever needs
+# another allocation.
+#SBATCH --time=0-23:59:00
 #SBATCH --output=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%j.out
 #SBATCH --error=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%j.err
 

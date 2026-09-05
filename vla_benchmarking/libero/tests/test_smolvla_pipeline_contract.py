@@ -69,6 +69,7 @@ def test_target_arrow_legion_training_launcher_is_immutable_and_scoped() -> None
     assert "TARGET_ARROW_LIBERO_DIR" in launcher
     assert "TARGET_ARROW_HDF5_ROOT" in launcher
     assert "ARCHIVE_ROOT" in launcher
+    assert "#SBATCH --time=0-23:59:00" in launcher
     assert "TARGET_ARROW_TRAINING_EXPECTED_COMMIT" in launcher
     assert 'sbatch "$PREPARE_DATA_SCRIPT"' not in launcher
     assert 'sbatch "$PIPELINE_SCRIPT"' not in launcher
