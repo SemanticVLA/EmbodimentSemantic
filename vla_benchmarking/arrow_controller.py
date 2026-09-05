@@ -1738,6 +1738,112 @@ def derive_rgbd_region_grasp_candidates(
     return np.vstack(targets), diagnostics
 
 
+def derive_rgbd_region_mask(
+    clean_rgb: np.ndarray,
+    depth_m: np.ndarray,
+    K: ArrayLike,
+    T_world_camera: ArrayLike,
+    source_pixel_xy: ArrayLike,
+    *,
+    region_radius_m: float = 0.075,
+    depth_tolerance_m: float = 0.025,
+    min_region_pixels: int = 48,
+    max_region_fraction: float = 0.15,
+    seed_radius_px: int = 3,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Return the canonical arrow-seeded metric-depth component.
+
+    This is the mask-only companion to :func:`derive_rgbd_region_grasp_candidates`.
+    It intentionally duplicates the established seed/growth arithmetic so the
+    RGB-D perception path can reuse the established numeric region contract without
+    changing the legacy candidate generator's return type or behavior.
+    """
+    _validate_images(clean_rgb, clean_rgb)
+    depth = np.asarray(depth_m, dtype=np.float64)
+    if depth.ndim != 2:
+        raise ValueError(f"depth_m must have 2 dimensions, got shape {depth.shape}")
+    if depth.shape != clean_rgb.shape[:2]:
+        raise ValueError("clean_rgb and depth_m must have identical image dimensions")
+    intrinsics = _validate_intrinsics(K)
+    _validate_transform(T_world_camera)
+    source = _pixel(source_pixel_xy, name="source_pixel_xy")
+    h, w = depth.shape
+    u, v = np.rint(source).astype(int)
+    if not (0 <= u < w and 0 <= v < h):
+        raise ValueError("source_pixel_xy is outside the RGB-D image")
+    radius_m = float(region_radius_m)
+    tolerance_m = float(depth_tolerance_m)
+    fraction_limit = float(max_region_fraction)
+    if not np.isfinite(radius_m) or not 0.01 <= radius_m <= 0.15:
+        raise ValueError("region_radius_m must be finite and in [0.01, 0.15]")
+    if not np.isfinite(tolerance_m) or not 0.001 <= tolerance_m <= 0.10:
+        raise ValueError("depth_tolerance_m must be finite and in [0.001, 0.10]")
+    if type(min_region_pixels) is not int or min_region_pixels < 4:
+        raise ValueError("min_region_pixels must be an integer >= 4")
+    if not np.isfinite(fraction_limit) or not 0.0 < fraction_limit <= 0.5:
+        raise ValueError("max_region_fraction must be in (0, 0.5]")
+    if type(seed_radius_px) is not int or not 1 <= seed_radius_px <= 12:
+        raise ValueError("seed_radius_px must be an integer in [1, 12]")
+    y0, y1 = max(0, v - seed_radius_px), min(h, v + seed_radius_px + 1)
+    x0, x1 = max(0, u - seed_radius_px), min(w, u + seed_radius_px + 1)
+    local = depth[y0:y1, x0:x1]
+    local_valid = np.isfinite(local) & (local > 0.0)
+    if not local_valid.any():
+        raise ValueError("source seed has no valid metric-depth samples")
+    seed_depth_m = float(np.median(local[local_valid]))
+    focal_px = max(abs(float(intrinsics[0, 0])), abs(float(intrinsics[1, 1])))
+    radius_px = int(np.ceil(focal_px * radius_m / seed_depth_m))
+    radius_px = max(seed_radius_px + 1, min(radius_px, max(h, w)))
+    yy, xx = np.mgrid[:h, :w]
+    radial = (xx - u) ** 2 + (yy - v) ** 2 <= radius_px ** 2
+    valid_depth = np.isfinite(depth) & (depth > 0.0)
+    eligible = radial & valid_depth & (np.abs(depth - seed_depth_m) <= tolerance_m)
+    seed_locations: list[tuple[int, int, int]] = []
+    for seed_y in range(y0, y1):
+        for seed_x in range(x0, x1):
+            if eligible[seed_y, seed_x]:
+                seed_locations.append(((seed_x - u) ** 2 + (seed_y - v) ** 2, seed_y, seed_x))
+    if not seed_locations:
+        raise ValueError("source seed has no sample inside the configured depth band")
+    _, seed_y, seed_x = min(seed_locations)
+    region = np.zeros((h, w), dtype=bool)
+    stack = [(seed_x, seed_y)]
+    while stack:
+        x, y = stack.pop()
+        if region[y, x] or not eligible[y, x]:
+            continue
+        region[y, x] = True
+        for dx, dy in ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < w and 0 <= ny < h and not region[ny, nx]:
+                stack.append((nx, ny))
+    area = int(region.sum())
+    fraction = float(area / (h * w))
+    if area < min_region_pixels:
+        raise ValueError(f"arrow-seeded RGB-D region is too small: {area} < {min_region_pixels} pixels")
+    if fraction > fraction_limit:
+        raise ValueError(
+            "arrow-seeded RGB-D region exceeds max_region_fraction: "
+            f"{fraction:.6f} > {fraction_limit:.6f}"
+        )
+    audit: dict[str, object] = {
+        "method": "arrow_seeded_metric_depth_component_v1",
+        "source_pixel_xy": [float(source[0]), float(source[1])],
+        "seed_pixel_xy": [int(seed_x), int(seed_y)],
+        "seed_depth_m": seed_depth_m,
+        "region_radius_m": radius_m,
+        "region_radius_px": radius_px,
+        "depth_tolerance_m": tolerance_m,
+        "region_area_px": area,
+        "region_fraction": fraction,
+        "region_mask_sha256": hashlib.sha256(np.ascontiguousarray(region.astype(np.uint8)).tobytes()).hexdigest(),
+        "touches_image_border": bool(np.any(region[0]) or np.any(region[-1]) or np.any(region[:, 0]) or np.any(region[:, -1])),
+        "rgb_sha256": hashlib.sha256(np.ascontiguousarray(clean_rgb).tobytes()).hexdigest(),
+        "depth_sha256": hashlib.sha256(np.ascontiguousarray(depth).tobytes()).hexdigest(),
+    }
+    return region, audit
+
+
 def _rotation_matrix(rotation: ArrayLike) -> np.ndarray:
     arr = _as_finite_array(rotation, name="rotation")
     if arr.shape == (3, 3):
@@ -1910,6 +2016,7 @@ __all__ = [
     "estimate_destination_support_plane",
     "release_point_on_support_plane",
     "derive_rgbd_region_grasp_candidates",
+    "derive_rgbd_region_mask",
     "normalized_osc_action",
     "compute_endpoint_change_evidence",
     "endpoint_change_evidence",

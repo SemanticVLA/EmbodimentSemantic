@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -46,6 +47,25 @@ def test_default_plan_has_100_cells_unique_seeds_and_paths(matrix, tmp_path: Pat
     )
 
 
+def test_early_runtime_diagnostics_preserve_opening_audits_and_exact_budget(matrix):
+    env = SimpleNamespace(
+        _grasp_controller_opening_preshape={"status": "failed", "failure_reason": "timeout", "budget_used": 61},
+        _grasp_controller_observation_hover={"status": "completed"},
+        _grasp_controller_gripper_open={"status": "completed"},
+        _grasp_controller_action_budget=matrix._episode_module._ActionBudget(1200, used=61),
+    )
+    observed = matrix._early_runtime_diagnostics(env)
+    assert observed["opening_preshape"]["failure_reason"] == "timeout"
+    assert observed["observation_hover"]["status"] == "completed"
+    assert observed["gripper_open"]["status"] == "completed"
+    assert observed["total_actions"] == 61
+    assert observed["experimental_action_budget"] == {"used": 61, "limit": 1200, "remaining": 1139}
+
+
+def test_early_runtime_diagnostics_does_not_add_experimental_fields_to_baseline(matrix):
+    assert matrix._early_runtime_diagnostics(SimpleNamespace()) == {}
+
+
 def test_condition_labels_are_validated(matrix):
     with pytest.raises(ValueError, match="suite_mode must be one of"):
         matrix.plan_cells(suite_mode="random")
@@ -63,7 +83,11 @@ def test_source_hash_inventory_covers_condition_and_control_implementations(matr
         "bddl_utils.py",
         "radomize_scenes.py",
         "preview_visual_arrows.py",
-        "legion/run_arrow_pick_place_dual_matrix.sbatch",
+        "controller_configs/canonical_molmo_rgbd_grasp.json",
+        "grasp_controller/runner.py",
+        "grasp_controller/grasp_candidates.py",
+        "grasp_controller/molmopoint.py",
+        "legion/run_grasp_controller.sbatch",
     }
     assert required <= set(hashes)
     assert all(hashes[path] for path in required)
@@ -297,6 +321,88 @@ def test_resume_skips_completed_cells_without_overwriting_plan(matrix, tmp_path:
     ]
     assert len(manifest_records) == 1
     assert len(manifest_records[0]["attempts"]) == 1
+
+
+def test_sparse_execution_selector_preserves_full_plan_and_unfiltered_resume(
+    matrix, tmp_path: Path
+):
+    selected = ((4, 1000), (6, 1005), (9, 1004))
+    calls: list[tuple[int, int]] = []
+
+    class Env:
+        def close(self):
+            pass
+
+    def build_env(task_id, seed, resolution):
+        del resolution
+        calls.append((int(task_id), int(seed)))
+        return Env()
+
+    def episode_runner(**kwargs):
+        return {"evaluator_success": None, "motion_executed": False}
+
+    first = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[4, 6, 9],
+        episodes_per_task=10,
+        dry_run=True,
+        allow_unvalidated_profile=True,
+        env_builder=build_env,
+        episode_runner=episode_runner,
+        arrow_input_builder=lambda *args: {},
+        execution_cell_identities=selected,
+    )
+    assert first["total_cells"] == 30
+    assert first["completed_cells"] == 3
+    assert first["failed_cells_count"] == 0
+    assert first["execution_selection"]["selected_count"] == 3
+    assert len(calls) == 3
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    assert len(status["cells"]) == 30
+    assert sum(cell["status"] == "planned" for cell in status["cells"]) == 27
+    contract_hash = first["contract_hash"]
+
+    resumed = matrix.run_matrix(
+        output_root=tmp_path,
+        task_ids=[4, 6, 9],
+        episodes_per_task=10,
+        dry_run=True,
+        allow_unvalidated_profile=True,
+        env_builder=build_env,
+        episode_runner=episode_runner,
+        arrow_input_builder=lambda *args: {},
+        resume=True,
+    )
+    assert resumed["contract_hash"] == contract_hash
+    assert resumed["total_cells"] == 30
+    assert resumed["completed_cells"] == 30
+    assert len(calls) == 30
+    assert "execution_selection" not in resumed
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    assert all(cell["status"] == "completed" for cell in status["cells"])
+
+
+@pytest.mark.parametrize("identities", [
+    ((4, 1000), (4, 1000)),
+    ((4, 9999),),
+    ((4,),),
+    ((4.5, 1000),),
+])
+def test_sparse_execution_selector_rejects_duplicate_unknown_or_malformed_identity(
+    matrix, tmp_path: Path, identities
+):
+    with pytest.raises(ValueError, match="execution_cell_identities"):
+        matrix.run_matrix(
+            output_root=tmp_path,
+            task_ids=[4],
+            episodes_per_task=2,
+            dry_run=True,
+            allow_unvalidated_profile=True,
+            env_builder=lambda *args: object(),
+            episode_runner=lambda **kwargs: {"evaluator_success": None},
+            arrow_input_builder=lambda *args: {},
+            execution_cell_identities=identities,
+        )
 
 
 def test_close_keyboard_interrupt_is_persisted_before_reraise(matrix, tmp_path: Path):
@@ -744,7 +850,7 @@ def test_timeout_phase_is_included_in_phase_aggregates(matrix):
 
 
 def test_external_controller_config_is_resolved_once_and_recorded(matrix, tmp_path: Path):
-    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9d_rgbd_region_grasp_search.json"
+    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "canonical_molmo_rgbd_grasp.json"
     observed = {}
 
     class Env:
@@ -799,7 +905,7 @@ def test_invalid_external_controller_config_fails_before_environment_build(
     invalid.write_text(json.dumps({"name": "v9", "unknown_policy": 1}), encoding="utf-8")
     env_calls = []
 
-    with pytest.raises(ValueError, match="unknown controller config keys"):
+    with pytest.raises(ValueError, match="only canonical"):
         matrix.run_matrix(
             output_root=tmp_path / "outputs",
             task_ids=[0],
@@ -816,7 +922,7 @@ def test_invalid_external_controller_config_fails_before_environment_build(
 
 
 def test_external_runtime_provenance_survives_controller_failure(matrix, tmp_path: Path):
-    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "v9d_rgbd_region_grasp_search.json"
+    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "canonical_molmo_rgbd_grasp.json"
 
     class Env:
         _arrow_capture_contract = {"valid": True}

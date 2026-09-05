@@ -1,104 +1,87 @@
-# Active arrow controller
+# Canonical grasp controller
 
-The only executable arrow policy is
-`v9d_rgbd_region_grasp_search.json`:
+This directory contains the one supported grasp-controller declaration. The
+canonical release is the frozen `failure_opening40_retreat80` treatment, with
+the neutral runtime identity used by `run_grasp_controller.py`. There are no
+active legacy controller choices.
 
-`libero_spatial_akita_bowl_agentview_v9d_rgbd_region_grasp_search`
+The checked-in declaration is
+[`canonical_molmo_rgbd_grasp.json`](canonical_molmo_rgbd_grasp.json).
 
-Its semantic configuration hash is
-`60f4f5f9ecfde7b4830f376ab06cfc706e2ef175d86817c42a0adb7cddd46c0c`.
-
-## Runtime contract
-
-The controller receives only the clean RGB image, one-arrow RGB image,
-aligned metric depth, camera calibration, and proprioception. The arrow is
-decoded from the rendered RGB input. Bboxes and scene-graph data are used
-only upstream to render that arrow and record provenance. Object poses,
-simulator state, task metadata, and evaluator results are forbidden controller
-inputs; evaluation is called only after motion and retreat.
-
-The RGB-D region policy derives bounded source grasp candidates from the
-source image/depth region only after a qualifying initial-attempt failure and
-tries at most three additional candidates. Motion executes
-the explicit phases `pregrasp`, `descend`, `close`, `lift`, `preplace`,
-`descend_place`, `open`, and `retreat`. Close/lift stall, timeout, and
-empty-gripper signals can trigger the bounded RGB-D grasp-search retry; all
-attempts and proprioception are recorded in the audit. Destination release remains
-arrow-derived and is checked against the RGB-D/workspace contract.
-
-Every episode records the selected policy name/hash, capture/depth contract,
-phase records, motion status, retries, frames/videos when enabled, and the
-terminal evaluator result. Use the matrix launcher with no controller
-override to select v9d:
+The supported operator entrypoints are:
 
 ```text
-python -m vla_benchmarking.run_arrow_pick_place_matrix --execute-motion --allow-unvalidated-profile
+python -m vla_benchmarking.run_grasp_controller --output-dir /absolute/output/path
+sbatch vla_benchmarking/legion/run_grasp_controller.sbatch  # with required release env
 ```
 
-To select the policy explicitly, pass
-`--controller-config vla_benchmarking/controller_configs/v9d_rgbd_region_grasp_search.json`.
-Retired arrow and ZeroGrasp policies are rejected before environment
-construction. Fine-tuned VLA/LoRA configurations are separate and remain
-available.
+Use the entrypoint and launcher documentation as the source of truth for
+arguments. Internal geometry/model modules are implementation details and are
+not separate launch paths.
 
-## Episode flow, end to end
+## Frozen behavior
 
-1. **Resolve the policy.** The direct runner and matrix runner load this file
-   before constructing LIBERO. They expand and hash the JSON, record the
-   source path and semantic hash, and reject any retired name, retired file,
-   or modified same-name payload. Standard Legion launchers also reject
-   ambient controller/config overrides.
+The default preserves the behavior of the verified 87/100 sealed-randomized
+release:
 
-2. **Construct and settle the scene.** LIBERO is created with the `agentview`
-   RGB-D camera and the selected suite mode (`vanilla` or
-   `sealed_randomized`). The environment is settled before capture/motion;
-   settling diagnostics are part of the episode record.
+- `agentview` RGB-D capture, with aligned metric depth and the existing camera
+  calibration/transform contract;
+- no SAM or SAM endpoint;
+- MolmoPoint-8B for multiple rim-contact proposals, using the pinned model
+  revision and the clearance-aware pointing prompt;
+- RGB-D geometry for contact position, jaw direction, opening, insertion,
+  approach, transfer, release, and workspace/obstruction checks;
+- up to four grasp attempts, with a fresh capture and regenerated candidates
+  after a failed close, lift, or retention check;
+- measured approximately 40 mm preshape and the 20 mm release-height /
+  80 mm retreat treatment;
+- the existing phase limits, action budget, retention gate, evaluator timing,
+  and placement compensation.
 
-3. **Capture the controller inputs.** One aligned 256x256 clean RGB frame and
-   depth frame are captured from the same render call. Depth is declared as
-   normalized or metric, sanitized, converted to meters when needed, and
-   audited for finite, positive endpoint support. Camera intrinsics and the
-   world-from-camera transform are recorded. RGB/depth shape and alignment are
-   fail-closed checks.
+The controller receives clean RGB, the arrow-derived task endpoints, aligned
+depth, calibration, and proprioception according to the existing vision and
+motion contracts. It does not use simulator object poses or evaluator output
+to select a grasp. The evaluator is queried only after placement and retreat.
 
-4. **Render and decode the arrow.** Upstream task metadata may identify the
-   bowl and plate only to draw exactly one subject-to-goal arrow on a copy of
-   the clean RGB. The controller receives the clean RGB, the resulting
-   one-arrow RGB, metric depth, calibration, and proprioception—not the
-   bounding boxes or scene graph. The arrow tail/head pixels are decoded from
-   the image difference and checked against depth.
+## Release identity and evidence
 
-5. **Build source and destination geometry.** Arrow endpoint depth patches are
-   deprojected through the camera calibration into world coordinates. The
-   first attempt uses the fixed, audited endpoint offsets
-   `source_grasp = source_visual_endpoint + (0.0146, 0.0432, 0.0244) m` and
-   `destination_release = destination_visual_endpoint + (-0.0057, 0.0484,
-   0.0310) m`. The active policy uses lower-quantile endpoint depth
-   (`q=0.25`); it does not use object poses. Destination release stays
-   arrow-derived and is checked against the RGB-D/workspace contract.
+The behavior-equivalent source release is
+`b4fb87759ae3a1ea2cd518cd201a1a737bb14e80`; it produced the final
+sealed-randomized Legion job `1920556`:
 
-6. **Execute the fixed phases.** With OSC positional control, the runner
-   executes `pregrasp → descend → close → lift → preplace →
-   descend_place → open → retreat`. Each phase has an explicit tolerance and
-   bounded action budget. If the initial fixed-offset attempt hits a configured
-   close/lift stall, timeout, or empty-gripper trigger, the runner then derives
-   a bounded RGB-D source-region candidate list from the original capture and
-   retries up to three additional candidates. Candidates are filtered by
-   valid depth, region support, mask fraction, and workspace bounds; no
-   evaluator query is made during motion.
+| Task | Our |
+| ---: | ---: |
+| 0 | 10/10 |
+| 1 | 10/10 |
+| 2 | 10/10 |
+| 3 | 10/10 |
+| 4 | 7/10 |
+| 5 | 10/10 |
+| 6 | 8/10 |
+| 7 | 10/10 |
+| 8 | 10/10 |
+| 9 | 2/10 |
+| **Overall** | **87/100 (87%)** |
 
-7. **Audit and evaluate.** Every phase records target, residuals, EEF state,
-   gripper state, action counts, and failure/timeout information. Captures,
-   phase frames, motion traces, retry records, hashes, and provenance are
-   written to the run output (and archived by the launcher). Only after the
-   complete motion and retreat sequence does the runner query the LIBERO
-   evaluator and append the terminal success/failure record.
+Raw results, manifests, provenance, and the archived release are preserved at
+the Legion archive recorded in the handoff documentation:
 
-## What the hash means
+```text
+/home/hjaber/EmbodimentSemantic_archive/molmo_failure_sealed100/
+molmo_failure_sealed100_fa1ae83_1920556
+```
 
-The semantic hash identifies the expanded v9d policy above. Runtime manifests
-also include the controller source hashes, suite mode, capture/depth contract,
-commit, seed, task, and resolution. These identities make a result comparable
-to the frozen v9d canary/200-cell runs without silently mixing in a retired
-variant. Historical JSON, videos, and ZeroGrasp outputs remain in their
-archives; they are not executable defaults.
+The 87% evidence belongs to that executed release; it is not a claim about a
+later refactor until that refactor is independently evaluated. The commit and
+archive are rollback references, not additional active
+policies. Historical experiment records remain available in Git and Legion
+archives for audit and reproducibility; they are not selectable runtime
+defaults.
+
+## Compatibility boundary
+
+The old experiment labels and their launchers are retired. A stale reference
+must fail clearly before environment construction rather than silently
+selecting another treatment. Do not revive, rename, or mix historical
+configuration hashes into the canonical release. Any future behavioral change
+requires a new experiment identity and a new frozen release after evaluation.

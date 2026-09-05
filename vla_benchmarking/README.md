@@ -209,14 +209,39 @@ One-task CPU smoke run:
 python run_scene_graph_visual_ablation.py --tasks "[0]" --episodes 1 --max-videos 1 --device cpu
 ```
 
-### Archived ZeroGrasp grasp-proposal experiment
+### Canonical grasp controller
 
-ZeroGrasp is retired from the active arrow runtime. Its source, dependency
-setup notes, checkpoint provenance, and prior experiments are retained in the
-repository history and archival run records for reproducibility only. The
-standard Legion arrow launcher is v9d and does not read ZeroGrasp configuration
-or `ZERO_GRASP_*` environment variables. Fine-tune/LoRA workflows are
-separate and unchanged.
+The supported manipulation path is the single canonical grasp controller. It
+is the frozen `failure_opening40_retreat80` treatment, promoted after its
+sealed-randomized Legion evaluation reached **87/100 (87%)**. Its behavior and
+operator contract are documented in
+[`controller_configs/README.md`](controller_configs/README.md).
+
+Use only these public entrypoints:
+
+```bash
+python -m vla_benchmarking.run_grasp_controller --output-dir /absolute/output/path
+REPO_ROOT=/absolute/isolated/checkout \
+GRASP_CONTROLLER_EXPECTED_COMMIT=<40-character-sha> \
+GRASP_CONTROLLER_LABEL=<safe-label> \
+sbatch --export=ALL vla_benchmarking/legion/run_grasp_controller.sbatch
+```
+
+The controller uses the existing agentview RGB-D capture, MolmoPoint-8B
+point proposals, deterministic RGB-D grasp geometry, measured 40 mm preshape,
+20 mm release-height compensation, and 80 mm post-release retreat. It does
+not use SAM. Model loading, candidate generation, motion, retries, and
+evaluation remain modular internals of the one entrypoint; do not invoke
+internal modules as separate policies.
+
+Old experiment labels, variant launchers, and historical configuration names
+are not active choices and must not be used for new runs. Their Git history,
+raw outputs, manifests, and Legion archives remain available for audit and
+rollback. The frozen source release is
+`b4fb87759ae3a1ea2cd518cd201a1a737bb14e80`; the corresponding final archive
+is `molmo_failure_sealed100_fa1ae83_1920556` under the recorded Legion archive
+root. The canonical controller must preserve the complete motion and
+evaluator contract: query the evaluator only after placement and retreat.
 
 ### SmolVLA LoRA fine-tuning (Lambda GPU)
 

@@ -1,0 +1,30 @@
+{
+  "policy_name": "libero_spatial_akita_bowl_agentview_canonical",
+  "policy_id": "canonical_molmo_rgbd_grasp",
+  "source_treatment_id": "failure_opening40_retreat80",
+  "result": "87/100",
+  "source_job_id": "1920556",
+  "source_release_commit": "b4fb87759ae3a1ea2cd518cd201a1a737bb14e80",
+  "canonical_config_sha256": "37497fd0b2f60346b9ffd1501ccc743046c7fa2370ef6fa9531a7204f69cc044",
+  "scientific_identity_hash": "717d00640ab5b73fed0dcbbf9d7703786d2a527efc2e02205d16f34bbc13465a",
+  "underlying_controller_config_digest": "60f4f5f9ecfde7b4830f376ab06cfc706e2ef175d86817c42a0adb7cddd46c0c",
+  "summary_sha256": "569ac1e8400af9f80047fd8f6a6060946c3c0e80dfaeb348e04b655e51d3472a",
+  "manifest_sha256": "eb0788ce41e10215f4ee730d53d52360cd1731a6e6a91999af385babd127b369",
+  "status_sha256": "b15e0bd6b9bda542a7c7662723a22ac36f9181ae2e2e3b0320a5661370a7cd52",
+  "runtime_versions_sha256": "dcb7f35401b81cb634b23ced3866b7124c8bab54b3f79bdecfd2372a4fcf1ec3",
+  "archive": "/home/hjaber/EmbodimentSemantic_archive/molmo_failure_sealed100/molmo_failure_sealed100_fa1ae83_1920556",
+  "sealed_randomized_cells": 100,
+  "per_task_successes": {
+    "0": 10,
+    "1": 10,
+    "2": 10,
+    "3": 10,
+    "4": 7,
+    "5": 10,
+    "6": 8,
+    "7": 10,
+    "8": 10,
+    "9": 2
+  },
+  "immutable": true
+}

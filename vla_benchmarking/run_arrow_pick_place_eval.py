@@ -19,7 +19,7 @@ import inspect
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -515,6 +515,10 @@ class ControllerVariantConfig:
     micro_correction: MicroCorrectionPolicy | Mapping[str, Any] | None = None
     source_approach: Mapping[str, Any] | None = None
     destination_placement: Mapping[str, Any] | None = None
+    # Immutable provenance for the promoted perception/controller treatment.
+    # These fields are descriptive and do not alter the motion engine; keeping
+    # them in the canonical payload prevents an accidental partial promotion.
+    policy_metadata: Mapping[str, Any] | None = None
     config_source: str | None = None
     external_config_hash: str | None = None
 
@@ -527,6 +531,13 @@ class ControllerVariantConfig:
         object.__setattr__(self, "destination_placement", _optional_rgbd_policy(
             self.destination_placement, "destination_placement", {"enabled", "patch_radius_px", "min_valid_fraction", "max_residual_m", "release_clearance_m"}
         ))
+        if self.policy_metadata is not None:
+            if not isinstance(self.policy_metadata, Mapping):
+                raise ValueError("policy_metadata must be a mapping")
+            try:
+                json.dumps(self.policy_metadata, sort_keys=True, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("policy_metadata must be JSON serializable") from exc
         if self.suite_mode not in SUITE_MODES:
             raise ValueError(f"suite_mode must be one of {SUITE_MODES}, got {self.suite_mode!r}")
         if self.phase_timeout_steps <= 0 or self.gripper_dwell_steps <= 0:
@@ -659,6 +670,8 @@ class ControllerVariantConfig:
             result["source_approach"] = json.loads(json.dumps(self.source_approach, sort_keys=True))
         if self.destination_placement is not None:
             result["destination_placement"] = json.loads(json.dumps(self.destination_placement, sort_keys=True))
+        if self.policy_metadata is not None:
+            result["policy_metadata"] = json.loads(json.dumps(self.policy_metadata, sort_keys=True))
         return result
 
     @property
@@ -706,15 +719,8 @@ def controller_variant_from_config(
         "max_mask_fraction_for_motion", "workspace_bounds_m", "grasp_search",
         "micro_correction",
         "source_approach", "destination_placement",
+        "policy_metadata",
     }
-    retired_keys = {
-        "grasp_provider", "placement_provider", "zerograsp", "zerograsp_policy"
-    }
-    if retired_keys.intersection(data):
-        raise ControllerConfigError(
-            "ZeroGrasp is a retired side experiment and cannot be selected by "
-            "the active arrow runtime"
-        )
     unknown = set(data) - allowed
     if unknown:
         raise ControllerConfigError(f"unknown controller config keys: {sorted(unknown)}")
@@ -743,7 +749,7 @@ def _resolve_controller_variant(
     def require_active(variant: ControllerVariantConfig) -> ControllerVariantConfig:
         if variant.name != DEFAULT_PROFILE_NAME:
             raise ControllerConfigError(
-                "only the active v9d controller is executable; "
+                "only the active canonical controller is executable; "
                 f"got retired controller {variant.name!r}"
             )
         expected = controller_variant_from_config(
@@ -751,7 +757,7 @@ def _resolve_controller_variant(
         )
         if variant.canonical() != expected.canonical():
             raise ControllerConfigError(
-                "active v9d controller payload does not match the checked-in policy"
+                "active canonical controller payload does not match the checked-in policy"
             )
         return variant
 
@@ -760,7 +766,7 @@ def _resolve_controller_variant(
     if isinstance(value, Mapping):
         return require_active(controller_variant_from_config(value, suite_mode=suite_mode))
     if value is None:
-        # The active v9d document is the single source of truth for the
+        # The active canonical document is the single source of truth for the
         # default.  Loading it here keeps nested RGB-D policy defaults and
         # provenance identical for direct episodes and matrix runs.
         return require_active(controller_variant_from_config(
@@ -777,7 +783,7 @@ def _resolve_controller_variant(
             load_controller_config(name), suite_mode=suite_mode
         ))
     raise ControllerConfigError(
-        "only the active v9d controller is executable; "
+        "only the active canonical controller is executable; "
         f"got retired controller {name!r}"
     )
 
@@ -1447,6 +1453,70 @@ def _pose_waypoint(position: Any, orientation: Any | None = None, orientation_fr
     return result
 
 
+def _experimental_candidate_pose(candidate: Any) -> tuple[np.ndarray, np.ndarray, float, np.ndarray | None, dict[str, Any]]:
+    """Validate the model/geometry candidate seam without importing its package.
+
+    Experimental candidates are deliberately duck-typed so the frozen runner
+    remains independent of MolmoPoint/SAM3.  The position is the measured
+    ``grip_site`` target (not the legacy arrow source anchor); the orientation is
+    a world-frame grip-site rotation and the aperture is audit-only because
+    Panda gripper commands remain signed incremental actions.
+    """
+    position = getattr(candidate, "grip_site_world_m", None)
+    if position is None:
+        position = getattr(candidate, "position_world_m", None)
+    if position is None and isinstance(candidate, Mapping):
+        position = candidate.get("grip_site_world_m", candidate.get("position_world_m"))
+    orientation = getattr(candidate, "rotation_world_grip_site", None)
+    if orientation is None:
+        orientation = getattr(candidate, "orientation_matrix", None)
+    if orientation is None:
+        quaternion = getattr(candidate, "orientation_xyzw", None)
+        if quaternion is not None:
+            qx, qy, qz, qw = np.asarray(quaternion, dtype=np.float64).reshape(-1)
+            norm = float(np.linalg.norm((qx, qy, qz, qw)))
+            if norm > 1e-9:
+                qx, qy, qz, qw = (qx / norm, qy / norm, qz / norm, qw / norm)
+                orientation = np.asarray((
+                    (1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)),
+                    (2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)),
+                    (2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)),
+                ), dtype=np.float64)
+    if orientation is None and isinstance(candidate, Mapping):
+        orientation = candidate.get("rotation_world_grip_site", candidate.get("orientation_matrix"))
+    opening = getattr(candidate, "required_aperture_m", None)
+    if opening is None:
+        opening = getattr(candidate, "opening_m", None)
+    if opening is None and isinstance(candidate, Mapping):
+        opening = candidate.get("required_aperture_m", candidate.get("opening_m"))
+    if position is None or orientation is None or opening is None:
+        raise ValueError("experimental candidate requires grip_site_world_m, rotation_world_grip_site, and required_aperture_m")
+    point = np.asarray(position, dtype=np.float64).reshape(-1)
+    pregrasp = getattr(candidate, "pregrasp_world_m", None)
+    if pregrasp is None and isinstance(candidate, Mapping):
+        pregrasp = candidate.get("pregrasp_world_m")
+    rotation = np.asarray(orientation, dtype=np.float64)
+    aperture = float(opening)
+    if point.shape != (3,) or not np.isfinite(point).all():
+        raise ValueError("experimental candidate grip-site position must be a finite world 3-vector")
+    if rotation.shape != (3, 3) or not np.isfinite(rotation).all():
+        raise ValueError("experimental candidate orientation must be a finite 3x3 matrix")
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-5) or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-5):
+        raise ValueError("experimental candidate orientation must be a proper SO(3) matrix")
+    if not np.isfinite(aperture) or not 0.0 < aperture <= 0.20:
+        raise ValueError("experimental candidate aperture must be in (0, 0.20] metres")
+    if pregrasp is not None:
+        pregrasp = np.asarray(pregrasp, dtype=np.float64).reshape(-1)
+        if pregrasp.shape != (3,) or not np.isfinite(pregrasp).all():
+            raise ValueError("experimental candidate pregrasp must be a finite world 3-vector")
+    audit = getattr(candidate, "audit", {})
+    if not audit:
+        audit = getattr(candidate, "metadata", {})
+    if not isinstance(audit, Mapping):
+        audit = {}
+    return point, rotation, aperture, pregrasp, dict(audit)
+
+
 def _serialize_waypoints(waypoints: Any) -> list[Any] | dict[str, Any]:
     values = waypoints.items() if isinstance(waypoints, Mapping) else enumerate(waypoints)
     result: dict[str, Any] = {}
@@ -1722,6 +1792,12 @@ def _motion_trace_entry(
     *,
     action_sent: bool,
     correction_active: bool,
+    experimental_motion_diagnostics: bool = False,
+    nominal_target: Any | None = None,
+    commanded_target: Any | None = None,
+    action: Any | None = None,
+    before_proprio: Mapping[str, Any] | None = None,
+    env: Any | None = None,
 ) -> dict[str, Any]:
     """Build one bounded, proprioception-only motion trace record."""
     observed = _proprioception(proprio)
@@ -1733,7 +1809,7 @@ def _motion_trace_entry(
         residual_array = np.asarray(target_pos, dtype=np.float64) - np.asarray(eef_pos, dtype=np.float64)
         residual = residual_array.tolist()
         residual_norm = float(np.linalg.norm(residual_array))
-    return {
+    result = {
         "phase": str(phase),
         "step": int(step),
         "action_sent": bool(action_sent),
@@ -1744,6 +1820,63 @@ def _motion_trace_entry(
         "residual_vector_m": residual,
         "residual_norm_m": residual_norm,
         "correction_active": bool(correction_active),
+    }
+    if experimental_motion_diagnostics:
+        before = _proprioception(before_proprio)
+        result.update({
+            "nominal_target_position_m": _diagnostic_array(_position(nominal_target), limit=3) if nominal_target is not None else None,
+            "commanded_target_position_m": _diagnostic_array(_position(commanded_target), limit=3) if commanded_target is not None else None,
+            "action_normalized": _diagnostic_array(action),
+            "eef_pos_before_m": _diagnostic_array(before.get("eef_pos"), limit=3),
+            "eef_pos_after_m": eef_pos,
+            "controller_telemetry": _experimental_controller_telemetry(env),
+        })
+    return result
+
+
+def _experimental_controller_telemetry(env: Any | None) -> dict[str, Any]:
+    """Read optional robot/controller telemetry without touching simulator state."""
+    unavailable = {"status": "unavailable", "reason": "not_exposed"}
+    sources: list[Any] = []
+    if env is not None:
+        sources.append(env)
+        for name in ("controller", "robot", "robots"):
+            try:
+                value = getattr(env, name, None)
+            except Exception:
+                value = None
+            if isinstance(value, (list, tuple)):
+                sources.extend(value[:2])
+            elif value is not None:
+                sources.append(value)
+        # Robosuite robots expose the controller below each robot wrapper.
+        for source in tuple(sources):
+            try:
+                controller = getattr(source, "controller", None)
+            except Exception:
+                controller = None
+            if controller is not None:
+                sources.append(controller)
+
+    def lookup(names: Sequence[str]) -> list[float] | dict[str, str]:
+        for source in sources:
+            for name in names:
+                try:
+                    value = getattr(source, name, None)
+                except Exception:
+                    value = None
+                converted = _diagnostic_array(value)
+                if converted is not None:
+                    return converted
+        return dict(unavailable)
+
+    return {
+        "controller_ee_pos_m": lookup(("ee_pos", "eef_pos", "ee_position", "eef_position")),
+        "controller_goal_pos_m": lookup(("goal_pos", "goal_position", "ee_goal_pos", "eef_goal_pos")),
+        "requested_torque": lookup(("requested_torque", "commanded_torque", "torque_command", "torque")),
+        "applied_torque": lookup(("applied_torque", "applied_joint_torque", "torque_applied")),
+        "eef_force": lookup(("eef_force", "ee_force", "force")),
+        "eef_torque": lookup(("eef_torque", "ee_torque", "wrench_torque")),
     }
 
 
@@ -1892,6 +2025,7 @@ def _run_motion(
     dry_run: bool,
     phase_frame_callback: Callable[[str, int], str | Path | None] | None = None,
     motion_started_callback: Callable[[], None] | None = None,
+    phase_observer: Callable[[str, Mapping[str, Any]], None] | None = None,
     stall_window_steps: int = DEFAULT_STALL_WINDOW_STEPS,
     stall_delta_m: float = DEFAULT_STALL_DELTA_M,
     phase_policies: Mapping[str, Mapping[str, Any]] | None = None,
@@ -1899,7 +2033,7 @@ def _run_motion(
     micro_correction: MicroCorrectionPolicy | None = None,
     post_phase_callback: Callable[[str, Mapping[str, Any], Mapping[str, np.ndarray]], None] | None = None,
     start_phase: str | None = None,
-    action_budget: int | None = None,
+    action_budget: int | _ActionBudget | None = None,
     micro_action_budget: _ActionBudget | None = None,
     orientation_tolerance_rad: float = DEFAULT_ORIENTATION_TOLERANCE_RAD,
     eef_orientation_transform: np.ndarray | None = None,
@@ -1907,22 +2041,47 @@ def _run_motion(
     motion_trace_path: str | Path | None = None,
     motion_trace_state: list[dict[str, Any]] | None = None,
     motion_trace_segment: str = "initial",
+    experimental_motion_diagnostics: bool = False,
+    motion_workspace_bounds: Mapping[str, Sequence[float]] | None = None,
+    experimental_motion_correction: bool = False,
     failure_snapshot_callback: Callable[[str, int, Mapping[str, Any]], str | Path | None] | None = None,
     motion_frame_callback: Callable[[str, int], str | Path | None] | None = None,
     post_lift_retention_gate: Callable[[Mapping[str, Any], Mapping[str, np.ndarray]], Any] | None = None,
+    phase_order: Sequence[str] | None = None,
+    phase_timeout_steps_by_phase: Mapping[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     if phase_timeout_steps <= 0:
         raise ValueError("phase_timeout_steps must be positive")
     if gripper_dwell_steps <= 0:
         raise ValueError("gripper_dwell_steps must be positive")
-    if stop_after_phase not in PHASES:
-        raise ValueError(f"stop_after_phase must be one of {PHASES}, got {stop_after_phase!r}")
-    if start_phase is not None and start_phase not in PHASES:
-        raise ValueError(f"start_phase must be one of {PHASES}, got {start_phase!r}")
+    ordered_phases = tuple(PHASES if phase_order is None else phase_order)
+    if not ordered_phases or any(str(phase) == "" for phase in ordered_phases):
+        raise ValueError("phase_order must contain at least one non-empty phase")
+    if len(set(ordered_phases)) != len(ordered_phases):
+        raise ValueError("phase_order must contain unique phases")
+    if stop_after_phase not in ordered_phases:
+        raise ValueError(f"stop_after_phase must be one of {ordered_phases}, got {stop_after_phase!r}")
+    if start_phase is not None and start_phase not in ordered_phases:
+        raise ValueError(f"start_phase must be one of {ordered_phases}, got {start_phase!r}")
+    phase_limits = dict(phase_timeout_steps_by_phase or {})
+    if any(str(name) not in ordered_phases for name in phase_limits):
+        raise ValueError("phase_timeout_steps_by_phase contains an unknown phase")
+    if any(type(value) is not int or value <= 0 for value in phase_limits.values()):
+        raise ValueError("phase_timeout_steps_by_phase values must be positive integers")
     if stall_window_steps < 0 or stall_delta_m < 0 or not np.isfinite(stall_delta_m):
         raise ValueError("stall_window_steps and stall_delta_m must be finite and non-negative")
-    if action_budget is not None and int(action_budget) <= 0:
-        raise ValueError("action_budget must be positive when supplied")
+    if action_budget is not None:
+        # A shared budget may legitimately have zero remaining after an
+        # earlier phase.  Let the phase loop emit ControllerMotionTimeout so
+        # the exhaustion is audited consistently; reject only an invalid
+        # configured limit.
+        configured_limit = (
+            int(action_budget.limit)
+            if isinstance(action_budget, _ActionBudget)
+            else int(action_budget)
+        )
+        if configured_limit <= 0:
+            raise ValueError("action_budget must be positive when supplied")
     if not np.isfinite(orientation_tolerance_rad) or orientation_tolerance_rad <= 0:
         raise ValueError("orientation_tolerance_rad must be finite and positive")
     if type(motion_trace_max_steps) is not int or motion_trace_max_steps <= 0:
@@ -2011,7 +2170,7 @@ def _run_motion(
         live_corrections = []
         setattr(env, "_arrow_micro_correction_audit", live_corrections)
     started = start_phase is None
-    for phase in PHASES:
+    for phase in ordered_phases:
         if not started:
             if phase == start_phase:
                 started = True
@@ -2025,7 +2184,9 @@ def _run_motion(
             phase_tolerance = WAYPOINT_POSITION_TOLERANCE_M
         phase_tolerance = float(phase_tolerance)
         waypoint_orientation = _orientation(waypoint)
-        required_steps = gripper_dwell_steps if is_gripper_phase else phase_timeout_steps
+        required_steps = gripper_dwell_steps if is_gripper_phase else int(
+            phase_limits.get(phase, phase_timeout_steps)
+        )
         record = {
             "phase": phase,
             "steps": 0,
@@ -2034,6 +2195,8 @@ def _run_motion(
             "dwell_steps": int(gripper_dwell_steps) if is_gripper_phase else 0,
             "policy": dict(policies.get(phase, {})),
         }
+        if phase in phase_limits:
+            record["phase_timeout_steps"] = int(required_steps)
         if waypoint_orientation is not None:
             record["target_orientation_matrix"] = waypoint_orientation.tolist()
             record["orientation_tolerance_rad"] = float(orientation_tolerance_rad)
@@ -2043,6 +2206,7 @@ def _run_motion(
         correction_rounds = 0
         correction_actions = 0
         phase_correction_events: list[dict[str, Any]] = []
+        insufficient_budget_audited = False
         for step in range(required_steps):
             correction_was_active = correction_remaining > 0
             # Micro-correction changes only the positional target.  Preserve
@@ -2051,6 +2215,10 @@ def _run_motion(
             # would silently command the legacy held orientation while the
             # convergence check still waited for the learned one.
             action_waypoint: dict[str, Any] = {"position": correction_target}
+            if motion_workspace_bounds is not None:
+                validate_workspace_points(
+                    {"commanded_target": correction_target}, bounds=motion_workspace_bounds
+                )
             if waypoint_orientation is not None:
                 action_waypoint["orientation"] = waypoint_orientation
                 frame = _orientation_frame(waypoint)
@@ -2072,6 +2240,9 @@ def _run_motion(
                 append_motion_trace(_motion_trace_entry(
                     phase, step + 1, proprio, action_waypoint,
                     action_sent=False, correction_active=correction_was_active,
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    nominal_target=waypoint, commanded_target=action_waypoint,
+                    action=None, before_proprio=proprio, env=env,
                 ))
                 append_failure_record(record, phase)
                 raise
@@ -2079,15 +2250,31 @@ def _run_motion(
             record["steps"] = step + 1
             if dry_run:
                 break
-            if action_budget is not None and sent_actions >= int(action_budget):
+            budget_exhausted = (
+                action_budget is not None
+                and (action_budget.remaining <= 0 if isinstance(action_budget, _ActionBudget) else sent_actions >= int(action_budget))
+            )
+            if budget_exhausted:
                 record["status"] = "timeout"
-                record["action_budget"] = int(action_budget)
+                record["action_budget"] = (
+                    int(action_budget.limit)
+                    if isinstance(action_budget, _ActionBudget)
+                    else int(action_budget)
+                )
                 append_motion_trace(_motion_trace_entry(
                     phase, step + 1, proprio, action_waypoint,
                     action_sent=False, correction_active=correction_was_active,
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    nominal_target=waypoint, commanded_target=action_waypoint,
+                    action=action, before_proprio=proprio, env=env,
                 ))
                 append_failure_record(record, phase)
-                raise ControllerMotionTimeout(f"phase {phase} exhausted action budget {action_budget}")
+                budget_limit = (
+                    int(action_budget.limit)
+                    if isinstance(action_budget, _ActionBudget)
+                    else int(action_budget)
+                )
+                raise ControllerMotionTimeout(f"phase {phase} exhausted action budget {budget_limit}")
             if not motion_notified:
                 # Let a batch coordinator durably record the transition to
                 # physical motion before the first simulator action is sent.
@@ -2098,10 +2285,17 @@ def _run_motion(
             try:
                 observation, done, _info = _step_once(env, action)
                 sent_actions += 1
+                if isinstance(action_budget, _ActionBudget) and not action_budget.consume():
+                    # The pre-step check above is authoritative; this branch is
+                    # defensive against a concurrently mutated budget.
+                    raise ControllerMotionTimeout("action budget exhausted after action dispatch")
             except BaseException as exc:
                 append_motion_trace(_motion_trace_entry(
                     phase, step + 1, proprio, action_waypoint,
                     action_sent=False, correction_active=correction_was_active,
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    nominal_target=waypoint, commanded_target=action_waypoint,
+                    action=action, before_proprio=proprio, env=env,
                 ))
                 # Preserve a partial gripper record so run_episode can offer a
                 # bounded, explicitly-approved RGB-D recovery.  This is the
@@ -2115,6 +2309,9 @@ def _run_motion(
             append_motion_trace(_motion_trace_entry(
                 phase, step + 1, observation, action_waypoint,
                 action_sent=True, correction_active=correction_was_active,
+                experimental_motion_diagnostics=experimental_motion_diagnostics,
+                nominal_target=waypoint, commanded_target=action_waypoint,
+                action=action, before_proprio=proprio, env=env,
             ))
             if motion_frame_callback is not None:
                 try:
@@ -2197,6 +2394,43 @@ def _run_motion(
                     residual = nominal - current
                     residual_norm = float(np.linalg.norm(residual))
                     if np.isfinite(residual_norm) and residual_norm > 0.0:
+                        requested_burst = int(correction_policy.burst_steps)
+                        if experimental_motion_correction:
+                            phase_remaining = int(required_steps - (step + 1))
+                            global_remaining = (
+                                int(action_budget.remaining)
+                                if isinstance(action_budget, _ActionBudget)
+                                else int(action_budget) - sent_actions
+                                if action_budget is not None
+                                else None
+                            )
+                            micro_remaining = (
+                                int(micro_action_budget.remaining)
+                                if micro_action_budget is not None else 0
+                            )
+                            insufficient = (
+                                phase_remaining < requested_burst
+                                or (global_remaining is not None and global_remaining < requested_burst)
+                                or micro_remaining < requested_burst
+                            )
+                            if insufficient:
+                                if not insufficient_budget_audited:
+                                    event = {
+                                        "phase": phase,
+                                        "trigger": "insufficient_remaining_budget",
+                                        "trigger_step": int(step + 1),
+                                        "status": "skipped",
+                                        "required_burst_actions": requested_burst,
+                                        "phase_remaining_steps": phase_remaining,
+                                        "global_remaining_actions": global_remaining,
+                                        "micro_remaining_actions": micro_remaining,
+                                        "reason": "experimental_correction_requires_full_burst_budget",
+                                    }
+                                    live_corrections.append(event)
+                                    phase_correction_events.append(event)
+                                    record.setdefault("micro_corrections", []).append(event)
+                                    insufficient_budget_audited = True
+                                continue
                         distance = min(
                             float(correction_policy.residual_max_m),
                             residual_norm * float(correction_policy.correction_gain),
@@ -2300,6 +2534,12 @@ def _run_motion(
                 record["status"] = "stop"
         phase_audit.append(record)
         setattr(env, "_arrow_phase_audit", phase_audit)
+        if phase_observer is not None:
+            try:
+                phase_observer(phase, record)
+            except Exception as exc:  # passive diagnostics cannot alter motion
+                record["phase_observer_error_type"] = type(exc).__name__
+                record["phase_observer_error"] = str(exc)
         if not dry_run and phase_frame_callback is not None:
             try:
                 frame_path = phase_frame_callback(phase, len(phase_audit) - 1)
@@ -2545,6 +2785,7 @@ def run_episode(
     capture: CapturedRGBD | None = None,
     allow_unvalidated_profile: bool = False,
     motion_started_callback: Callable[[], None] | None = None,
+    phase_observer: Callable[[str, Mapping[str, Any]], None] | None = None,
     controller_variant: ControllerVariantConfig | str | None = None,
     suite_mode: str | None = None,
     recovery_attempts: int = DEFAULT_RECOVERY_ATTEMPTS,
@@ -2554,8 +2795,58 @@ def run_episode(
     motion_trace_max_steps: int = DEFAULT_MOTION_TRACE_MAX_STEPS,
     canary_video_dir: str | Path | None = None,
     canary_video_max_frames: int = DEFAULT_CANARY_VIDEO_MAX_FRAMES,
+    experimental_candidate: Any | None = None,
+    experimental_eef_orientation_transform: Sequence[Sequence[float]] | np.ndarray | None = None,
+    experimental_gripper_opening_m: float | None = None,
+    experimental_release_height_offset_m: float = 0.0,
+    experimental_retreat_height_offset_m: float = 0.0,
+    experimental_motion_profile: str | None = None,
+    experimental_transfer_xy_policy: str = "legacy_displacement",
+    experimental_motion_diagnostics: bool = False,
+    experimental_micro_correction: MicroCorrectionPolicy | None = None,
+    retreat_completed_callback: Callable[[], None] | None = None,
+    experimental_action_budget: _ActionBudget | None = None,
 ) -> dict[str, Any]:
     """Capture, decode, and optionally execute one bounded arrow episode."""
+    try:
+        release_height_offset = float(experimental_release_height_offset_m)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("experimental_release_height_offset_m must be finite") from exc
+    if not np.isfinite(release_height_offset) or release_height_offset < 0.0:
+        raise ValueError("experimental_release_height_offset_m must be finite and non-negative")
+    if release_height_offset != 0.0 and not (
+        np.isclose(release_height_offset, 0.020, atol=1e-9, rtol=0.0)
+        or np.isclose(release_height_offset, 0.040, atol=1e-9, rtol=0.0)
+    ):
+        raise ValueError("experimental_release_height_offset_m only supports +0.020 m or +0.040 m")
+    if release_height_offset != 0.0 and experimental_candidate is None:
+        raise ValueError("experimental_release_height_offset_m requires an experimental candidate")
+    try:
+        retreat_height_offset = float(experimental_retreat_height_offset_m)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("experimental_retreat_height_offset_m must be finite") from exc
+    if not np.isfinite(retreat_height_offset) or retreat_height_offset < 0.0:
+        raise ValueError("experimental_retreat_height_offset_m must be finite and non-negative")
+    if retreat_height_offset != 0.0 and not np.isclose(retreat_height_offset, 0.080, atol=1e-9, rtol=0.0):
+        raise ValueError("experimental_retreat_height_offset_m only supports +0.080 m")
+    if retreat_height_offset != 0.0 and experimental_candidate is None:
+        raise ValueError("experimental_retreat_height_offset_m requires an experimental candidate")
+    if experimental_motion_profile is not None and experimental_motion_profile not in {
+        "release20_retreat80mm", "release_plus40mm",
+    }:
+        raise ValueError("experimental_motion_profile is not an approved failure-led profile")
+    if experimental_motion_profile is not None and experimental_candidate is None:
+        raise ValueError("experimental_motion_profile requires an experimental candidate")
+    if experimental_motion_profile == "release20_retreat80mm":
+        if not np.isclose(release_height_offset, 0.020, atol=1e-9, rtol=0.0) or not np.isclose(retreat_height_offset, 0.080, atol=1e-9, rtol=0.0):
+            raise ValueError("release20_retreat80mm requires +0.020 m release and +0.080 m retreat")
+    elif experimental_motion_profile == "release_plus40mm":
+        if not np.isclose(release_height_offset, 0.040, atol=1e-9, rtol=0.0) or retreat_height_offset != 0.0:
+            raise ValueError("release_plus40mm requires +0.040 m release and the original retreat")
+    if experimental_transfer_xy_policy not in {"legacy_displacement", "visual_endpoints"}:
+        raise ValueError("experimental_transfer_xy_policy must be legacy_displacement or visual_endpoints")
+    if experimental_transfer_xy_policy == "visual_endpoints" and experimental_candidate is None:
+        raise ValueError("experimental_transfer_xy_policy=visual_endpoints requires an experimental candidate")
     variant_suite_mode = (
         controller_variant.suite_mode
         if isinstance(controller_variant, ControllerVariantConfig)
@@ -2579,6 +2870,50 @@ def run_episode(
     gripper_dwell_steps = int(variant.gripper_dwell_steps)
     recovery_attempts = int(variant.recovery_attempts)
     recovery_steps = int(variant.recovery_steps)
+    experimental_candidate_audit: dict[str, Any] | None = None
+    experimental_candidate_pose: tuple[np.ndarray, np.ndarray, float, np.ndarray | None] | None = None
+    experimental_empty_gripper_threshold: float | None = None
+    if experimental_candidate is not None:
+        # Preserve the resolved policy threshold before disabling its legacy
+        # candidate-search branch.  Experimental close detection remains
+        # active, but must not invent a second threshold.
+        if variant.grasp_search is not None:
+            experimental_empty_gripper_threshold = float(
+                variant.grasp_search.empty_gripper_threshold
+            )
+        else:
+            experimental_empty_gripper_threshold = 0.0015
+        # The experimental runner owns bounded candidate retries.  Disable the
+        # legacy arrow RGB-D search for this call so a failed Molmo contact
+        # can never silently switch to the old anchor policy.
+        variant = replace(variant, grasp_search=None, grasp_retry_offsets_m=None, grasp_contact_threshold=None)
+        candidate_point, candidate_rotation, candidate_aperture, candidate_pregrasp, experimental_candidate_audit = _experimental_candidate_pose(experimental_candidate)
+        experimental_candidate_pose = (candidate_point, candidate_rotation, candidate_aperture, candidate_pregrasp)
+        # Experimental candidate retries retain the close-contact guard even
+        # though the legacy grasp_search policy is disabled below.
+        if experimental_eef_orientation_transform is None:
+            raise ValueError("experimental candidate motion requires explicit right_hand-to-grip_site calibration")
+        eef_transform = np.asarray(experimental_eef_orientation_transform, dtype=np.float64)
+        if eef_transform.shape != (3, 3) or not np.isfinite(eef_transform).all() or not np.allclose(eef_transform.T @ eef_transform, np.eye(3), atol=1e-5) or not np.isclose(np.linalg.det(eef_transform), 1.0, atol=1e-5):
+            raise ValueError("experimental_eef_orientation_transform must be a proper SO(3) matrix")
+        experimental_eef_orientation_transform = eef_transform
+        if experimental_action_budget is None:
+            experimental_action_budget = _ActionBudget(1200)
+        elif not isinstance(experimental_action_budget, _ActionBudget):
+            raise TypeError("experimental_action_budget must be an _ActionBudget")
+    elif experimental_micro_correction is not None:
+        raise ValueError("experimental_micro_correction requires an experimental candidate")
+    if experimental_micro_correction is not None and not isinstance(experimental_micro_correction, MicroCorrectionPolicy):
+        experimental_micro_correction = MicroCorrectionPolicy.from_value(experimental_micro_correction)
+    if experimental_candidate is not None and experimental_micro_correction is not None:
+        if experimental_micro_correction.enabled:
+            if not set(experimental_micro_correction.phases) <= {"preplace", "descend_place"}:
+                raise ValueError("experimental micro-correction is limited to placement phases")
+            if experimental_micro_correction.residual_max_m > 0.005:
+                raise ValueError("experimental micro-correction residual_max_m must be <= 0.005 m")
+            if experimental_micro_correction.burst_steps > 8 or experimental_micro_correction.max_rounds > 1 or experimental_micro_correction.max_actions > 16:
+                raise ValueError("experimental micro-correction exceeds bounded placement profile")
+        variant = replace(variant, micro_correction=experimental_micro_correction)
     endpoint_depth_statistic = variant.endpoint_depth_statistic
     endpoint_depth_quantile = float(variant.endpoint_depth_quantile)
     max_mask_fraction_for_motion = (
@@ -2594,6 +2929,11 @@ def run_episode(
             else WORKSPACE_BOUNDS_M.items()
         )
     }
+    experimental_correction_bounds = (
+        workspace_bounds
+        if experimental_micro_correction is not None and experimental_micro_correction.enabled
+        else None
+    )
     if resolution <= 0:
         raise ValueError("resolution must be positive")
     if gripper_dwell_steps <= 0:
@@ -2734,6 +3074,47 @@ def run_episode(
     destination_point = destination_visual_point + destination_offset
     classical_destination_point = np.asarray(destination_point, dtype=np.float64).copy()
     classical_source_point = np.asarray(bowl_point, dtype=np.float64).copy()
+    experimental_orientation_matrix: np.ndarray | None = None
+    experimental_aperture_m: float | None = None
+    if experimental_candidate_pose is not None:
+        # The default policy preserves the frozen transfer displacement while
+        # the opt-in visual_endpoints policy replaces only its XY component.
+        # Both policies replace the physical source contact; the legacy source
+        # offset is never applied to the candidate itself.
+        candidate_point, candidate_rotation, candidate_aperture, candidate_pregrasp = experimental_candidate_pose
+        legacy_transfer_displacement = classical_destination_point - classical_source_point
+        transfer_displacement = legacy_transfer_displacement.copy()
+        if experimental_transfer_xy_policy == "visual_endpoints":
+            transfer_displacement[:2] = (
+                np.asarray(destination_visual_point, dtype=np.float64)[:2]
+                - np.asarray(source_visual_point, dtype=np.float64)[:2]
+            )
+        bowl_point = candidate_point.copy()
+        destination_point = bowl_point + transfer_displacement
+        experimental_orientation_matrix = candidate_rotation.copy()
+        experimental_aperture_m = float(candidate_aperture)
+        setattr(env, "_arrow_experimental_candidate_pregrasp_world_m", None if candidate_pregrasp is None else candidate_pregrasp.tolist())
+        setattr(env, "_arrow_experimental_candidate", {
+            "candidate_id": str(getattr(experimental_candidate, "candidate_id", "unknown")),
+            "grip_site_world_m": bowl_point.tolist(),
+            "required_aperture_m": experimental_aperture_m,
+            "transfer_displacement_world_m": transfer_displacement.tolist(),
+            "transfer_xy_policy": experimental_transfer_xy_policy,
+            "legacy_transfer_displacement_world_m": legacy_transfer_displacement.tolist(),
+            "visual_source_anchor_world_m": np.asarray(source_visual_point, dtype=np.float64).tolist(),
+            "visual_destination_anchor_world_m": np.asarray(destination_visual_point, dtype=np.float64).tolist(),
+            "orientation_world_grip_site": experimental_orientation_matrix.tolist(),
+            "audit": dict(experimental_candidate_audit or {}),
+            "no_legacy_source_offset": True,
+        })
+        experimental_candidate_audit = dict(experimental_candidate_audit or {})
+        experimental_candidate_audit["transfer_xy"] = {
+            "policy": experimental_transfer_xy_policy,
+            "legacy_displacement_world_m": legacy_transfer_displacement.tolist(),
+            "chosen_displacement_world_m": transfer_displacement.tolist(),
+            "visual_source_anchor_world_m": np.asarray(source_visual_point, dtype=np.float64).tolist(),
+            "visual_destination_anchor_world_m": np.asarray(destination_visual_point, dtype=np.float64).tolist(),
+        }
     source_approach_audit: dict[str, Any] | None = None
     support_plane_audit: dict[str, Any] | None = None
     source_policy = variant.source_approach
@@ -2835,6 +3216,18 @@ def run_episode(
     }
     setattr(env, "_arrow_workspace_validation", dict(workspace_validation))
     initial_proprio = _proprioception(capture.observation)
+    if experimental_candidate_pose is not None:
+        if experimental_gripper_opening_m is None:
+            raise ValueError("experimental candidate motion requires measured gripper opening")
+        measured_opening = float(experimental_gripper_opening_m)
+        if not np.isfinite(measured_opening) or measured_opening <= 0.0:
+            raise ValueError("experimental_gripper_opening_m must be finite and positive")
+        if experimental_aperture_m is None or measured_opening + 1e-6 < experimental_aperture_m:
+            raise RuntimeError(
+                "measured Panda aperture is smaller than the candidate requirement; refusing descent"
+            )
+    else:
+        measured_opening = None
     if not np.isfinite(clearance_m) or clearance_m <= 0:
         raise ValueError("clearance_m must be finite and positive")
     waypoints = _require(build_bowl_waypoints, "build_bowl_waypoints")(
@@ -2842,12 +3235,127 @@ def run_episode(
         initial_proprio.get("eef_quat"),
         {"lift_height_m": float(clearance_m)},
     )
-    waypoints = _apply_directional_pregrasp_offset(
-        waypoints,
-        source_visual_point,
-        destination_visual_point,
-        variant.approach_lateral_offset_m,
-    )
+    release_height_audit: dict[str, Any] | None = None
+    if experimental_candidate_pose is not None:
+        try:
+            normal_waypoints = np.asarray(waypoints, dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("experimental release-height treatment requires sequence waypoints") from exc
+        if normal_waypoints.ndim != 2 or normal_waypoints.shape[0] <= 5 or normal_waypoints.shape[1] < 3:
+            raise ValueError("experimental release-height treatment requires six 3D waypoints")
+        nominal_preplace = normal_waypoints[3, :3].copy()
+        nominal_release = normal_waypoints[4, :3].copy()
+        nominal_retreat = normal_waypoints[5, :3].copy()
+        shifted_waypoints = np.array(normal_waypoints, dtype=np.float64, copy=True)
+        shifted_waypoints[4, 2] += release_height_offset
+        if experimental_motion_profile == "release20_retreat80mm":
+            # The retreat is measured from the actual (already shifted) open
+            # target, so it remains a bounded vertical move above release.
+            shifted_waypoints[5, :3] = shifted_waypoints[4, :3] + np.asarray((0.0, 0.0, retreat_height_offset))
+        elif experimental_motion_profile == "release_plus40mm":
+            # Keep the historical destination+30mm retreat independent of
+            # the experimental release-height change.
+            shifted_waypoints[5, :3] = nominal_retreat
+            if float(nominal_preplace[2] - shifted_waypoints[4, 2]) < 0.040 - 1e-9:
+                raise ValueError("release_plus40mm requires preplace.z-release.z >= 0.040 m")
+        else:
+            shifted_waypoints[5, 2] += release_height_offset
+        waypoints = shifted_waypoints
+        release_height_audit = {
+            "offset_m": release_height_offset,
+            "nominal_release_world_m": nominal_release.tolist(),
+            "shifted_release_world_m": shifted_waypoints[4, :3].tolist(),
+            "nominal_retreat_world_m": nominal_retreat.tolist(),
+            "shifted_retreat_world_m": shifted_waypoints[5, :3].tolist(),
+            "rows_shifted": [4, 5],
+            "rows_unchanged": [0, 1, 2, 3],
+        }
+        if experimental_motion_profile in {"release20_retreat80mm", "release_plus40mm"}:
+            release_height_audit.update({
+                "motion_profile": experimental_motion_profile,
+                "retreat_height_offset_m": retreat_height_offset,
+                "retreat_tolerance_m": 0.005 if experimental_motion_profile == "release20_retreat80mm" else float(PHASE_POLICIES["retreat"]["tolerance_m"]),
+                "retreat_reference": (
+                    "open_after_release_plus20mm"
+                    if experimental_motion_profile == "release20_retreat80mm"
+                    else "original_30mm_retreat"
+                ),
+                "rows_shifted": [4, 5] if experimental_motion_profile == "release20_retreat80mm" else [4],
+                "rows_preserved": [5] if experimental_motion_profile == "release_plus40mm" else [],
+            })
+    motion_phase_order: Sequence[str] | None = None
+    motion_phase_limits: Mapping[str, int] | None = None
+    motion_execution_timeout_steps = phase_timeout_steps
+    if experimental_orientation_matrix is not None:
+        # Experimental candidates carry their own approach target.  Stage at
+        # a vertical clearance above the current EEF XY, rotate while there,
+        # translate at that clearance, then use the supplied pregrasp before
+        # descending.  Rotation is commanded only at this observed elevated
+        # safe_z; it is a bounded clearance condition, not collision proof.
+        current_eef = np.asarray(initial_proprio.get("eef_pos"), dtype=np.float64).reshape(-1)
+        if current_eef.shape != (3,) or not np.isfinite(current_eef).all():
+            raise ValueError("experimental candidate motion requires finite current EEF position")
+        if candidate_pregrasp is None:
+            if not dry_run:
+                raise ValueError(
+                    "experimental candidate requires explicit pregrasp_world_m for motion"
+                )
+            # Keep dependency-free dry-run fixtures predating the richer
+            # geometry candidate importable without authorizing live motion.
+            candidate_pregrasp = candidate_point + np.asarray((0.0, 0.0, 0.03), dtype=np.float64)
+            pregrasp_source = "dry_run_fixture_fallback_0.03m"
+        else:
+            pregrasp_source = "candidate.pregrasp_world_m"
+        if not np.isfinite(candidate_pregrasp).all():
+            raise ValueError("experimental candidate pregrasp must be finite")
+        safe_z = max(float(current_eef[2]), float(candidate_pregrasp[2]))
+        clearance_start = np.asarray((current_eef[0], current_eef[1], safe_z), dtype=np.float64)
+        clearance_xy = np.asarray((candidate_pregrasp[0], candidate_pregrasp[1], safe_z), dtype=np.float64)
+        staged = {
+            "vertical_clearance": _pose_waypoint(clearance_start),
+            "rotate": _pose_waypoint(clearance_start, experimental_orientation_matrix, "grip_site"),
+            "translate_clearance": _pose_waypoint(clearance_xy, experimental_orientation_matrix, "grip_site"),
+            "pregrasp": _pose_waypoint(candidate_pregrasp, experimental_orientation_matrix, "grip_site"),
+            "descend": _pose_waypoint(candidate_point, experimental_orientation_matrix, "grip_site"),
+            "close": _pose_waypoint(waypoints[1], experimental_orientation_matrix, "grip_site"),
+            "lift": _pose_waypoint(waypoints[2], experimental_orientation_matrix, "grip_site"),
+            "preplace": _pose_waypoint(waypoints[3], experimental_orientation_matrix, "grip_site"),
+            "descend_place": _pose_waypoint(waypoints[4], experimental_orientation_matrix, "grip_site"),
+            "open": _pose_waypoint(waypoints[4], experimental_orientation_matrix, "grip_site"),
+            "retreat": _pose_waypoint(waypoints[5], experimental_orientation_matrix, "grip_site"),
+        }
+        waypoints = staged
+        motion_phase_order = (
+            "vertical_clearance", "rotate", "translate_clearance", "pregrasp",
+            "descend", "close", "lift", "preplace", "descend_place", "open", "retreat",
+        )
+        motion_phase_limits = {
+            name: 160 for name in ("vertical_clearance", "rotate", "translate_clearance", "pregrasp", "descend")
+        }
+        motion_execution_timeout_steps = 160
+        experimental_candidate_audit = dict(experimental_candidate_audit or {})
+        experimental_candidate_audit.update({
+            "pregrasp_world_m": candidate_pregrasp.tolist(),
+            "pregrasp_source": pregrasp_source,
+            "clearance_start_world_m": clearance_start.tolist(),
+            "clearance_xy_world_m": clearance_xy.tolist(),
+            "clearance_z_m": safe_z,
+            "phase_order": list(motion_phase_order),
+        })
+        if release_height_audit is not None:
+            experimental_candidate_audit["release_height_treatment"] = dict(release_height_audit)
+        experimental_record = getattr(env, "_arrow_experimental_candidate", None)
+        if isinstance(experimental_record, Mapping):
+            experimental_record = dict(experimental_record)
+            experimental_record["audit"] = dict(experimental_candidate_audit)
+            setattr(env, "_arrow_experimental_candidate", experimental_record)
+    else:
+        waypoints = _apply_directional_pregrasp_offset(
+            waypoints,
+            source_visual_point,
+            destination_visual_point,
+            variant.approach_lateral_offset_m,
+        )
     if isinstance(waypoints, Mapping):
         waypoint_points = {
             f"waypoint_{name}": _position(value)[:3] for name, value in waypoints.items()
@@ -2894,6 +3402,13 @@ def run_episode(
                 phase_policies[positional_phase]["tolerance_m"] = float(
                     variant.waypoint_tolerance_m
                 )
+    if experimental_motion_profile == "release20_retreat80mm":
+        # This treatment changes only the final retreat target and its local
+        # convergence tolerance; recovery settings and all other phase policy
+        # values remain resolved from the frozen controller variant.
+        phase_policies["retreat"]["tolerance_m"] = 0.005
+    if release_height_audit is not None:
+        release_height_audit["retreat_tolerance_m"] = float(phase_policies["retreat"]["tolerance_m"])
 
     output_root = Path(output_dir).expanduser().resolve()
     frame_paths = _save_capture(capture, arrow_rgb, output_root)
@@ -3031,11 +3546,21 @@ def run_episode(
     recovery_audit: list[dict[str, Any]] = []
     grasp_search_audit: list[dict[str, Any]] = []
     micro_correction_audit: list[dict[str, Any]] = []
-    micro_action_budget = (
-        _ActionBudget(variant.micro_correction.max_actions)
-        if variant.micro_correction is not None and variant.micro_correction.enabled
-        else None
-    )
+    if (
+        experimental_micro_correction is not None
+        and experimental_micro_correction.enabled
+    ):
+        shared_micro_budget = getattr(env, "_arrow_experimental_micro_action_budget", None)
+        if not isinstance(shared_micro_budget, _ActionBudget) or shared_micro_budget.limit != experimental_micro_correction.max_actions:
+            shared_micro_budget = _ActionBudget(experimental_micro_correction.max_actions)
+            setattr(env, "_arrow_experimental_micro_action_budget", shared_micro_budget)
+        micro_action_budget = shared_micro_budget
+    else:
+        micro_action_budget = (
+            _ActionBudget(variant.micro_correction.max_actions)
+            if variant.micro_correction is not None and variant.micro_correction.enabled
+            else None
+        )
     setattr(env, "_arrow_grasp_search_audit", grasp_search_audit)
     setattr(env, "_arrow_micro_correction_audit", micro_correction_audit)
 
@@ -3062,14 +3587,19 @@ def run_episode(
         # An empty gripper is a proprioceptive signal only.  Raising here
         # stops immediately after close, before lift/place can proceed.
         policy = variant.grasp_search
+        close_threshold = (
+            experimental_empty_gripper_threshold
+            if experimental_empty_gripper_threshold is not None
+            else (policy.empty_gripper_threshold if policy is not None else None)
+        )
         if (
-            policy is not None
-            and policy.enabled
+            close_threshold is not None
+            and (experimental_candidate_pose is not None or (policy is not None and policy.enabled))
             and not dry_run
             and stop_after_phase == "retreat"
             and phase == "close"
-            and "empty_gripper_likely" in policy.trigger_on
-            and _empty_gripper_likely([record], policy.empty_gripper_threshold)
+            and (experimental_candidate_pose is not None or "empty_gripper_likely" in policy.trigger_on)
+            and _empty_gripper_likely([record], close_threshold)
         ):
             raise _GraspSearchRequested("empty_gripper_likely")
 
@@ -3078,24 +3608,32 @@ def run_episode(
             env,
             waypoints,
             capture.observation,
-            phase_timeout_steps=phase_timeout_steps,
+            phase_timeout_steps=motion_execution_timeout_steps,
             gripper_dwell_steps=gripper_dwell_steps,
             stop_after_phase=stop_after_phase,
             dry_run=dry_run,
             phase_frame_callback=phase_frame_callback if not dry_run else None,
             motion_started_callback=motion_started_callback if not dry_run else None,
+            phase_observer=phase_observer if not dry_run else None,
             stall_window_steps=variant.stall_window_steps,
             stall_delta_m=variant.stall_delta_m,
             phase_policies=phase_policies,
             osc_position_scale_m=variant.osc_position_scale_m,
             micro_correction=variant.micro_correction,
             micro_action_budget=micro_action_budget,
+            action_budget=experimental_action_budget,
             post_phase_callback=_after_motion_phase,
+            eef_orientation_transform=experimental_eef_orientation_transform,
             motion_trace_max_steps=motion_trace_max_steps,
             motion_trace_path=output_root / "motion_trace.json",
+            experimental_motion_diagnostics=experimental_motion_diagnostics,
+            motion_workspace_bounds=experimental_correction_bounds,
+            experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
             failure_snapshot_callback=failure_snapshot_callback,
             motion_frame_callback=(canary_motion_frame_callback if canary_video_root is not None else None),
             post_lift_retention_gate=effective_retention_gate,
+            phase_order=motion_phase_order,
+            phase_timeout_steps_by_phase=motion_phase_limits,
         )
     except BaseException as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
@@ -3273,6 +3811,7 @@ def run_episode(
                             attempt_index, "reset"
                         ),
                         motion_started_callback=motion_started_callback,
+                        phase_observer=phase_observer,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
                         phase_policies=phase_policies,
@@ -3280,6 +3819,9 @@ def run_episode(
                         micro_correction=None,
                         action_budget=search_policy.max_actions - search_actions,
                         motion_trace_path=output_root / "motion_trace.json",
+                        experimental_motion_diagnostics=experimental_motion_diagnostics,
+                        motion_workspace_bounds=experimental_correction_bounds,
+                        experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                         motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                         motion_trace_segment=f"attempt_{attempt_index}_reset",
                         failure_snapshot_callback=failure_snapshot_callback,
@@ -3299,6 +3841,7 @@ def run_episode(
                             attempt_index, "grasp"
                         ),
                         motion_started_callback=motion_started_callback,
+                        phase_observer=phase_observer,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
                         phase_policies=phase_policies,
@@ -3307,6 +3850,9 @@ def run_episode(
                         micro_action_budget=micro_action_budget,
                         action_budget=search_policy.max_actions - search_actions,
                         motion_trace_path=output_root / "motion_trace.json",
+                        experimental_motion_diagnostics=experimental_motion_diagnostics,
+                        motion_workspace_bounds=experimental_correction_bounds,
+                        experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                         motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                         motion_trace_segment=f"attempt_{attempt_index}_grasp",
                         failure_snapshot_callback=failure_snapshot_callback,
@@ -3345,6 +3891,7 @@ def run_episode(
                             attempt_index, "placement"
                         ),
                         motion_started_callback=motion_started_callback,
+                        phase_observer=phase_observer,
                         stall_window_steps=variant.stall_window_steps,
                         stall_delta_m=variant.stall_delta_m,
                         phase_policies=phase_policies,
@@ -3353,6 +3900,9 @@ def run_episode(
                         micro_action_budget=micro_action_budget,
                         action_budget=search_policy.max_actions - search_actions,
                         motion_trace_path=output_root / "motion_trace.json",
+                        experimental_motion_diagnostics=experimental_motion_diagnostics,
+                        motion_workspace_bounds=experimental_correction_bounds,
+                        experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                         motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                         motion_trace_segment=f"attempt_{attempt_index}_placement",
                         failure_snapshot_callback=failure_snapshot_callback,
@@ -3552,11 +4102,15 @@ def run_episode(
                     dry_run=False,
                     phase_frame_callback=None,
                     motion_started_callback=motion_started_callback,
+                    phase_observer=phase_observer,
                     stall_window_steps=variant.stall_window_steps,
                     stall_delta_m=variant.stall_delta_m,
                     phase_policies=phase_policies,
                     osc_position_scale_m=variant.osc_position_scale_m,
                     motion_trace_path=output_root / "motion_trace.json",
+                    experimental_motion_diagnostics=experimental_motion_diagnostics,
+                    motion_workspace_bounds=experimental_correction_bounds,
+                    experimental_motion_correction=(experimental_micro_correction is not None and experimental_micro_correction.enabled),
                     motion_trace_state=getattr(env, "_arrow_motion_trace", None),
                     motion_trace_segment=f"grasp_retry_{retry_index}",
                     failure_snapshot_callback=failure_snapshot_callback,
@@ -3593,6 +4147,11 @@ def run_episode(
     full_execution = stop_after_phase == "retreat"
     canary_video_audit = finalize_canary_video()
     evaluator_error: dict[str, str] | None = None
+    if full_execution and not dry_run and retreat_completed_callback is not None:
+        # This callback is the explicit handoff from motion to evaluation.  It
+        # must run before evaluator() so an experimental adapter can gate the
+        # evaluator without inferring completion from a returned audit.
+        retreat_completed_callback()
     if dry_run or not full_execution or evaluator is None:
         success = None
     else:
@@ -3672,6 +4231,18 @@ def run_episode(
             "source_grasp": bowl_point.tolist(),
             "destination_release": destination_point.tolist(),
         },
+        "experimental_grasp": getattr(env, "_arrow_experimental_candidate", None),
+        "experimental_action_budget": (
+            {"limit": int(experimental_action_budget.limit), "used": int(experimental_action_budget.used),
+             "remaining": int(experimental_action_budget.remaining)}
+            if experimental_action_budget is not None else None
+        ),
+        "experimental_eef_orientation_transform": (
+            np.asarray(experimental_eef_orientation_transform, dtype=np.float64).tolist()
+            if experimental_eef_orientation_transform is not None else None
+        ),
+        "experimental_aperture_m": experimental_aperture_m,
+        "experimental_measured_opening_m": measured_opening,
         "source_approach": source_approach_audit,
         "support_plane": support_plane_audit,
         "placement_observable": (
@@ -3723,6 +4294,9 @@ def run_episode(
         "evaluator_read_after_action": bool(not dry_run and full_execution),
         "timestamp_unix": time.time(),
     }
+    if experimental_motion_profile is not None:
+        audit["experimental_motion_profile"] = experimental_motion_profile
+        audit["experimental_retreat_height_offset_m"] = retreat_height_offset
     audit_path = output_root / "arrow_pick_place_audit.json"
     audit_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     audit["audit_path"] = audit_path.as_posix()
@@ -3783,19 +4357,20 @@ def build_libero_env(
     *,
     suite_mode: str | None = None,
     controller_variant: ControllerVariantConfig | str | None = None,
+    extra_camera_names: Sequence[str] = (),
 ) -> Any:
     """Construct direct LIBERO OffScreenRenderEnv with explicit suite semantics."""
     if isinstance(controller_variant, ControllerVariantConfig):
         if controller_variant.name != DEFAULT_PROFILE_NAME:
             raise ControllerConfigError(
-                "only the active v9d controller may construct a runtime environment; "
+                "only the active canonical controller may construct a runtime environment; "
                 f"got retired controller {controller_variant.name!r}"
             )
     elif controller_variant is not None:
         requested_name = str(controller_variant).strip()
         if requested_name not in {"default", DEFAULT_PROFILE_NAME, DEFAULT_CONTROLLER_CONFIG_FILENAME}:
             raise ControllerConfigError(
-                "only the active v9d controller may construct a runtime environment; "
+                "only the active canonical controller may construct a runtime environment; "
                 f"got retired controller {requested_name!r}"
             )
     if suite_mode is None:
@@ -3809,6 +4384,13 @@ def build_libero_env(
     if isinstance(controller_variant, ControllerVariantConfig) and controller_variant.suite_mode != suite_mode:
         raise ValueError("controller_variant.suite_mode must match suite_mode")
     variant = _resolve_controller_variant(controller_variant, suite_mode=suite_mode)
+    camera_names = [CAMERA_NAME]
+    for extra_camera_name in extra_camera_names:
+        name = str(extra_camera_name).strip()
+        if not name:
+            raise ValueError("extra_camera_names must not contain empty names")
+        if name not in camera_names:
+            camera_names.append(name)
     try:
         from libero.libero import benchmark
         from libero.libero.envs import OffScreenRenderEnv
@@ -3840,7 +4422,7 @@ def build_libero_env(
 
             canonical_schema_env = OffScreenRenderEnv(
                 bddl_file_name=canonical_bddl_file,
-                camera_names=[CAMERA_NAME],
+                camera_names=camera_names,
                 camera_heights=int(resolution),
                 camera_widths=int(resolution),
                 camera_depths=True,
@@ -3853,7 +4435,7 @@ def build_libero_env(
                 _close_environment_quietly(canonical_schema_env)
     env = OffScreenRenderEnv(
         bddl_file_name=bddl_file,
-        camera_names=[CAMERA_NAME],
+        camera_names=camera_names,
         camera_heights=int(resolution),
         camera_widths=int(resolution),
         camera_depths=True,
@@ -4054,7 +4636,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{DEFAULT_CONTROLLER_CONFIG_FILENAME}"
             )
     elif args.controller_variant in {"default", DEFAULT_PROFILE_NAME}:
-        # No-config execution must use the same fully expanded v9d policy as
+        # No-config execution must use the same fully expanded canonical policy as
         # an explicit config path, including its real source and semantic hash.
         external_variant = controller_variant_from_config(
             load_controller_config(), suite_mode=args.suite_mode
@@ -4066,12 +4648,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "retired controller selection rejected; use "
             f"{DEFAULT_CONTROLLER_CONFIG_FILENAME}"
         )
-    # The checked-in v9d document is the sole executable policy.  Its expanded
+    # The checked-in canonical document is the sole executable policy.  Its expanded
     # values are authoritative; command-line knobs remain for historical
     # parsing compatibility but cannot silently create a second controller.
     selected_variant = external_variant
     if selected_variant is None:  # defensive: both resolution branches above must set it
-        raise ControllerConfigError("active v9d controller could not be resolved")
+        raise ControllerConfigError("active canonical controller could not be resolved")
     env = build_libero_env(
         args.task, args.seed, args.resolution, suite_mode=args.suite_mode,
         controller_variant=selected_variant,
@@ -4132,5 +4714,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__":  # pragma: no cover - operator guard
+    raise SystemExit(
+        "run_arrow_pick_place_eval.py is an internal motion engine; "
+        "use run_grasp_controller.py"
+    )

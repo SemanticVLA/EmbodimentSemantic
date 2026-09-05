@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import traceback
+from numbers import Integral
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -92,7 +93,7 @@ def _resolve_controller_selection(
             # Planning can remain dependency-light, but no historical policy
             # may silently become executable through the matrix boundary.
             raise ValueError(
-                "only the active v9d controller is selectable; "
+                "only the active canonical controller is selectable; "
                 f"got retired controller {variant_label!r}"
             )
         expanded = load_controller_config()
@@ -120,7 +121,7 @@ def _resolve_controller_selection(
     variant = converter(expanded, suite_mode=suite_mode)
     if variant.name != ACTIVE_CONTROLLER_NAME:
         raise ValueError(
-            "only the active v9d controller is executable; "
+            "only the active canonical controller is executable; "
             f"got retired controller {variant.name!r}"
         )
     expected = _episode_module._resolve_controller_variant(
@@ -128,7 +129,7 @@ def _resolve_controller_selection(
     )
     if variant.canonical() != expected.canonical():
         raise ValueError(
-            "active v9d controller payload does not match the checked-in policy"
+            "active canonical controller payload does not match the checked-in policy"
         )
     canonical = variant.canonical()
     source = expanded.get("config_source")
@@ -208,6 +209,53 @@ def _contract_hash(protocol: Mapping[str, Any], cells: Sequence[Mapping[str, Any
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def _execution_cell_selector(
+    cells: Sequence[Mapping[str, Any]],
+    identities: Sequence[tuple[int, int]] | None,
+) -> tuple[set[tuple[int, int]] | None, dict[str, Any] | None]:
+    """Validate a sparse execution selection without changing the cell plan.
+
+    ``(task_id, seed)`` is the stable cell identity used by resume.  The
+    selector is deliberately operational metadata: it never enters the
+    protocol or contract hash, so removing it for a continuation preserves
+    the scientific matrix identity and allows the skipped cells to run.
+    """
+    if identities is None:
+        return None, None
+    known = {(int(cell["task_id"]), int(cell["seed"])) for cell in cells}
+    selected: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for raw in identities:
+        if not isinstance(raw, (tuple, list)) or len(raw) != 2:
+            raise ValueError(
+                "execution_cell_identities must contain (task_id, seed) pairs"
+            )
+        task_id, seed = raw
+        if (
+            isinstance(task_id, bool) or isinstance(seed, bool)
+            or not isinstance(task_id, Integral) or not isinstance(seed, Integral)
+        ):
+            raise ValueError(
+                "execution_cell_identities task_id and seed must be integers"
+            )
+        identity = (int(task_id), int(seed))
+        if identity in seen:
+            raise ValueError(f"execution_cell_identities contains duplicate {identity}")
+        if identity not in known:
+            raise ValueError(f"execution_cell_identities contains unknown cell {identity}")
+        seen.add(identity)
+        selected.append(identity)
+    payload = {"schema": "execution_cell_selector.v1", "identities": selected}
+    metadata = {
+        "schema": payload["schema"],
+        "selected_count": len(selected),
+        "selector_digest": hashlib.sha256(
+            _canonical_json(payload).encode("utf-8")
+        ).hexdigest(),
+    }
+    return seen, metadata
+
+
 def _sha256_file(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -230,14 +278,17 @@ def _source_file_hashes() -> dict[str, str | None]:
         "run_arrow_pick_place_matrix.py",
         "run_arrow_pick_place_eval.py",
         "arrow_controller.py",
-        "controller_configs/v9d_rgbd_region_grasp_search.json",
+        "controller_configs/canonical_molmo_rgbd_grasp.json",
         "config.py",
         "bddl_utils.py",
         "radomize_scenes.py",
         "visual_scene_graph.py",
         "libero_live_semantic_context.py",
         "preview_visual_arrows.py",
-        "legion/run_arrow_pick_place_dual_matrix.sbatch",
+        "grasp_controller/runner.py",
+        "grasp_controller/grasp_candidates.py",
+        "grasp_controller/molmopoint.py",
+        "legion/run_grasp_controller.sbatch",
     )
     return {
         relative_path: _sha256_file(root / relative_path)
@@ -732,6 +783,9 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
         ("_arrow_canary_video", "canary_video"),
         ("_arrow_input_budget", "input_budget"),
         ("_arrow_forbidden_input_audit", "forbidden_input_audit"),
+        ("_grasp_controller_opening_preshape", "opening_preshape"),
+        ("_grasp_controller_observation_hover", "observation_hover"),
+        ("_grasp_controller_gripper_open", "gripper_open"),
     ):
         try:
             value = getattr(env, attribute, None)
@@ -743,6 +797,27 @@ def _early_runtime_diagnostics(env: Any) -> dict[str, Any]:
             diagnostics[field] = [
                 dict(item) if isinstance(item, Mapping) else item for item in value
             ]
+    # The Molmo canary's shared budget is intentionally opt-in.  Keep an exact
+    # zero distinct from missing evidence and do not inspect ordinary runner
+    # counters when the experimental budget attribute is absent.
+    try:
+        budget = getattr(env, "_grasp_controller_action_budget", None)
+        if not isinstance(budget, _episode_module._ActionBudget):
+            raise ValueError("not a shared action budget")
+        used_value = getattr(budget, "used", None)
+        limit_value = getattr(budget, "limit", None)
+        if type(used_value) is not int or type(limit_value) is not int:
+            raise ValueError("non-integral action budget")
+        used, limit = used_value, limit_value
+        if used < 0 or limit <= 0 or used > limit:
+            raise ValueError("invalid action budget range")
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        pass
+    else:
+        diagnostics["total_actions"] = used
+        diagnostics["experimental_action_budget"] = {
+            "used": used, "limit": limit, "remaining": limit - used,
+        }
     return diagnostics
 
 
@@ -779,15 +854,21 @@ def _attach_early_runtime_diagnostics(
 
 
 def _partition_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    completed = [record for record in records if record.get("status") == "completed"]
+    terminal = [
+        record for record in records
+        if record.get("status") in {"completed", "failed", "interrupted"}
+    ]
+    completed = [record for record in terminal if record.get("status") == "completed"]
     evaluated = [_audit_success(record) for record in completed]
     evaluated = [value for value in evaluated if value is not None]
     successes = sum(value is True for value in evaluated)
     has_evaluator_result = bool(evaluated)
     return {
         "total": len(records),
+        "planned": len(records) - len(terminal),
+        "terminal": len(terminal),
         "completed": len(completed),
-        "failed": len(records) - len(completed),
+        "failed": len(terminal) - len(completed),
         "evaluated": len(evaluated),
         "successes": int(successes),
         # A dry-run has no evaluator denominator; do not turn its null result
@@ -1098,8 +1179,12 @@ def _run_matrix_impl(
     arrow_input_builder: Callable[[Any, int, int], Mapping[str, Any]] | None = None,
     evaluator: Callable[[Any], bool] | None = None,
     resume: bool = False,
+    resume_terminal: bool = False,
     retry_motion_began: bool = False,
     continue_on_motion_failure: bool = False,
+    experiment_metadata: Mapping[str, Any] | None = None,
+    cell_completed_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    execution_cell_identities: Sequence[tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Execute every planned cell, isolating failures and preserving audits."""
     suite_mode = parse_suite_mode(suite_mode)
@@ -1126,6 +1211,9 @@ def _run_matrix_impl(
         for cell in cells:
             cell["controller_config_path"] = controller_config_provenance["path"]
             cell["controller_config_hash"] = controller_config_provenance["config_hash"]
+    execution_selector, execution_selection = _execution_cell_selector(
+        cells, execution_cell_identities
+    )
     validate_motion_authorization(
         cells,
         execute_motion=execute_motion,
@@ -1189,12 +1277,18 @@ def _run_matrix_impl(
         controller_config=controller_config_provenance,
         init_state_preflight=init_state_preflight,
     )
+    if experiment_metadata is not None:
+        protocol["experimental_identity"] = dict(experiment_metadata)
     protocol["source_hashes"] = _source_file_hashes()
     contract_hash = _contract_hash(protocol, cells)
     provenance = {
         "launcher_path": Path(__file__).resolve().as_posix(),
         "repository_root": Path(__file__).resolve().parents[1].as_posix(),
-        "episode_runner": "run_arrow_pick_place_eval.run_episode",
+        "episode_runner": (
+            "grasp_controller.runner.episode_runner"
+            if experiment_metadata is not None
+            else "run_arrow_pick_place_eval.run_episode"
+        ),
         "suite_mode": suite_mode,
         "controller_variant": controller_variant,
         "controller_config": controller_config_provenance,
@@ -1205,6 +1299,8 @@ def _run_matrix_impl(
         "platform": platform.platform(),
         "dependency_versions": _dependency_versions(),
     }
+    if experiment_metadata is not None:
+        provenance["experimental_identity"] = dict(experiment_metadata)
     resolved_runtime_provenance = (
         resolved_controller.provenance()
         if controller_config_provenance is not None and resolved_controller is not None
@@ -1216,36 +1312,106 @@ def _run_matrix_impl(
             f"matrix output already exists at {root}; choose a new output root or pass resume=True"
         )
     previous_by_index: dict[int, dict[str, Any]] = {}
+    previous_by_identity: dict[tuple[int, int], dict[str, Any]] = {}
+    resume_contract_hashes = {contract_hash}
     if resume:
         if not status_path.is_file():
             raise FileNotFoundError(f"cannot resume without status file: {status_path}")
         previous = json.loads(status_path.read_text(encoding="utf-8"))
         if previous.get("contract_hash") != contract_hash:
-            raise ValueError("resume contract hash does not match the requested matrix")
+            # A prefix shard (2 episodes/task) is intentionally extendable to
+            # the full shard (10 episodes/task).  Permit only that exact
+            # protocol change; all provenance/configuration remains immutable.
+            old_protocol = previous.get("protocol")
+            extendable = False
+            if isinstance(old_protocol, Mapping):
+                old_count = int(old_protocol.get("episodes_per_task", 0))
+                new_count = int(protocol.get("episodes_per_task", 0))
+                extendable = old_count > 0 and old_count < new_count
+                for key in protocol:
+                    if not extendable or key in {"episodes_per_task", "init_state_preflight"}:
+                        continue
+                    if old_protocol.get(key) != protocol.get(key):
+                        extendable = False
+                        break
+                if extendable:
+                    old_preflight = old_protocol.get("init_state_preflight")
+                    new_preflight = protocol.get("init_state_preflight")
+                    if not isinstance(old_preflight, Mapping) or not isinstance(new_preflight, Mapping):
+                        extendable = old_preflight == new_preflight
+                    else:
+                        # The preflight count and selected init-state prefix
+                        # grow with the shard; all other preflight provenance
+                        # must remain byte-for-byte compatible.
+                        for key in new_preflight:
+                            if key == "required_count" or key == "selected_indices":
+                                continue
+                            if old_preflight.get(key) != new_preflight.get(key):
+                                extendable = False
+                                break
+                        if extendable:
+                            old_selected = old_preflight.get("selected_indices", {})
+                            new_selected = new_preflight.get("selected_indices", {})
+                            if isinstance(old_selected, Mapping) and isinstance(new_selected, Mapping):
+                                for task_key, old_indices in old_selected.items():
+                                    new_indices = new_selected.get(task_key)
+                                    if not isinstance(old_indices, list) or not isinstance(new_indices, list) or new_indices[:len(old_indices)] != old_indices:
+                                        extendable = False
+                                        break
+                            elif old_selected != new_selected:
+                                extendable = False
+            if not extendable:
+                raise ValueError("resume contract hash does not match the requested matrix")
+            if previous.get("contract_hash"):
+                resume_contract_hashes.add(str(previous["contract_hash"]))
         for record in previous.get("cells", []):
             if isinstance(record, Mapping) and "cell_index" in record:
                 previous_by_index[int(record["cell_index"])] = dict(record)
-        unsafe = [
-            record for record in previous_by_index.values()
-            if (
-                record.get("status") == "running"
-                or (
-                    record.get("status") != "completed"
-                    and bool(record.get("motion_began"))
-                )
-                or any(
-                    isinstance(attempt, Mapping)
-                    and (
-                        attempt.get("status") == "running"
-                        or (
-                            attempt.get("status") != "completed"
-                            and bool(attempt.get("motion_began"))
-                        )
-                    )
-                    for attempt in record.get("attempts", [])
-                )
+                if "task_id" in record and "seed" in record:
+                    previous_by_identity[(int(record["task_id"]), int(record["seed"]))] = dict(record)
+        def _preserved_terminal(record: Mapping[str, Any]) -> bool:
+            """Whether a terminal outcome may be carried into an extension.
+
+            A failed/interrupted prefix cell is already a durable experiment
+            outcome and must not be rerun while extending (for example) the
+            2-episode prefix to the 10-episode shard.  A nested running
+            attempt is still unsafe, even if its parent status was flushed as
+            terminal during interruption.
+            """
+
+            if not resume_terminal or record.get("status") not in {"failed", "interrupted"}:
+                return False
+            return not any(
+                isinstance(attempt, Mapping) and attempt.get("status") == "running"
+                for attempt in record.get("attempts", [])
             )
-        ]
+
+        unsafe = []
+        for record in previous_by_index.values():
+            preserved_terminal = _preserved_terminal(record)
+            if record.get("status") == "running":
+                unsafe.append(record)
+                continue
+            if (
+                not preserved_terminal
+                and record.get("status") != "completed"
+                and bool(record.get("motion_began"))
+            ):
+                unsafe.append(record)
+                continue
+            if any(
+                isinstance(attempt, Mapping)
+                and (
+                    attempt.get("status") == "running"
+                    or (
+                        not preserved_terminal
+                        and attempt.get("status") != "completed"
+                        and bool(attempt.get("motion_began"))
+                    )
+                )
+                for attempt in record.get("attempts", [])
+            ):
+                unsafe.append(record)
         if unsafe and not retry_motion_began:
             first = unsafe[0]
             raise RuntimeError(
@@ -1265,13 +1431,28 @@ def _run_matrix_impl(
                     "contract_hash": contract_hash,
                     "provenance": provenance,
                     "cells": planned_records,
+                    **({"execution_selection": execution_selection} if execution_selection is not None else {}),
                 },
                 indent=2,
                 sort_keys=True,
             )
             + "\n",
         )
-    status_records = [previous_by_index.get(int(cell["cell_index"]), _planned_record(cell)) for cell in cells]
+    def prior_for_cell(cell: Mapping[str, Any]) -> dict[str, Any] | None:
+        # Cell indices change when a prefix shard is extended (e.g. 2 to 10
+        # episodes per task).  Task/seed identity is the stable resume key.
+        identity = previous_by_identity.get((int(cell["task_id"]), int(cell["seed"])))
+        if identity is not None:
+            return identity
+        # Index fallback is retained only for genuinely legacy status files
+        # that predate task/seed identity fields; never reuse a modern record
+        # merely because an extended plan happens to share its cell index.
+        legacy = previous_by_index.get(int(cell["cell_index"]))
+        if legacy is not None and ("task_id" not in legacy or "seed" not in legacy):
+            return legacy
+        return None
+
+    status_records = [prior_for_cell(cell) or _planned_record(cell) for cell in cells]
 
     def write_status() -> None:
         _atomic_write_text(
@@ -1286,6 +1467,7 @@ def _run_matrix_impl(
                     "contract_hash": contract_hash,
                     "provenance": provenance,
                     "cells": status_records,
+                    **({"execution_selection": execution_selection} if execution_selection is not None else {}),
                 },
                 indent=2,
                 sort_keys=True,
@@ -1334,10 +1516,10 @@ def _run_matrix_impl(
                 ) from exc
             if not isinstance(parsed, Mapping):
                 raise ValueError(f"matrix manifest line {line_number} is not an object")
-            if parsed.get("contract_hash") not in (None, contract_hash):
+            if parsed.get("contract_hash") not in (None, *resume_contract_hashes):
                 raise ValueError("resume manifest contract hash does not match status")
             manifest_history.append(dict(parsed))
-        for prior_record in previous_by_index.values():
+        for prior_record in previous_by_identity.values():
             if prior_record.get("status") not in {"completed", "failed", "interrupted"}:
                 continue
             expected_attempts = prior_record.get("attempts", [])
@@ -1371,8 +1553,19 @@ def _run_matrix_impl(
             # failure and could attach cleanup errors to the wrong cell.
             cell_record: dict[str, Any] | None = None
             cell_index = int(cell["cell_index"])
-            prior = previous_by_index.get(cell_index)
-            if resume and prior is not None and prior.get("status") == "completed":
+            prior = prior_for_cell(cell)
+            if execution_selector is not None and (
+                int(cell["task_id"]), int(cell["seed"])
+            ) not in execution_selector:
+                # Selection is an execution-time filter only.  The canonical
+                # cell remains in status_records as planned (or as its prior
+                # terminal outcome), and is eligible for a later unfiltered
+                # continuation using the same contract hash.
+                continue
+            if resume and prior is not None and (
+                prior.get("status") == "completed"
+                or (resume_terminal and prior.get("status") in {"failed", "interrupted"})
+            ):
                 cell_record = prior
                 records.append(cell_record)
                 continue
@@ -1727,21 +1920,30 @@ def _run_matrix_impl(
                 and not continue_on_motion_failure
             ):
                 raise cell_exception
+            if cell_completed_callback is not None:
+                # Experimental campaign stop rules run only after the cell's
+                # result is durable and its environment has been closed.
+                cell_completed_callback(cell_record)
 
-    completed = [record for record in records if record.get("status") == "completed"]
-    failures = [record for record in records if record.get("status") != "completed"]
+    inventory_records = list(status_records)
+    terminal_records = [
+        record for record in inventory_records
+        if record.get("status") in {"completed", "failed", "interrupted"}
+    ]
+    completed = [record for record in terminal_records if record.get("status") == "completed"]
+    failures = [record for record in terminal_records if record.get("status") != "completed"]
     evaluated = [_audit_success(record) for record in completed]
     evaluated = [value for value in evaluated if value is not None]
     successes = sum(value is True for value in evaluated)
     has_evaluator_result = bool(evaluated)
-    class_records = [record for record in records if _record_failure_class(record) is not None]
+    class_records = [record for record in inventory_records if _record_failure_class(record) is not None]
     by_task_records = {
-        task_id: [record for record in records if int(record["task_id"]) == task_id]
-        for task_id in sorted({int(record["task_id"]) for record in records})
+        task_id: [record for record in inventory_records if int(record["task_id"]) == task_id]
+        for task_id in sorted({int(record["task_id"]) for record in inventory_records})
     }
     by_seed_records = {
-        seed: [record for record in records if int(record["seed"]) == seed]
-        for seed in sorted({int(record["seed"]) for record in records})
+        seed: [record for record in inventory_records if int(record["seed"]) == seed]
+        for seed in sorted({int(record["seed"]) for record in inventory_records})
     }
     summary = {
         "schema_version": MATRIX_SCHEMA_VERSION,
@@ -1751,25 +1953,26 @@ def _run_matrix_impl(
         "condition_label": f"{suite_mode}__{controller_variant}",
         "protocol": protocol,
         "provenance": provenance,
+        **({"execution_selection": execution_selection} if execution_selection is not None else {}),
         "manifest_path": manifest_path.as_posix(),
         "manifest_json_path": manifest_json_path.as_posix(),
         "status_path": status_path.as_posix(),
         "contract_hash": contract_hash,
         "summary_path": summary_path.as_posix(),
-        "total_cells": len(records),
+        "total_cells": len(cells),
         "completed_cells": len(completed),
         "failed_cells_count": len(failures),
         "evaluated_cells": len(evaluated),
-        "planned_count": len(records),
-        "conservative_denominator": len(records),
+        "planned_count": len(cells),
+        "conservative_denominator": len(cells),
         "successes": int(successes),
         # Preserve the original evaluable-only alias while exposing explicit
         # conservative/planned and evaluable denominator metrics below.
         "success_rate": (float(successes) / len(evaluated)) if evaluated else None,
-        "planned_success_rate": (float(successes) / len(records))
-        if records and evaluated else None,
-        "conservative_success_rate": (float(successes) / len(records))
-        if records and evaluated else None,
+        "planned_success_rate": (float(successes) / len(cells))
+        if cells and evaluated else None,
+        "conservative_success_rate": (float(successes) / len(cells))
+        if cells and evaluated else None,
         "evaluable_denominator": len(evaluated),
         "evaluable_success_rate": (float(successes) / len(evaluated)) if evaluated else None,
         "failed_cells": [
@@ -1797,8 +2000,8 @@ def _run_matrix_impl(
             failure_class: sum(_record_failure_class(record) == failure_class for record in class_records)
             for failure_class in sorted({_record_failure_class(record) for record in class_records})
         },
-        "phase_aggregates": _phase_aggregates(records),
-        "diagnostic_aggregates": _diagnostic_aggregates(records),
+        "phase_aggregates": _phase_aggregates(inventory_records),
+        "diagnostic_aggregates": _diagnostic_aggregates(inventory_records),
         "per_task": {
             str(task_id): _partition_summary(task_records)
             for task_id, task_records in by_task_records.items()
@@ -1815,7 +2018,7 @@ def _run_matrix_impl(
 
 
 def run_matrix(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Run the frozen v9d matrix with no external model lifecycle."""
+    """Internal persistence/evaluation matrix used by the canonical runner."""
     return _run_matrix_impl(*args, **kwargs)
 
 
@@ -1890,5 +2093,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__":  # pragma: no cover - operator guard
+    raise SystemExit(
+        "run_arrow_pick_place_matrix.py is an internal persistence engine; "
+        "use run_grasp_controller.py"
+    )
