@@ -164,11 +164,12 @@ class ReferenceProtocol:
                 ),
                 "archived_state_hash_evidence": True,
             }
-        expected_bddl = expected.get("canonical_bddl", {})
-        observed_bddl = _path_identity(observed_env.get("canonical_bddl_file"))
-        checks["canonical_bddl_basename"] = observed_bddl.get("basename") == expected_bddl.get("basename")
-        if expected_bddl.get("sha256"):
-            checks["canonical_bddl_sha256"] = observed_bddl.get("sha256") == expected_bddl.get("sha256")
+        if expected.get("state_hash_evidence") != "unavailable_due_archived_input_failure":
+            expected_bddl = expected.get("canonical_bddl", {})
+            observed_bddl = _path_identity(observed_env.get("canonical_bddl_file"))
+            checks["canonical_bddl_basename"] = observed_bddl.get("basename") == expected_bddl.get("basename")
+            if expected_bddl.get("sha256"):
+                checks["canonical_bddl_sha256"] = observed_bddl.get("sha256") == expected_bddl.get("sha256")
         for name in ("state_hash_sha256_pre_settle", "state_hash_sha256"):
             reference_hash = expected.get(name)
             observed_hash = observed_env.get(name)

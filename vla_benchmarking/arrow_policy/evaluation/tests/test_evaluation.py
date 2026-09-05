@@ -58,6 +58,7 @@ def test_task6_archived_missing_audit_uses_schedule_only(tmp_path: Path) -> None
         _arrow_init_state_diagnostics = {"selected_index": 1000}
         _arrow_environment_audit = {
             "suite_mode": "sealed_randomized",
+            "canonical_bddl_file": "/tmp/current_canonical_task.bddl",
             "prompt_provenance": "not_applicable_direct_runner",
             "requested_removals": ["ramekin_1"],
             "applied_removals": ["ramekin_1"],
