@@ -957,7 +957,10 @@ The always-applied startup rule enforcing this requirement is
 **Analysis scope:** epoch 15 checkpoints only (`029190`, 29,190 steps). Do not
 add any other checkpoints unless the user explicitly changes the scope.
 
-**Last active-run audit represented in both files:** 2026-08-31 08:37:13 UTC.
+**Last successful active-run audit represented in both files:** 2026-09-02 02:52:11 UTC.
+The refresh attempt at 2026-09-02 08:24:21 UTC failed because the mp4/Legion
+connection was unreachable; any active-job state below is stale until the next
+successful refresh.
 The active forward run is on PoliTO Legion. The last preserved Lambda-only audit
 is 2026-08-20 10:11:17 UTC; its process IDs are historical snapshots, not live
 state.
@@ -1274,10 +1277,13 @@ this submission. The smoke wrote and reloaded a no-arrow adapter successfully.
   Evaluation `1912721` is still **RUNNING**, currently in the
   `graph_trained_graph_context` cell. Six task video artifacts (tasks 0–5) are
   present so far; final success metrics are not available yet.
-- At the fresh `2026-09-02T02:52:11Z` audit, the evaluator still had no
+- At the last successful `2026-09-02T02:52:11Z` audit, the evaluator still had no
   complete `eval_info.json` or `randomization_audit.jsonl` rows. Therefore no
   per-task success count is reported yet; the existing task 0–5 artifacts are
   partial debug/video outputs, not evaluation results.
+- Refresh attempt `2026-09-02T08:24:21Z` failed at the mp4 gateway, so the
+  RUNNING state and partial artifact counts above are stale, not a current
+  Legion observation.
 - Trained on: graph-text `target_natural_v1` with no visual arrows, using the
   sealed `graph_treatment`/`arrow_graph_treatment` pair.
 - Planned contract: 15 epochs, 29,190 steps, checkpoint `029190`, batch 32,
