@@ -340,7 +340,12 @@ def _validate_resume_audit_chain(data: dict[str, Any]) -> None:
         raise ValueError("resume audit chain digest mismatch")
 
 
-def validate_training_manifest(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+def validate_training_manifest(
+    path: Path,
+    manifest: dict[str, Any],
+    *,
+    allow_revalidated_pair_sentinel: bool = False,
+) -> dict[str, Any]:
     """Require the sealed no-arrow adapter lineage and reject treatment lineage."""
     if not path.is_file():
         raise ValueError(f"no-arrow training manifest is missing: {path}")
@@ -409,7 +414,14 @@ def validate_training_manifest(path: Path, manifest: dict[str, Any]) -> dict[str
         raise ValueError("no-arrow training base policy path is not canonical")
     for key, expected_name in (("pair_manifest", "sealed_lora_pair_manifest.json"), ("pair_sentinel", "sealed_lora_pair_verified.json")):
         item = Path(data.get(key, "")).expanduser().resolve()
-        if item.name != expected_name or not item.is_file() or _sha256_file(item) != data.get(f"{key}_sha256"):
+        if item.name != expected_name or not item.is_file():
+            raise ValueError(f"no-arrow training {key} identity/hash is invalid")
+        observed_hash = _sha256_file(item)
+        expected_hash = data.get(f"{key}_sha256")
+        hash_matches = observed_hash == expected_hash
+        if not hash_matches and not (
+            key == "pair_sentinel" and allow_revalidated_pair_sentinel
+        ):
             raise ValueError(f"no-arrow training {key} identity/hash is invalid")
         try:
             pair_data = json.loads(item.read_text(encoding="utf-8"))
@@ -417,6 +429,12 @@ def validate_training_manifest(path: Path, manifest: dict[str, Any]) -> dict[str
             raise ValueError(f"no-arrow training {key} is unreadable") from exc
         if pair_data.get("pair_kind") != SEALED_PAIR_KIND or pair_data.get("full_experiment_ready") is not True or pair_data.get("launch_eligibility") != "full_experiment_ready":
             raise ValueError(f"no-arrow training {key} is not the sealed launchable pair")
+        if key == "pair_sentinel" and not hash_matches:
+            pair_manifest_hash = data.get("pair_manifest_sha256")
+            if pair_data.get("manifest_sha256") != pair_manifest_hash:
+                raise ValueError(
+                    "revalidated no-arrow pair_sentinel does not identify the sealed pair manifest"
+                )
     _validate_resume_audit_chain(data)
     plan = Path(data.get("training_plan", ""))
     if not plan.is_file() or _sha256_file(plan) != data.get("training_plan_sha256"):

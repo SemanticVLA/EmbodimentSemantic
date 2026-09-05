@@ -92,6 +92,48 @@ def _cell(adapter_checkpoint: str, output_root: Path) -> dict[str, Any]:
         "live_arrows": False,
         "output_dir": (output_root / f"seed_{SEALED_SEED}" / CELL_ID).as_posix(),
         "adapter_sha256": _sha256_file(Path(adapter) / "adapter_model.safetensors"),
+        "adapter_config_sha256": _sha256_file(Path(adapter) / "adapter_config.json"),
+        "train_config_sha256": _sha256_file(Path(adapter) / "train_config.json"),
+    }
+
+
+def _training_pair_provenance(training_path: Path) -> dict[str, Any]:
+    try:
+        training = json.loads(training_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("no-arrow training manifest is unreadable") from exc
+    pair_manifest = Path(training.get("pair_manifest", "")).expanduser().resolve()
+    pair_sentinel = Path(training.get("pair_sentinel", "")).expanduser().resolve()
+    if not pair_manifest.is_file() or not pair_sentinel.is_file():
+        raise ValueError("no-arrow training pair provenance files are missing")
+    expected_manifest_hash = training.get("pair_manifest_sha256")
+    observed_manifest_hash = _sha256_file(pair_manifest)
+    if observed_manifest_hash != expected_manifest_hash:
+        raise ValueError("sealed no-arrow pair manifest has changed")
+    try:
+        sentinel = json.loads(pair_sentinel.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("no-arrow training pair sentinel is unreadable") from exc
+    if (
+        sentinel.get("pair_kind") != "sealed_lora_control_treatment"
+        or sentinel.get("full_experiment_ready") is not True
+        or sentinel.get("launch_eligibility") != "full_experiment_ready"
+        or sentinel.get("manifest_sha256") != expected_manifest_hash
+    ):
+        raise ValueError("current no-arrow pair sentinel cannot revalidate the sealed pair")
+    expected_sentinel_hash = training.get("pair_sentinel_sha256")
+    observed_sentinel_hash = _sha256_file(pair_sentinel)
+    return {
+        "pair_manifest": str(pair_manifest),
+        "pair_manifest_sha256": observed_manifest_hash,
+        "pair_sentinel": str(pair_sentinel),
+        "pair_sentinel_training_sha256": expected_sentinel_hash,
+        "pair_sentinel_observed_sha256": observed_sentinel_hash,
+        "pair_sentinel_status": (
+            "original_hash_verified"
+            if observed_sentinel_hash == expected_sentinel_hash
+            else "semantic_revalidation_after_file_drift"
+        ),
     }
 
 
@@ -140,6 +182,8 @@ def build_manifest(
         )
     randomization_config = randomization_config_payload()
     cell = _cell(adapter_checkpoint, root)
+    pair_provenance = _training_pair_provenance(training_path)
+    adapter_path = Path(adapter_checkpoint).expanduser().resolve()
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "experiment": EVAL_EXPERIMENT,
@@ -154,8 +198,10 @@ def build_manifest(
         "checkpoint_step": int(SEALED_CHECKPOINT_ID),
         "adapter_checkpoint": _adapter_directory(adapter_checkpoint),
         "adapter_sha256": _sha256_file(
-            Path(adapter_checkpoint).expanduser().resolve() / "adapter_model.safetensors"
+            adapter_path / "adapter_model.safetensors"
         ),
+        "adapter_config_sha256": _sha256_file(adapter_path / "adapter_config.json"),
+        "train_config_sha256": _sha256_file(adapter_path / "train_config.json"),
         "training_manifest": str(training_path),
         "training_manifest_sha256": _sha256_file(training_path),
         "tasks": task_ids,
@@ -201,6 +247,7 @@ def build_manifest(
             "peft_rank": SEALED_PEFT_R,
             "evaluation_seed": SEALED_SEED,
             "evaluation_source": "vla_benchmarking/evaluation/run_lerobot_eval_with_context.py",
+            **pair_provenance,
         },
     }
     _validate_manifest(manifest)
@@ -267,11 +314,24 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("manifest source commit is invalid")
     if provenance.get("training_job_id") != "1910197" or provenance.get("historical_evaluation_job_id") != "1910198":
         raise ValueError("manifest historical job provenance is invalid")
+    for key in ("pair_manifest_sha256", "pair_sentinel_training_sha256"):
+        value = provenance.get(key)
+        if not isinstance(value, str) or len(value) != 64:
+            raise ValueError(f"manifest {key} provenance is invalid")
+    if provenance.get("pair_sentinel_status") not in {
+        "original_hash_verified", "semantic_revalidation_after_file_drift"
+    }:
+        raise ValueError("manifest pair-sentinel revalidation status is invalid")
+    observed_sentinel_hash = provenance.get("pair_sentinel_observed_sha256")
+    if not isinstance(observed_sentinel_hash, str) or len(observed_sentinel_hash) != 64:
+        raise ValueError("manifest observed pair-sentinel hash is invalid")
     adapter = manifest.get("adapter_checkpoint")
     if not isinstance(adapter, str) or not adapter:
         raise ValueError("manifest adapter checkpoint is missing")
     if not isinstance(manifest.get("adapter_sha256"), str) or not isinstance(manifest.get("training_manifest_sha256"), str):
         raise ValueError("manifest lacks sealed artifact hashes")
+    if not isinstance(manifest.get("adapter_config_sha256"), str) or not isinstance(manifest.get("train_config_sha256"), str):
+        raise ValueError("manifest lacks checkpoint configuration hashes")
     cells = manifest.get("cells")
     if not isinstance(cells, list) or len(cells) != 1:
         raise ValueError("manifest must contain exactly one cell")
@@ -282,6 +342,8 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         "checkpoint": adapter,
         "live_arrows": False,
         "adapter_sha256": manifest["adapter_sha256"],
+        "adapter_config_sha256": manifest["adapter_config_sha256"],
+        "train_config_sha256": manifest["train_config_sha256"],
     }
     for key, value in expected.items():
         if cell.get(key) != value:
@@ -487,7 +549,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             videos=not args.no_videos,
         )
         validate_existing_outputs(output_root, manifest)
-        validate_training_manifest(Path(args.training_manifest).expanduser().resolve(), manifest)
+        validate_training_manifest(
+            Path(args.training_manifest).expanduser().resolve(),
+            manifest,
+            allow_revalidated_pair_sentinel=True,
+        )
         write_immutable_manifest(output_root / MANIFEST_FILENAME, manifest)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"ERROR: sealed no-arrow evaluation preflight failed: {exc}")

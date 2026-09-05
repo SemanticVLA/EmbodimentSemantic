@@ -57,6 +57,8 @@ PYTHON="/home/hjaber/.conda/envs/embodiment-smolvla-py312/bin/python"
 ADAPTER_DIR="/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197/checkpoints/029190/pretrained_model"
 TRAINING_MANIFEST="/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197/training_manifest.json"
 EXPECTED_ADAPTER_SHA256="80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092"
+EXPECTED_ADAPTER_CONFIG_SHA256="6382c39c1df2e4ccfc43946b36aa014abb73e1767366f009999415981b01efb1"
+EXPECTED_TRAIN_CONFIG_SHA256="89a570fb1d07e93ec16adde1e78f18b0f0f7c0148da7896a7b5ba257797658f8"
 EXPECTED_TRAINING_MANIFEST_SHA256="95e376aff504265bea2bb53e63cc221fb42d7baa01dd6c3810317de85875c391"
 ENTRYPOINT="$REPO_ROOT/vla_benchmarking/arrow_finetuned_vla/workflows/run_no_arrow_sealed_eval.py"
 LAUNCHER="$REPO_ROOT/vla_benchmarking/arrow_finetuned_vla/smolvla_no_arrows/legion/run_sealed_randomized_eval.sbatch"
@@ -74,6 +76,10 @@ ARCHIVE_ROOT="$HOME/EmbodimentSemantic_archive/no_arrow_vla_eval/${NO_ARROW_EVAL
 [[ -f "$TRAINING_MANIFEST" ]] || die 'training manifest is missing'
 [[ "$(sha256sum -- "$ADAPTER_DIR/adapter_model.safetensors" | awk '{print tolower($1)}')" == "$EXPECTED_ADAPTER_SHA256" ]] \
   || die 'adapter SHA-256 does not match the protected 43% model'
+[[ "$(sha256sum -- "$ADAPTER_DIR/adapter_config.json" | awk '{print tolower($1)}')" == "$EXPECTED_ADAPTER_CONFIG_SHA256" ]] \
+  || die 'adapter-config SHA-256 does not match the protected 43% model'
+[[ "$(sha256sum -- "$ADAPTER_DIR/train_config.json" | awk '{print tolower($1)}')" == "$EXPECTED_TRAIN_CONFIG_SHA256" ]] \
+  || die 'train-config SHA-256 does not match the protected 43% model'
 [[ "$(sha256sum -- "$TRAINING_MANIFEST" | awk '{print tolower($1)}')" == "$EXPECTED_TRAINING_MANIFEST_SHA256" ]] \
   || die 'training-manifest SHA-256 does not match the protected run'
 [[ ! -e "$RUN_ROOT" ]] || die "run root already exists: $RUN_ROOT"
@@ -119,6 +125,7 @@ archive_on_exit() {
       printf 'scope=%s\nepisodes_per_task=%s\nplanned_episodes=%s\n' "$SCOPE" "$EPISODES" "$((10 * EPISODES))"
       printf 'expected_commit=%s\nactual_commit=%s\n' "$NO_ARROW_EVAL_EXPECTED_COMMIT" "$actual_commit"
       printf 'adapter_sha256=%s\ntraining_manifest_sha256=%s\n' "$EXPECTED_ADAPTER_SHA256" "$EXPECTED_TRAINING_MANIFEST_SHA256"
+      printf 'adapter_config_sha256=%s\ntrain_config_sha256=%s\n' "$EXPECTED_ADAPTER_CONFIG_SHA256" "$EXPECTED_TRAIN_CONFIG_SHA256"
       printf 'run_root=%s\noutput_root=%s\narchive_root=%s\n' "$RUN_ROOT" "$OUTPUT_ROOT" "$ARCHIVE_ROOT"
     } > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
     find "$ARCHIVE_ROOT" -type f ! -name inventory.sha256 ! -name tree_sha256 -print0 \
@@ -154,6 +161,8 @@ launcher=$LAUNCHER
 launcher_sha256=$LAUNCHER_SHA256
 adapter_dir=$ADAPTER_DIR
 adapter_sha256=$EXPECTED_ADAPTER_SHA256
+adapter_config_sha256=$EXPECTED_ADAPTER_CONFIG_SHA256
+train_config_sha256=$EXPECTED_TRAIN_CONFIG_SHA256
 training_job_id=1910197
 training_manifest=$TRAINING_MANIFEST
 training_manifest_sha256=$EXPECTED_TRAINING_MANIFEST_SHA256
