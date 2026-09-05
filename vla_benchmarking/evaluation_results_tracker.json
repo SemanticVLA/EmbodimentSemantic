@@ -81,10 +81,10 @@
     "conclusion_limit": "This is a refactor regression evaluation of the frozen policy. Until all 500 cells are terminal, every reported score is partial."
   },
   "no_arrow_trained_expanded_regression": {
-    "status": "SMOKE_RUNNING_FULL_DEPENDENT",
-    "audited_at_utc": "2026-09-05T18:34:00Z",
+    "status": "SHARED_GATE_VERIFIED_FULL_PENDING",
+    "audited_at_utc": "2026-09-05T19:46:55Z",
     "purpose": "Verify the preserved no-arrow-trained SmolVLA through the organized evaluator and measure an expanded 500-cell sealed-randomized score.",
-    "execution_commit": "e634d8d3a83cf66609d84c05446a6cb6e21a4322",
+    "execution_commit": "43e8cbd5713311a75eb53b396cbdbd36bed85d78",
     "training_job_id": "1910197",
     "historical_evaluation_job_id": "1910198",
     "historical_no_arrow_result": {
@@ -116,18 +116,79 @@
       "status": "CANCELLED_WITHOUT_RUNNING"
     },
     "smoke": {
+      "job_id": "1921353",
+      "status": "FINAL",
+      "successes": 2,
+      "planned_cells": 2,
+      "terminal_cells": 2,
+      "archive_status": "VERIFIED",
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/no_arrow_vla_eval/smoke_pair_43e8cbd_smoke_1921353"
+    },
+    "pre_shared_contract_smoke": {
       "job_id": "1921255",
-      "status": "RUNNING",
+      "status": "FINAL",
+      "successes": 5,
       "planned_cells": 10,
-      "node": "compute-4-11"
+      "archive_status": "VERIFIED",
+      "execution_commit": "e634d8d3a83cf66609d84c05446a6cb6e21a4322"
+    },
+    "cancelled_held_full_attempt": {
+      "job_id": "1921256",
+      "status": "CANCELLED_WITHOUT_RUNNING",
+      "reason": "Held after the pre-gate smoke; replaced rather than released because it predates shared_evaluation_plan.v1 production enforcement."
     },
     "full_run": {
-      "job_id": "1921256",
-      "status": "PENDING_DEPENDENCY",
-      "dependency": "afterok:1921255",
-      "planned_cells": 500
+      "job_id": "1921360",
+      "status": "PENDING",
+      "dependency": null,
+      "planned_cells": 500,
+      "execution_commit": "43e8cbd5713311a75eb53b396cbdbd36bed85d78",
+      "label": "noarrow_sealed500_shared_43e8cbd"
     },
     "conclusion_limit": "This changes the evaluator revision and sample count relative to 43/100. Treat 43/100 as historical descriptive evidence and all new scores as partial until 500 validated cells are terminal."
+  },
+  "shared_evaluation_contract_gate": {
+    "status": "VERIFIED",
+    "audited_at_utc": "2026-09-05T19:46:55Z",
+    "execution_commit": "43e8cbd5713311a75eb53b396cbdbd36bed85d78",
+    "schema": "shared_evaluation_plan.v1",
+    "suite": "sealed_randomized",
+    "tasks": [0, 4],
+    "episodes_per_task": 1,
+    "seed_base": 1000,
+    "shared_schedule_sha256": "d589816f9a2ac26dbebcff794232cb51bcc2487586753757c267b4ecfb67c270",
+    "shared_randomization_payload_sha256": "791a1ddbf0408da209d819870c38d3c3f609c7aca3207dc93a44ecfbeb300861",
+    "shared_schema_match": true,
+    "shared_schedule_match": true,
+    "shared_randomization_match": true,
+    "shared_source_hashes_match": true,
+    "planned_cells_match": true,
+    "controller": {
+      "job_id": "1921351",
+      "status": "FINAL",
+      "successes": 2,
+      "planned": 2,
+      "archive_status": "VERIFIED",
+      "condition": "goal_arrow",
+      "native_executor": "direct_bounded_robot_motion",
+      "actions_per_cell": [186, 219],
+      "retreat_complete_cells": 2,
+      "evaluator_after_retreat_cells": 2,
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/grasp_controller/smoke_pair_43e8cbd_1921351"
+    },
+    "no_arrow_vla": {
+      "job_id": "1921353",
+      "status": "FINAL",
+      "successes": 2,
+      "planned": 2,
+      "archive_status": "VERIFIED",
+      "condition": "none",
+      "native_executor": "lerobot_smolvla",
+      "adapter_sha256": "80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092",
+      "training_manifest_sha256": "95e376aff504265bea2bb53e63cc221fb42d7baa01dd6c3810317de85875c391",
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/no_arrow_vla_eval/smoke_pair_43e8cbd_smoke_1921353"
+    },
+    "conclusion": "Both public policy entrypoints enforce the same evaluation-plan, schedule, randomization, source-hash, and accounting contract. Their native action executors remain intentionally separate."
   },
   "v9d_molmo_candidate_campaigns": {
     "audited_at_utc": "2026-09-05T17:27:12Z",

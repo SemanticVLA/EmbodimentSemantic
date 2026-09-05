@@ -1,5 +1,54 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Shared evaluation contract Legion gate — 2026-09-05 19:46 UTC
+
+Commit `43e8cbd5713311a75eb53b396cbdbd36bed85d78` is the first release
+verified on Legion with both production policy entrypoints consuming
+`shared_evaluation_plan.v1`. The policies retain necessary native executors:
+the canonical arrow grasp controller uses direct bounded robot motion, while
+SmolVLA uses the LeRobot action backend. They share the experiment schedule,
+sealed-randomization contract, condition registry, source-hash contract, and
+result accounting boundary.
+
+Matched smoke jobs **1921351** (controller) and **1921353** (no-arrow-trained
+SmolVLA) both ran tasks 0 and 4, episode 0, init-state index 0, seed 1000, at
+256x256 in `sealed_randomized`. Both exited 0, archived `VERIFIED`, and scored
+**2/2**. Their policy-independent schedule SHA-256 is
+`d589816f9a2ac26dbebcff794232cb51bcc2487586753757c267b4ecfb67c270`;
+their sealed-randomization payload SHA-256 is
+`791a1ddbf0408da209d819870c38d3c3f609c7aca3207dc93a44ecfbeb300861`.
+All five shared evaluation source hashes and both planned cells match exactly.
+The policy-specific plan hashes intentionally differ because the controller
+uses `goal_arrow` with no language prompt, while SmolVLA uses both training
+cameras, no visual arrow, and the sealed task prompt.
+
+Controller job 1921351 completed post-release retreat before each evaluator
+call (`retreat_complete=true`), with 186 and 219 actions. Task 0 realized
+object removal only; task 4 realized the configured removal and distractor
+swap. VLA job 1921353 independently recorded the same enabled dimensions,
+selected init-state indices, projected joint dimensions, removals, and task-4
+swap. Its protected adapter and training-manifest hashes remained
+`80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092`
+and `95e376aff504265bea2bb53e63cc221fb42d7baa01dd6c3810317de85875c391`.
+
+The gate required two corrections. First, production entrypoints were wired to
+enforce the shared plan instead of merely importing shared utilities. Second,
+the VLA post-run validator was changed to validate the task subset declared in
+the immutable manifest; previously a valid two-task smoke was rejected after a
+successful rollout because it required exactly ten task records. That subset
+bug did not affect complete ten-task historical runs. An earlier submission
+also passed a comma-valued task list through SLURM `--export`, producing an
+invalid task-0-only scope; it was discarded and replaced. None of these issues
+changes the recorded 87/100 controller or historical 43/100 VLA counts.
+
+The never-started, user-held pre-gate full VLA job **1921256** was cancelled
+without deleting artifacts. Corrected 500-cell job **1921360** was submitted
+from commit `43e8cbd` for tasks 0-9, 50 episodes per task, seeds 1000-1049,
+no visual arrows, and the sealed-randomized suite. It is currently PENDING.
+Canonical controller 500-cell job **1921211** remains untouched; it is a
+behavior-preservation regression from the earlier immutable cleanup commit and
+must not be relabeled as a shared-contract run.
+
 ## No-arrow-trained SmolVLA expanded regression — 2026-09-05 18:34 UTC
 
 The final checkpoint from training job **1910197**, historically evaluated at
@@ -10,12 +59,13 @@ SHA-256 values are respectively `80b3c23fc3987530d57766ab45ed33db918f08983739139
 `89a570fb1d07e93ec16adde1e78f18b0f0f7c0148da7896a7b5ba257797658f8`,
 and `95e376aff504265bea2bb53e63cc221fb42d7baa01dd6c3810317de85875c391`.
 
-Corrected immutable release `e634d8d3a83cf66609d84c05446a6cb6e21a4322`
-is being exercised through the organized LeRobot evaluator.  Smoke job
-**1921255** is RUNNING on one A40 for 10 cells; full job **1921256** is PENDING
-with dependency `afterok:1921255` for tasks 0-9, 50 episodes per task, and
-episode seeds 1000-1049.  Both keep the input condition at no arrows and use
-separate scratch/archive identities from grasp-controller job 1921211.
+Release `e634d8d3a83cf66609d84c05446a6cb6e21a4322` completed organized
+ten-cell smoke job **1921255** at **5/10**, archived `VERIFIED`. Its dependent
+full job **1921256** was later held and cancelled without running because it
+predated the shared-contract gate. Corrected full job **1921360** uses release
+`43e8cbd5713311a75eb53b396cbdbd36bed85d78`, tasks 0-9, 50 episodes per task,
+and episode seeds 1000-1049. It keeps the input condition at no arrows and uses
+a separate scratch/archive identity from grasp-controller job 1921211.
 
 Job **1921244** is a preserved pre-inference failure.  It revealed that the
 training-time pair sentinel had later been regenerated, although its referenced
