@@ -16,6 +16,7 @@
 
 #SBATCH --job-name=smolvla_target_arrow_train
 #SBATCH --partition=gpu_a40
+#SBATCH --exclude=compute-4-13
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
