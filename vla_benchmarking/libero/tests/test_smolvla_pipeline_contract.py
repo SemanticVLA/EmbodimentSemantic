@@ -76,6 +76,54 @@ def test_target_arrow_legion_training_launcher_is_immutable_and_scoped() -> None
     assert 'sbatch "$PIPELINE_SCRIPT"' not in launcher
 
 
+def test_target_arrow_pair_eval_launcher_passes_explicit_scope_contract() -> None:
+    launcher = (
+        ROOT
+        / "finetuned_vlas"
+        / "smolvla"
+        / "target_arrow_only"
+        / "legion"
+        / "run_target_arrow_pair_eval.sbatch"
+    ).read_text(encoding="utf-8")
+    assert 'TARGET_ARROW_EVAL_EXPECTED_COMMIT' in launcher
+    assert 'TARGET_ARROW_EVAL_LABEL' in launcher
+    assert 'EVAL_SCOPE="${TARGET_ARROW_EVAL_SCOPE:-}"' in launcher
+    assert 'smoke) EPISODES=1; TASK_IDS="0,4"' in launcher
+    assert 'full) EPISODES=10; TASK_IDS="0,1,2,3,4,5,6,7,8,9"' in launcher
+    assert '--evaluation-scope "$EVAL_SCOPE"' in launcher
+    assert '--task-ids "$TASK_IDS"' in launcher
+
+
+def test_target_arrow_pair_eval_launcher_isolated_and_provenance_locked() -> None:
+    launcher = (
+        ROOT
+        / "finetuned_vlas"
+        / "smolvla"
+        / "target_arrow_only"
+        / "legion"
+        / "run_target_arrow_pair_eval.sbatch"
+    ).read_text(encoding="utf-8")
+    assert "#SBATCH --exclude=compute-4-13" in launcher
+    assert "realpath -e --" in launcher
+    assert "realpath -m --" in launcher
+    assert "shared HOME checkout is forbidden" in launcher
+    assert 'status --porcelain --untracked-files=all' in launcher
+    assert "canonical_external_root()" in launcher
+    assert '[[ ! -e "$RUN_ROOT" ]]' in launcher
+    assert '[[ ! -e "$OUTPUT_ROOT" ]]' in launcher
+    assert '[[ ! -e "$ARCHIVE_ROOT" ]]' in launcher
+    assert 'assert_disjoint_root TARGET_ARROW_EVAL_ARCHIVE_ROOT "$ARCHIVE_ROOT" TARGET_ARROW_EVAL_RUN_ROOT "$RUN_ROOT"' in launcher
+    assert 'case "$RUN_ROOT" in' in launcher and 'OUTPUT_ROOT cannot contain RUN_ROOT' in launcher
+    assert 'runtime_versions.json' in launcher
+    assert 'job_context.env' in launcher
+    assert 'training_manifest_sha256' in launcher
+    assert 'inventory.sha256' in launcher
+    assert 'archive_on_exit' in launcher
+    assert 'PRESERVED_FAILURE' in launcher
+    assert 'TARGET_ARROW_DEVICE must be cuda' in launcher
+    assert 'expected exactly one visible CUDA device' in launcher
+
+
 def test_target_arrow_legion_launcher_has_no_repo_output_fallback() -> None:
     launcher_path = (
         ROOT

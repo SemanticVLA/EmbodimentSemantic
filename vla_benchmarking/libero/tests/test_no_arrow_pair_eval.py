@@ -8,8 +8,18 @@ import pytest
 
 from vla_benchmarking.libero.finetuned_vlas.smolvla.workflows.run_lora_no_arrow_pair_eval import (
     CELL_IDS,
+    SMOKE_CHECKPOINT_ID,
+    SMOKE_EPISODES,
+    SMOKE_SAVE_FREQ,
+    SMOKE_STEPS,
+    SMOKE_TASKS,
+    SEALED_CHECKPOINT_ID,
+    SEALED_SAVE_FREQ,
+    SEALED_STEPS,
+    _evaluation_contract,
     _build_contrast_rows,
     build_manifest,
+    get_profile,
     validate_existing_outputs,
     validate_training_manifest,
 )
@@ -110,6 +120,40 @@ def test_no_arrow_manifest_is_all_task_two_cell_ordered_and_same_adapter(tmp_pat
     assert len({cell["adapter_sha256"] for cell in manifest["cells"]}) == 1
 
 
+def test_evaluation_scope_contract_seals_smoke_to_target_arrow_two_step_checkpoint():
+    full = _evaluation_contract("full", get_profile("no_arrow_treatment"))
+    assert full["checkpoint_id"] == SEALED_CHECKPOINT_ID
+    assert full["steps"] == SEALED_STEPS
+    assert full["save_freq"] == SEALED_SAVE_FREQ
+    assert full["tasks"] == tuple(range(10))
+    assert full["episodes"] == 10
+
+    smoke = _evaluation_contract("smoke", get_profile("target_arrow_treatment"))
+    assert smoke["checkpoint_id"] == SMOKE_CHECKPOINT_ID
+    assert smoke["steps"] == SMOKE_STEPS
+    assert smoke["save_freq"] == SMOKE_SAVE_FREQ
+    assert smoke["tasks"] == SMOKE_TASKS
+    assert smoke["episodes"] == SMOKE_EPISODES
+
+    with pytest.raises(ValueError, match="reserved for the target_arrow_treatment"):
+        _evaluation_contract("smoke", get_profile("no_arrow_treatment"))
+
+
+def test_no_arrow_profile_cannot_opt_into_target_arrow_smoke_scope(tmp_path: Path):
+    _training, manifest = _fixture(tmp_path)
+    with pytest.raises(ValueError, match="reserved for the target_arrow_treatment"):
+        build_manifest(
+            adapter_checkpoint=manifest["adapter_checkpoint"],
+            seeds=[1000],
+            tasks=list(SMOKE_TASKS),
+            episodes=SMOKE_EPISODES,
+            training_manifest=manifest["training_manifest"],
+            output_root=tmp_path / "smoke-eval",
+            profile_name="no_arrow_treatment",
+            evaluation_scope="smoke",
+        )
+
+
 def test_no_arrow_training_lineage_accepts_only_sealed_no_arrow_manifest(tmp_path: Path):
     training, manifest = _fixture(tmp_path)
     validated = validate_training_manifest(training, manifest)
@@ -161,6 +205,29 @@ def test_no_arrow_pair_contrast_contains_only_live_arrow_effect(tmp_path: Path):
     assert len(rows) == 21
     assert {row["contrast"] for row in rows} == {"live_arrow_effect_pp"}
     assert all(row["pc_success"] == 50.0 for row in rows)
+
+
+def test_smoke_pair_contrast_uses_only_scope_task_subset(tmp_path: Path):
+    _training, full_manifest = _fixture(tmp_path)
+    manifest = dict(full_manifest)
+    manifest["tasks"] = list(SMOKE_TASKS)
+    infos = {}
+    for cell in manifest["cells"][:2]:
+        success = [True] if cell["live_arrows"] else [False]
+        infos[(cell["seed"], cell["cell_id"])] = (
+            cell,
+            {
+                "per_task": [
+                    {
+                        "task_id": task_id,
+                        "metrics": {"successes": success},
+                    }
+                    for task_id in SMOKE_TASKS
+                ],
+            },
+        )
+    rows = _build_contrast_rows(infos, manifest)
+    assert [row["task_id"] for row in rows if row["seed"] == "aggregate"] == [0, 4, "all"]
 
 
 def test_no_arrow_manifest_rejects_non_unit_batch_size(tmp_path: Path):

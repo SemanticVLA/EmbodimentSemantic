@@ -88,6 +88,36 @@ ARCHIVE_ROOT="${TARGET_ARROW_ARCHIVE_ROOT:-$HOME/EmbodimentSemantic_archive/smol
 WORKFLOW_ROOT="$REPO_ROOT/vla_benchmarking/libero/finetuned_vlas/smolvla/workflows"
 PREPARE_DATA_SCRIPT="$WORKFLOW_ROOT/prepare_lambda_data.sh"
 PIPELINE_SCRIPT="$WORKFLOW_ROOT/run_smolvla_pipeline.sh"
+
+canonical_external_root() {
+  local name="$1" value="$2" canonical
+  [[ "$value" = /* && "$value" != / ]] || die "$name must be an absolute non-root path: $value"
+  [[ ! -L "$value" ]] || die "$name must not be a symlink: $value"
+  canonical="$(realpath -m -- "$value")" || die "cannot canonicalize $name: $value"
+  [[ "$canonical" != / ]] || die "$name resolves to the filesystem root"
+  case "$canonical" in
+    "$REPO_ROOT"|"$REPO_ROOT"/*) die "$name must be outside REPO_ROOT: $canonical" ;;
+  esac
+  printf '%s\n' "$canonical"
+}
+
+HDF5_ROOT="$(canonical_external_root TARGET_ARROW_HDF5_ROOT "$HDF5_ROOT")"
+DATA_ROOT="$(canonical_external_root TARGET_ARROW_DATA_ROOT "$DATA_ROOT")"
+DATA_CACHE="$(canonical_external_root TARGET_ARROW_DATA_CACHE "$DATA_CACHE")"
+
+assert_disjoint_root() {
+  local left_name="$1" left="$2" right_name="$3" right="$4"
+  case "$left" in
+    "$right"|"$right"/*) die "$left_name overlaps $right_name: $left / $right" ;;
+  esac
+  case "$right" in
+    "$left"|"$left"/*) die "$right_name overlaps $left_name: $right / $left" ;;
+  esac
+}
+
+assert_disjoint_root TARGET_ARROW_HDF5_ROOT "$HDF5_ROOT" TARGET_ARROW_DATA_ROOT "$DATA_ROOT"
+assert_disjoint_root TARGET_ARROW_HDF5_ROOT "$HDF5_ROOT" TARGET_ARROW_DATA_CACHE "$DATA_CACHE"
+assert_disjoint_root TARGET_ARROW_DATA_ROOT "$DATA_ROOT" TARGET_ARROW_DATA_CACHE "$DATA_CACHE"
 for path in "$PYTHON" "$LIBERO_DIR" "$BASE_POLICY" "$LIBERO_CONFIG" "$PREPARE_DATA_SCRIPT" "$PIPELINE_SCRIPT"; do
   [[ "$path" = /* && "$path" != / ]] || die "path must be an absolute non-root path: $path"
 done
@@ -105,6 +135,8 @@ done
 for path in "$REPO_ROOT" "$RUN_ROOT" "$OUTPUT_ROOT" "$ARCHIVE_ROOT"; do
   [[ "$path" = /* && "$path" != / ]] || die "path must be absolute and non-root: $path"
 done
+[[ ! -L "$RUN_ROOT" ]] || die "RUN_ROOT must not be a symlink: $RUN_ROOT"
+[[ ! -L "$ARCHIVE_ROOT" ]] || die "ARCHIVE_ROOT must not be a symlink: $ARCHIVE_ROOT"
 RUN_ROOT="$(realpath -m -- "$RUN_ROOT")" || die 'cannot canonicalize RUN_ROOT'
 OUTPUT_ROOT="$(realpath -m -- "$OUTPUT_ROOT")" || die 'cannot canonicalize OUTPUT_ROOT'
 ARCHIVE_ROOT="$(realpath -m -- "$ARCHIVE_ROOT")" || die 'cannot canonicalize ARCHIVE_ROOT'
@@ -112,6 +144,15 @@ case "$RUN_ROOT" in "$REPO_ROOT"|"$REPO_ROOT"/*) die 'run outputs must be outsid
 case "$ARCHIVE_ROOT" in "$REPO_ROOT"|"$REPO_ROOT"/*) die 'archive must be outside REPO_ROOT' ;; esac
 case "$ARCHIVE_ROOT" in "$RUN_ROOT"|"$RUN_ROOT"/*) die 'archive cannot be inside RUN_ROOT' ;; esac
 case "$RUN_ROOT" in "$ARCHIVE_ROOT"|"$ARCHIVE_ROOT"/*) die 'RUN_ROOT cannot be inside archive' ;; esac
+for data_name_path in \
+  "TARGET_ARROW_HDF5_ROOT:$HDF5_ROOT" \
+  "TARGET_ARROW_DATA_ROOT:$DATA_ROOT" \
+  "TARGET_ARROW_DATA_CACHE:$DATA_CACHE"; do
+  data_name="${data_name_path%%:*}"
+  data_path="${data_name_path#*:}"
+  assert_disjoint_root "$data_name" "$data_path" RUN_ROOT "$RUN_ROOT"
+  assert_disjoint_root "$data_name" "$data_path" ARCHIVE_ROOT "$ARCHIVE_ROOT"
+done
 [[ ! -e "$RUN_ROOT" ]] || die "RUN_ROOT already exists: $RUN_ROOT"
 [[ ! -e "$ARCHIVE_ROOT" ]] || die "ARCHIVE_ROOT already exists: $ARCHIVE_ROOT"
 
@@ -192,7 +233,14 @@ archive_on_exit() {
 trap archive_on_exit EXIT
 
 printf '[%s] preparing verified target-arrow dataset\n' "$(date +'%F %T')"
+DATA_LOCK="$DATA_CACHE/.sealed-target-arrow-${BASE_POLICY_REVISION}-target_arrow_treatment.lock"
+[[ ! -L "$DATA_LOCK" ]] || die "dataset lock must not be a symlink: $DATA_LOCK"
+exec 8>>"$DATA_LOCK"
+flock -x 8
+printf 'dataset_lock=%s\n' "$DATA_LOCK" >> "$RUN_ROOT/job_context.env"
 bash "$PREPARE_DATA_SCRIPT" target_arrow_treatment
+flock -u 8
+exec 8>&-
 
 printf '[%s] launching sealed target-arrow training (%s, %s steps)\n' "$(date +'%F %T')" "$SCOPE" "$STEPS"
 bash "$PIPELINE_SCRIPT" "$SCOPE" --profile target-arrow --run-dir "$OUTPUT_ROOT" --python "$PYTHON"

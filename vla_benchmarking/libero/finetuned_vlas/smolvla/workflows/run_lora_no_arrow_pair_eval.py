@@ -52,6 +52,44 @@ SEALED_SAVE_FREQ = 1946
 SEALED_BATCH_SIZE = 32
 SEALED_SEED = 1000
 SEALED_PEFT_R = 16
+SMOKE_CHECKPOINT_ID = "000002"
+SMOKE_STEPS = 2
+SMOKE_SAVE_FREQ = 2
+SMOKE_TASKS = (0, 4)
+SMOKE_EPISODES = 1
+
+
+def _evaluation_contract(scope: str, profile: SmolVLAProfile) -> dict[str, Any]:
+    """Return the immutable artifact/evaluation contract for one scope.
+
+    The two-step checkpoint is intentionally available only to the explicit
+    target-arrow smoke scope.  In particular, a caller cannot obtain a smoke
+    contract merely by changing a checkpoint path or by selecting a different
+    profile; the training manifest is checked against this contract below.
+    """
+    if scope == "full":
+        return {
+            "scope": "full",
+            "checkpoint_id": SEALED_CHECKPOINT_ID,
+            "steps": SEALED_STEPS,
+            "save_freq": SEALED_SAVE_FREQ,
+            "tasks": tuple(TASK_IDS),
+            "episodes": 10,
+        }
+    if scope == "smoke":
+        if profile.name != "target_arrow_treatment":
+            raise ValueError(
+                "smoke evaluation is reserved for the target_arrow_treatment profile"
+            )
+        return {
+            "scope": "smoke",
+            "checkpoint_id": SMOKE_CHECKPOINT_ID,
+            "steps": SMOKE_STEPS,
+            "save_freq": SMOKE_SAVE_FREQ,
+            "tasks": SMOKE_TASKS,
+            "episodes": SMOKE_EPISODES,
+        }
+    raise ValueError("evaluation scope must be one of: full, smoke")
 
 
 @dataclass(frozen=True)
@@ -186,7 +224,7 @@ def build_manifest(
     *,
     adapter_checkpoint: str,
     seeds: Sequence[int],
-    tasks: Sequence[int] = TASK_IDS,
+    tasks: Sequence[int] | None = None,
     episodes: int = 10,
     batch_size: int = 1,
     device: str = "cuda",
@@ -195,16 +233,26 @@ def build_manifest(
     training_manifest: str,
     output_root: Path,
     profile_name: str = "no_arrow_treatment",
+    evaluation_scope: str = "full",
 ) -> dict[str, Any]:
     profile = get_profile(profile_name)
+    contract = _evaluation_contract(evaluation_scope, profile)
+    if tasks is None:
+        tasks = contract["tasks"]
     tasks = [int(task_id) for task_id in tasks]
-    if tasks != list(TASK_IDS):
-        raise ValueError("sealed no-arrow eval requires task IDs exactly 0 through 9")
+    if tasks != list(contract["tasks"]):
+        raise ValueError(
+            f"{evaluation_scope} evaluation requires task IDs exactly "
+            f"{list(contract['tasks'])}"
+        )
     seeds = [int(seed) for seed in seeds]
     if seeds != [SEALED_SEED]:
         raise ValueError("sealed no-arrow eval requires seeds exactly [1000]")
-    if episodes != 10:
-        raise ValueError("sealed no-arrow eval requires exactly 10 episodes")
+    if episodes != contract["episodes"]:
+        raise ValueError(
+            f"{evaluation_scope} evaluation requires exactly "
+            f"{contract['episodes']} episodes"
+        )
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
     if batch_size != 1:
@@ -234,7 +282,10 @@ def build_manifest(
             Path(adapter_checkpoint).expanduser().resolve() / "adapter_model.safetensors"
         ),
         "model_role": profile.model_role,
-        "checkpoint_step": int(SEALED_CHECKPOINT_ID),
+        "evaluation_scope": contract["scope"],
+        "checkpoint_step": int(contract["checkpoint_id"]),
+        "training_steps": int(contract["steps"]),
+        "training_save_freq": int(contract["save_freq"]),
         "training_variant": profile.training_variant,
         "dataset_variant": profile.dataset_variant,
         "tasks": tasks,
@@ -272,6 +323,7 @@ def build_manifest(
 
 def _validate_manifest(manifest: dict[str, Any], profile: SmolVLAProfile | None = None) -> None:
     profile = profile or get_profile(manifest.get("profile"))
+    contract = _evaluation_contract(str(manifest.get("evaluation_scope", "full")), profile)
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported or missing no-arrow manifest schema_version")
     if manifest.get("profile") != profile.name or manifest.get("experiment") != profile.eval_experiment:
@@ -282,12 +334,28 @@ def _validate_manifest(manifest: dict[str, Any], profile: SmolVLAProfile | None 
         raise ValueError("evaluation manifest has the wrong dataset lineage")
     if manifest.get("model_role") != profile.model_role:
         raise ValueError("evaluation manifest has the wrong model role")
-    if manifest.get("checkpoint_step") != int(SEALED_CHECKPOINT_ID):
-        raise ValueError("no-arrow evaluation manifest must use final checkpoint 029190")
+    if manifest.get("checkpoint_step") != int(contract["checkpoint_id"]):
+        raise ValueError(
+            f"{contract['scope']} evaluation manifest must use checkpoint "
+            f"{contract['checkpoint_id']}"
+        )
+    if manifest.get("training_steps") != int(contract["steps"]):
+        raise ValueError(
+            f"{contract['scope']} evaluation manifest must record training steps "
+            f"{contract['steps']}"
+        )
+    if manifest.get("training_save_freq") != int(contract["save_freq"]):
+        raise ValueError(
+            f"{contract['scope']} evaluation manifest must record training save_freq "
+            f"{contract['save_freq']}"
+        )
     if not isinstance(manifest.get("training_manifest_sha256"), str) or not isinstance(manifest.get("adapter_sha256"), str):
         raise ValueError("no-arrow evaluation manifest lacks sealed artifact hashes")
-    if manifest.get("tasks") != list(TASK_IDS):
-        raise ValueError("manifest tasks must contain exactly IDs 0 through 9")
+    if manifest.get("tasks") != list(contract["tasks"]):
+        raise ValueError(
+            f"manifest tasks must match {contract['scope']} scope: "
+            f"{list(contract['tasks'])}"
+        )
     if manifest.get("randomize_scenes") is not True:
         raise ValueError("manifest must keep RANDOMIZE_SCENES enabled")
     if manifest.get("batch_size") != 1:
@@ -307,11 +375,19 @@ def _validate_manifest(manifest: dict[str, Any], profile: SmolVLAProfile | None 
     seeds = manifest.get("seeds")
     if seeds != [SEALED_SEED]:
         raise ValueError("manifest seeds must be exactly [1000]")
-    if manifest.get("episodes") != 10:
-        raise ValueError("manifest must contain exactly 10 episodes")
+    if manifest.get("episodes") != contract["episodes"]:
+        raise ValueError(
+            f"manifest must contain exactly {contract['episodes']} episodes "
+            f"for {contract['scope']} scope"
+        )
     dimensions = manifest.get("randomization_dimensions")
-    if not isinstance(dimensions, dict) or set(dimensions) != {str(task_id) for task_id in TASK_IDS}:
-        raise ValueError("manifest must record randomization dimensions for every task")
+    if not isinstance(dimensions, dict) or set(dimensions) != {
+        str(task_id) for task_id in contract["tasks"]
+    }:
+        raise ValueError(
+            f"manifest must record randomization dimensions for every "
+            f"{contract['scope']} task"
+        )
     for task_id, values in dimensions.items():
         if not isinstance(values, dict) or not values.get("object_removal"):
             raise ValueError(f"task {task_id} must enable object_removal")
@@ -352,7 +428,13 @@ def _resume_record_digest(record: dict[str, Any]) -> str:
     return hashlib.sha256((json.dumps(body, indent=2, sort_keys=True) + "\n").encode("utf-8")).hexdigest()
 
 
-def _validate_resume_audit_chain(data: dict[str, Any], profile: SmolVLAProfile = DEFAULT_PROFILE) -> None:
+def _validate_resume_audit_chain(
+    data: dict[str, Any],
+    profile: SmolVLAProfile = DEFAULT_PROFILE,
+    *,
+    evaluation_scope: str = "full",
+) -> None:
+    contract = _evaluation_contract(evaluation_scope, profile)
     audits = data.get("resume_audits")
     chain_digest = data.get("resume_chain_digest")
     if not isinstance(audits, list) or not isinstance(chain_digest, str):
@@ -390,15 +472,17 @@ def _validate_resume_audit_chain(data: dict[str, Any], profile: SmolVLAProfile =
         step_index = checkpoint_indexes[-1] + 1
         if step_index >= len(checkpoint_parts) or not checkpoint_parts[step_index].isdigit() or int(checkpoint_parts[step_index]) != step:
             raise ValueError(f"resume config/checkpoint step mismatch: {config_path}")
-        if step > SEALED_STEPS:
-            raise ValueError("resume audit checkpoint exceeds sealed training steps")
+        if step > contract["steps"]:
+            raise ValueError(
+                f"resume audit checkpoint exceeds {contract['scope']} training steps"
+            )
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"resume train_config.json is unreadable: {config_path}") from exc
         if config.get("dataset", {}).get("repo_id") != profile.dataset_repo_id:
             raise ValueError("resume train_config dataset lineage does not match selected profile")
-        for key, expected in (("steps", SEALED_STEPS), ("save_freq", SEALED_SAVE_FREQ), ("batch_size", SEALED_BATCH_SIZE), ("seed", SEALED_SEED)):
+        for key, expected in (("steps", contract["steps"]), ("save_freq", contract["save_freq"]), ("batch_size", SEALED_BATCH_SIZE), ("seed", SEALED_SEED)):
             if config.get(key) is None or int(config[key]) != expected:
                 raise ValueError(f"resume train_config {key} is not sealed")
         peft = config.get("peft", config.get("policy", {}).get("peft", {}))
@@ -429,6 +513,8 @@ def validate_training_manifest(
     if manifest.get("training_manifest_sha256") != _sha256_file(path):
         raise ValueError("evaluation training_manifest_sha256 does not match the current training manifest")
     profile = profile or get_profile(data.get("training_variant"))
+    evaluation_scope = str(manifest.get("evaluation_scope", "full"))
+    contract = _evaluation_contract(evaluation_scope, profile)
     if data.get("experiment") != profile.experiment:
         if profile.name == "no_arrow_treatment":
             raise ValueError("unexpected no-arrow training manifest experiment")
@@ -486,10 +572,18 @@ def validate_training_manifest(
     if manifest.get("adapter_sha256") != _sha256_file(adapter_artifact):
         raise ValueError("evaluation adapter_sha256 does not match the adapter artifact")
     checkpoint_dir = adapter_path.parent
-    if checkpoint_dir.name != SEALED_CHECKPOINT_ID:
-        raise ValueError("no-arrow adapter is not final checkpoint 029190")
-    if data.get("final_checkpoint_id") != SEALED_CHECKPOINT_ID:
-        raise ValueError("no-arrow training manifest final checkpoint is not 029190")
+    if checkpoint_dir.name != contract["checkpoint_id"]:
+        raise ValueError(
+            f"{contract['scope']} adapter is not checkpoint "
+            f"{contract['checkpoint_id']}"
+        )
+    if data.get("final_checkpoint_id") != contract["checkpoint_id"]:
+        raise ValueError(
+            f"{contract['scope']} training manifest final checkpoint is not "
+            f"{contract['checkpoint_id']}"
+        )
+    if manifest.get("checkpoint_step") != int(contract["checkpoint_id"]):
+        raise ValueError("evaluation checkpoint step does not match its scope")
     if data.get("pair_kind") != profile.pair_kind:
         raise ValueError("training manifest pair identity is invalid")
     if data.get("base_policy") != str(base_policy):
@@ -527,7 +621,7 @@ def validate_training_manifest(
                 raise ValueError(
                     "revalidated no-arrow pair_sentinel does not identify the sealed pair manifest"
                 )
-    _validate_resume_audit_chain(data, profile)
+    _validate_resume_audit_chain(data, profile, evaluation_scope=evaluation_scope)
     plan = Path(data.get("training_plan", ""))
     if not plan.is_file() or _sha256_file(plan) != data.get("training_plan_sha256"):
         raise ValueError("no-arrow training plan is missing or has changed")
@@ -540,7 +634,13 @@ def validate_training_manifest(
         raise ValueError("training plan dataset lineage is invalid")
     if plan_data.get("base_policy_revision") != SEALED_REVISION or Path(plan_data.get("base_policy", "")).expanduser().resolve() != base_policy:
         raise ValueError("no-arrow training plan base snapshot lineage is invalid")
-    expected_flags = {"steps": 29190, "save_freq": 1946, "batch_size": 32, "seed": 1000, "peft_r": 16}
+    expected_flags = {
+        "steps": contract["steps"],
+        "save_freq": contract["save_freq"],
+        "batch_size": SEALED_BATCH_SIZE,
+        "seed": SEALED_SEED,
+        "peft_r": SEALED_PEFT_R,
+    }
     for source_name, source in (("manifest", data), ("training plan", plan_data)):
         flags = source.get("flags")
         if not isinstance(flags, dict) or any(int(flags.get(key, -1)) != value for key, value in expected_flags.items()):
@@ -607,14 +707,20 @@ def _write_cell_marker(cell: dict[str, Any]) -> None:
     marker.write_text(json.dumps(expected, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _run_cell(cell: dict[str, Any], args: argparse.Namespace, script_dir: Path, profile: SmolVLAProfile) -> int:
+def _run_cell(
+    cell: dict[str, Any],
+    args: argparse.Namespace,
+    script_dir: Path,
+    profile: SmolVLAProfile,
+    task_ids: Sequence[int],
+) -> int:
     _write_cell_marker(cell)
     env = os.environ.copy()
     env.update(
         {
             "PYTHONUNBUFFERED": "1",
             "MODELS": cell["checkpoint"],
-            "TASK_IDS": json.dumps(list(TASK_IDS), separators=(",", ":")),
+            "TASK_IDS": json.dumps(list(task_ids), separators=(",", ":")),
             "N_EPISODES": str(args.episodes),
             "BATCH_SIZE": str(args.batch_size),
             "SEED": str(cell["seed"]),
@@ -640,7 +746,7 @@ def _run_cell(cell: dict[str, Any], args: argparse.Namespace, script_dir: Path, 
         "--eval.use_async_envs=false",
         f"--output_dir={cell['output_dir']}",
         f"--policy.path={cell['checkpoint']}",
-        "--env.task_ids=" + json.dumps(list(TASK_IDS), separators=(",", ":")),
+        "--env.task_ids=" + json.dumps(list(task_ids), separators=(",", ":")),
         "--env.camera_name=" + TRAINING_CAMERAS,
         "--env.observation_height=256",
         "--env.observation_width=256",
@@ -713,13 +819,13 @@ def _build_contrast_rows(
 
     per_task_values: dict[int, list[float]] = {}
     for seed in manifest["seeds"]:
-        for task_id in TASK_IDS:
+        for task_id in manifest["tasks"]:
             arrow_cell = manifest["cells"][0]["cell_id"]
             no_arrow_cell = manifest["cells"][1]["cell_id"]
             value = values[(seed, task_id, arrow_cell)] - values[(seed, task_id, no_arrow_cell)]
             add(seed, task_id, value)
             per_task_values.setdefault(task_id, []).append(value)
-    for task_id in TASK_IDS:
+    for task_id in manifest["tasks"]:
         add("aggregate", task_id, sum(per_task_values[task_id]) / len(per_task_values[task_id]))
     all_values = [value for values_for_task in per_task_values.values() for value in values_for_task]
     add("aggregate", "all", sum(all_values) / len(all_values))
@@ -743,6 +849,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seeds", required=True, help="comma-separated or JSON integer seeds")
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--training-manifest", required=True)
+    parser.add_argument("--evaluation-scope", choices=("full", "smoke"), default="full")
+    parser.add_argument(
+        "--task-ids",
+        default=None,
+        help="comma-separated task IDs; scope contract supplies the default",
+    )
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--device", default=os.environ.get("DEVICE", "cuda"))
@@ -761,9 +873,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_root = Path(args.output_root).expanduser().resolve()
     try:
         seeds = parse_int_list(args.seeds)
+        task_ids = (
+            parse_int_list(args.task_ids)
+            if args.task_ids is not None
+            else list(_evaluation_contract(args.evaluation_scope, profile)["tasks"])
+        )
         manifest = build_manifest(
             adapter_checkpoint=args.adapter_checkpoint,
             seeds=seeds,
+            tasks=task_ids,
             episodes=args.episodes,
             batch_size=args.batch_size,
             device=args.device,
@@ -772,6 +890,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             training_manifest=args.training_manifest,
             output_root=output_root,
             profile_name=profile.name,
+            evaluation_scope=args.evaluation_scope,
         )
         validate_existing_outputs(output_root, manifest)
         validate_training_manifest(Path(args.training_manifest).expanduser().resolve(), manifest, profile=profile)
@@ -784,7 +903,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows: list[dict[str, Any]] = []
     cell_infos: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any]]] = {}
     for cell in manifest["cells"]:
-        return_code = _run_cell(cell, args, script_dir, profile)
+        return_code = _run_cell(cell, args, script_dir, profile, task_ids)
         eval_path = Path(cell["output_dir"]) / "eval_info.json"
         if return_code != 0:
             rows.append(_extract_summary(cell))
