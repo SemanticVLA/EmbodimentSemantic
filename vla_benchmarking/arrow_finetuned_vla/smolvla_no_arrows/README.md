@@ -26,3 +26,17 @@ per task, and tasks `0` through `9`:
 
 These are final archived results, not a claim that the current checkout has
 re-run the 100-cell evaluation.
+
+## Expanded sealed-randomized regression
+
+`../workflows/run_no_arrow_sealed_eval.py` is the dedicated one-condition
+runner for checking this protected adapter with the organized evaluator.  It
+keeps visual arrows disabled and supports only a 10-episode smoke scope (one
+episode for each task) or a 500-episode full scope (50 episodes for each task,
+with deterministic episode seeds 1000 through 1049).  The historical paired
+100-cell workflow remains sealed and unchanged.
+
+The 500-cell result is an expanded current-code regression, not a replacement
+for or exact replication of job `1910198`: the evaluator revision and sample
+count differ.  Raw results and their immutable run manifest must be archived
+under a new experiment identity.
