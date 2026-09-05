@@ -103,7 +103,7 @@ module purge
 module load miniforge/24.3.0-0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 export PATH="$(dirname "$PYTHON"):$PATH"
-export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/vla_benchmarking${PYTHONPATH:+:$PYTHONPATH}"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl LIBERO_CONFIG_PATH
 export TMPDIR="$RUN_ROOT/cache/tmp" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export HF_HOME="${ARROW_STUDENT_HF_HOME:-$HOME/.cache/huggingface}"
