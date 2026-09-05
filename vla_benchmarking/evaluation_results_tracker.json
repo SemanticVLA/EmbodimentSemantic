@@ -35,6 +35,42 @@
     "immutable": true,
     "evidence_scope": "The score belongs to the executed source release; the organized default is behavior-equivalent and has not been separately rerun."
   },
+  "canonical_cleanup_regression": {
+    "status": "RUNNING",
+    "audited_at_utc": "2026-09-05T17:48:06Z",
+    "purpose": "Validate that the organized canonical controller preserves the frozen treatment on a larger sealed-randomized sample.",
+    "execution_commit": "d044a5d672092d4322cf7395d91cc1b0085ef496",
+    "canonical_config_sha256": "37497fd0b2f60346b9ffd1501ccc743046c7fa2370ef6fa9531a7204f69cc044",
+    "suite": "sealed_randomized",
+    "tasks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "episodes_per_task": 50,
+    "seed_base": 1000,
+    "seed_range": [1000, 1049],
+    "planned_cells": 500,
+    "failed_preworkload_attempt": {
+      "job_id": "1921204",
+      "status": "FAILED_BEFORE_WORKLOAD",
+      "episodes_executed": 0,
+      "reason": "The early launcher policy-hash check lacked the repository root on sys.path; no model workload or episode ran."
+    },
+    "smoke": {
+      "job_id": "1921205",
+      "status": "FINAL",
+      "successes": 1,
+      "planned": 1,
+      "terminal_cells": 1,
+      "archive_status": "VERIFIED",
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_smoke_d044a5d_20260905T1748Z_1921205"
+    },
+    "full_run": {
+      "job_id": "1921206",
+      "status": "RUNNING",
+      "node": "compute-3-12",
+      "label": "canonical_grasp_sealed500_d044a5d_20260905T1748Z",
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_sealed500_d044a5d_20260905T1748Z_1921206"
+    },
+    "conclusion_limit": "This is a refactor regression evaluation of the frozen policy. Until all 500 cells are terminal, every reported score is partial."
+  },
   "v9d_molmo_candidate_campaigns": {
     "audited_at_utc": "2026-09-05T17:27:12Z",
     "frozen_baseline_commit": "fd24a4c5cf8da4991013ab18b15704523ad0836b",

@@ -1,5 +1,30 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Canonical cleanup regression run — 2026-09-05 17:48:06 UTC
+
+The organized canonical controller is being re-evaluated on **500**
+sealed-randomized cells: tasks 0-9, 50 episodes per task, and deterministic
+seeds 1000-1049 for every task. Full Legion job **1921206** is RUNNING on one
+A40 from immutable commit
+`d044a5d672092d4322cf7395d91cc1b0085ef496`. Its label is
+`canonical_grasp_sealed500_d044a5d_20260905T1748Z`; archive target:
+`/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_sealed500_d044a5d_20260905T1748Z_1921206`.
+
+Dependency smoke job **1921205** completed **1/1** successfully and archived
+with status `VERIFIED`. It exercised the pinned MolmoPoint model, aligned
+agentview RGB-D path, candidate generation, 40 mm preshape, placement, opening,
+80 mm retreat, and post-retreat evaluator. The exact canonical configuration
+hash remained
+`37497fd0b2f60346b9ffd1501ccc743046c7fa2370ef6fa9531a7204f69cc044`.
+
+Initial job **1921204** is a preserved pre-workload failure: the reorganized
+launcher's early policy-hash check could not import the organized package. It
+ran no episode and produced no evaluation result. Commit `d044a5d` adds only
+the missing repository-root import bootstrap plus its regression assertion;
+controller behavior and configuration are unchanged. The 500-cell result is
+a refactor regression check, not a new treatment or automatic replacement of
+the historical 87/100 evidence.
+
 ## Canonical grasp controller — 2026-09-05 17:27:12 UTC audit
 
 The sole active grasp-controller treatment is `failure_opening40_retreat80`,
