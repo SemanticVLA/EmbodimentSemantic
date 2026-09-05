@@ -37,7 +37,7 @@
   },
   "canonical_cleanup_regression": {
     "status": "RUNNING",
-    "audited_at_utc": "2026-09-05T17:48:06Z",
+    "audited_at_utc": "2026-09-05T17:52:19Z",
     "purpose": "Validate that the organized canonical controller preserves the frozen treatment on a larger sealed-randomized sample.",
     "execution_commit": "d044a5d672092d4322cf7395d91cc1b0085ef496",
     "canonical_config_sha256": "37497fd0b2f60346b9ffd1501ccc743046c7fa2370ef6fa9531a7204f69cc044",
@@ -62,12 +62,21 @@
       "archive_status": "VERIFIED",
       "archive_root": "/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_smoke_d044a5d_20260905T1748Z_1921205"
     },
-    "full_run": {
+    "invalid_scope_attempt": {
       "job_id": "1921206",
+      "status": "CANCELLED_INVALID_SCOPE",
+      "archive_status": "INCOMPLETE",
+      "observed_task_ids": [0],
+      "observed_planned_cells": 50,
+      "reason": "SLURM split the comma-separated GRASP_TASK_IDS value supplied inside --export; the attempt was stopped and is excluded from the 500-cell result."
+    },
+    "full_run": {
+      "job_id": "1921211",
       "status": "RUNNING",
       "node": "compute-3-12",
-      "label": "canonical_grasp_sealed500_d044a5d_20260905T1748Z",
-      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_sealed500_d044a5d_20260905T1748Z_1921206"
+      "label": "canonical_grasp_sealed500_d044a5d_r2_20260905T1752Z",
+      "job_context_verified": true,
+      "archive_root": "/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_sealed500_d044a5d_r2_20260905T1752Z_1921211"
     },
     "conclusion_limit": "This is a refactor regression evaluation of the frozen policy. Until all 500 cells are terminal, every reported score is partial."
   },

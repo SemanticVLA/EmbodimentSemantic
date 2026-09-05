@@ -4,11 +4,13 @@
 
 The organized canonical controller is being re-evaluated on **500**
 sealed-randomized cells: tasks 0-9, 50 episodes per task, and deterministic
-seeds 1000-1049 for every task. Full Legion job **1921206** is RUNNING on one
-A40 from immutable commit
+seeds 1000-1049 for every task. Correct full Legion job **1921211** is RUNNING
+on one A40 from immutable commit
 `d044a5d672092d4322cf7395d91cc1b0085ef496`. Its label is
-`canonical_grasp_sealed500_d044a5d_20260905T1748Z`; archive target:
-`/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_sealed500_d044a5d_20260905T1748Z_1921206`.
+`canonical_grasp_sealed500_d044a5d_r2_20260905T1752Z`; archive target:
+`/home/hjaber/EmbodimentSemantic_archive/grasp_controller/canonical_grasp_sealed500_d044a5d_r2_20260905T1752Z_1921211`.
+Its emitted job context verifies the complete task list, 50 episodes per task,
+seed base 1000, sealed-randomized suite, exact commit, and canonical hash.
 
 Dependency smoke job **1921205** completed **1/1** successfully and archived
 with status `VERIFIED`. It exercised the pinned MolmoPoint model, aligned
@@ -24,6 +26,13 @@ the missing repository-root import bootstrap plus its regression assertion;
 controller behavior and configuration are unchanged. The 500-cell result is
 a refactor regression check, not a new treatment or automatic replacement of
 the historical 87/100 evidence.
+
+Job **1921206** is a preserved invalid-scope attempt. SLURM split the
+comma-separated task list supplied inside `--export`, so its job context
+contained only task 0 and 50 planned cells. It was cancelled promptly and its
+partial files were archived as `INCOMPLETE`; they must never be counted in the
+500-cell result. Job 1921211 exports the variables before calling `sbatch`, and
+its emitted context verifies tasks 0-9 before result interpretation.
 
 ## Canonical grasp controller — 2026-09-05 17:27:12 UTC audit
 
