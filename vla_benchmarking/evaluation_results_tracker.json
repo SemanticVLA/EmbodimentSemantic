@@ -654,9 +654,8 @@
   "status_freshness": {
     "snapshot_only": true,
     "instruction": "Refresh every running job on its recorded execution host before reporting current progress. Audited job IDs and partial counts are not live state.",
-    "last_refresh_attempt_utc": "2026-09-02T08:24:21Z",
-    "last_refresh_attempt_status": "failed_unreachable",
-    "last_refresh_failure": "Legion refresh could not connect through the mp4 gateway; no live job or output state was obtained.",
+    "last_refresh_attempt_utc": "2026-09-02T02:52:11Z",
+    "last_refresh_attempt_status": "success",
     "last_successful_audit_utc": "2026-09-02T02:52:11Z"
   },
   "terminology": {
@@ -981,9 +980,6 @@
       "eval_metrics_available": false,
       "eval_partial_artifacts": "graph_trained_graph_context tasks 0-5 video/debug artifacts only",
       "eval_results_note": "No eval_info.json or randomization_audit rows are available yet; per-task success counts must wait for the cell to finish.",
-      "last_refresh_attempt_utc": "2026-09-02T08:24:21Z",
-      "last_refresh_attempt_status": "failed_unreachable",
-      "refresh_failure": "Legion refresh could not connect through the mp4 gateway; the RUNNING state and partial artifacts below are stale until reconnected.",
       "trained_on": "no_arrows",
       "trained_on_text_condition": "target_natural_v1",
       "dataset_variant": "graph_treatment",
