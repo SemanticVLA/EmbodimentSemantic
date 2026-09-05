@@ -4,7 +4,7 @@ import pytest
 
 
 pytest.importorskip("lerobot")
-import run_lerobot_eval_with_context as runtime
+from vla_benchmarking.evaluation import run_lerobot_eval_with_context as runtime
 
 
 class _PinnedLiberoEnv:

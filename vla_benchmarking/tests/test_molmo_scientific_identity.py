@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from vla_benchmarking.grasp_controller import runner
+from vla_benchmarking.arrow_grasp_controller.controller import runner
 
 
 def _identity_kwargs():

@@ -3,7 +3,10 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from vla_benchmarking.rgbd_region import derive_observed_region_mask, project_observed_region_to_wrist
+from vla_benchmarking.arrow_grasp_controller.legacy_engine.rgbd_region import (
+    derive_observed_region_mask,
+    project_observed_region_to_wrist,
+)
 
 
 @dataclass

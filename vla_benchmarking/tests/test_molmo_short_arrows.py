@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from grasp_controller import runner
+from vla_benchmarking.arrow_grasp_controller.controller import runner
 
 
 class _Episode:

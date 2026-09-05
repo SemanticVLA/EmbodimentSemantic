@@ -8,7 +8,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from arrow_episode_trace import ArrowEpisodeTrace, TraceError, validate_trace
+from vla_benchmarking.evaluation.arrow_episode_trace import (
+    ArrowEpisodeTrace,
+    TraceError,
+    validate_trace,
+)
 
 
 def _observation() -> tuple[np.ndarray, np.ndarray, np.ndarray]:

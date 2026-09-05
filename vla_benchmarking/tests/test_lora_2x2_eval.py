@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from config import TASK_NAMES, TASK_PROMPT_OVERRIDE, TASK_REMOVE_CONFIG, TASK_SWAP_CONFIG
+from vla_benchmarking.shared.config import TASK_NAMES, TASK_PROMPT_OVERRIDE, TASK_REMOVE_CONFIG, TASK_SWAP_CONFIG
 
-from run_lora_2x2_eval import (
+from vla_benchmarking.arrow_finetuned_vla.workflows.run_lora_2x2_eval import (
     CELL_IDS,
     MANIFEST_FILENAME,
     RAW_TRAINING_CAMERAS,

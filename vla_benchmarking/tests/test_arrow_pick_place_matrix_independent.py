@@ -17,7 +17,7 @@ import pytest
 @pytest.fixture(scope="module")
 def matrix():
     try:
-        return importlib.import_module("run_arrow_pick_place_matrix")
+        return importlib.import_module("vla_benchmarking.evaluation.run_arrow_pick_place_matrix")
     except ModuleNotFoundError as exc:
         if exc.name in {"run_arrow_pick_place_matrix", "robosuite", "libero", "lerobot"}:
             pytest.skip(f"optional dependency unavailable: {exc.name}")

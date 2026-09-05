@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from grasp_controller.molmopoint import (
+from vla_benchmarking.arrow_grasp_controller.controller.molmopoint import (
     DEFAULT_PROMPT_ID,
     MOLMOPOINT_MODEL_ID,
     MOLMOPOINT_MODEL_REVISION,

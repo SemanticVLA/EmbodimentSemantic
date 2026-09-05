@@ -11,7 +11,7 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOL = ROOT / "arrow_failure_forensics.py"
+TOOL = ROOT / "evaluation" / "arrow_failure_forensics.py"
 
 
 def _write_image(path: Path, value: int) -> None:

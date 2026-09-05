@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +12,7 @@ import numpy as np
 import pytest
 
 
-runner = importlib.import_module("grasp_controller.runner")
+runner = importlib.import_module("vla_benchmarking.arrow_grasp_controller.controller.runner")
 
 
 @dataclass
@@ -197,7 +196,7 @@ def test_pre_motion_validation_does_not_recount_hover_trace():
 
 def test_gripper_open_preflight_runs_before_reprobe_and_counts_shared_actions(tmp_path, monkeypatch):
     calls = []
-    fake_episode = ModuleType("run_arrow_pick_place_eval")
+    fake_episode = ModuleType("vla_benchmarking.evaluation.run_arrow_pick_place_eval")
     fake_episode._raw_observation = lambda env: {"eef_pos": np.asarray((0.1, 0.2, 0.3))}
     fake_episode._proprioception = lambda observation: observation
 
@@ -206,7 +205,8 @@ def test_gripper_open_preflight_runs_before_reprobe_and_counts_shared_actions(tm
         return [{"phase": "open", "steps": 20, "status": "stop"}]
 
     fake_episode._run_motion = run_motion
-    monkeypatch.setitem(sys.modules, "run_arrow_pick_place_eval", fake_episode)
+    import vla_benchmarking.evaluation as evaluation_package
+    monkeypatch.setattr(evaluation_package, "run_arrow_pick_place_eval", fake_episode, raising=False)
     env = SimpleNamespace(_grasp_controller_action_count=0)
     callback_calls = []
     audit = runner._perform_gripper_open(
@@ -222,7 +222,7 @@ def test_gripper_open_preflight_runs_before_reprobe_and_counts_shared_actions(tm
 
 
 def test_robot_probe_emits_nonzero_center_rotated_mesh_collision_box(monkeypatch):
-    probe_module = importlib.import_module("sanity_checks.probe_panda_grip_site_frame")
+    probe_module = importlib.import_module("vla_benchmarking.tools.sanity_checks.probe_panda_grip_site_frame")
     monkeypatch.setattr(probe_module, "probe_grip_site_frame", lambda _sim: {
         "passed": True, "site_id": 0, "body_id": 0, "resolved_body_name": "right_hand",
         "observed_body_to_site_rotation_matrix": np.eye(3).tolist(),

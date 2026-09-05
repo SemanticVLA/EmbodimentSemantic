@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from visual_scene_graph import (
+from vla_benchmarking.evaluation.visual_scene_graph import (
     DEFAULT_ARROW_HEAD_LENGTH,
     DEFAULT_ARROW_WIDTH,
     SEALED_LORA_ARROW_HEAD_LENGTH,

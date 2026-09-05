@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from run_lora_no_arrow_pair_eval import (
+from vla_benchmarking.arrow_finetuned_vla.workflows.run_lora_no_arrow_pair_eval import (
     CELL_IDS,
     _build_contrast_rows,
     build_manifest,

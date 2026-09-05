@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from config import TASK_PROMPT_OVERRIDE
-from hdf5_to_lerobot_dataset import (
+from vla_benchmarking.shared.config import TASK_PROMPT_OVERRIDE
+from vla_benchmarking.arrow_finetuned_vla.workflows.hdf5_to_lerobot_dataset import (
     FEATURES,
     GRAPH_CONTRACT,
     GRAPH_EXTRACTOR_PATH,
@@ -199,7 +199,9 @@ def test_target_arrow_treatment_draws_exactly_one_bowl_to_goal_arrow():
 
 
 def test_target_arrow_profile_is_distinct_from_all_arrows_profile():
-    from hdf5_to_lerobot_dataset import _sealed_profile
+    from vla_benchmarking.arrow_finetuned_vla.workflows.hdf5_to_lerobot_dataset import (
+        _sealed_profile,
+    )
 
     all_arrows = _sealed_profile(False)
     target_arrow = _sealed_profile(True)
@@ -301,7 +303,12 @@ def test_graph_pair_recomputes_relations_from_bbox_world_and_rejects_stored_mism
 
 def test_graph_manifest_records_extractor_digest_and_verifier_rechecks_live_file():
     """A graph pair must be invalidated if the canonical extractor source drifts."""
-    converter = Path(__file__).resolve().parents[1] / "hdf5_to_lerobot_dataset.py"
+    converter = (
+        Path(__file__).resolve().parents[1]
+        / "arrow_finetuned_vla"
+        / "workflows"
+        / "hdf5_to_lerobot_dataset.py"
+    )
     source = converter.read_text(encoding="utf-8")
     assert '"graph_extractor_sha256": sha256_file(GRAPH_EXTRACTOR_PATH)' in source
     verify_start = source.index("def _load_sealed_manifest")
@@ -331,14 +338,19 @@ def test_graph_episode_frame_metadata_mutation_is_rejected():
 
 def test_graph_manifest_rejects_noncanonical_tokenizer_contract(tmp_path):
     """A verified graph pair must not silently downgrade its 96-token budget."""
-    from hdf5_to_lerobot_dataset import FPS, _source_snapshot_identity
+    from vla_benchmarking.arrow_finetuned_vla.workflows.hdf5_to_lerobot_dataset import (
+        FPS,
+        _source_snapshot_identity,
+    )
 
     manifest = {
         "schema_version": 1,
         "pair_kind": GRAPH_PAIR_KIND,
         "visual_contract": SEALED_LORA_VISUAL_CONTRACT,
         "graph_contract": GRAPH_CONTRACT,
-        "graph_formatter_sha256": sha256_file(REPO_ROOT / "scene_graph_formats.py"),
+        "graph_formatter_sha256": sha256_file(
+            REPO_ROOT / "vla_benchmarking" / "evaluation" / "scene_graph_formats.py"
+        ),
         "graph_extractor_sha256": sha256_file(GRAPH_EXTRACTOR_PATH),
         "storage_contract": {"image_dtype": "image", "use_videos": False, "fps": FPS},
         "source_snapshot_identity": _source_snapshot_identity([]),

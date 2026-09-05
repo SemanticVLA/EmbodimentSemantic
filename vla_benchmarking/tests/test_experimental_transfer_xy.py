@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import arrow_controller
-import run_arrow_pick_place_eval as runner
+from vla_benchmarking.arrow_grasp_controller.legacy_engine import arrow_controller
+from vla_benchmarking.evaluation import run_arrow_pick_place_eval as runner
 
 
 class _Env:

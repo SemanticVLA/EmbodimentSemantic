@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from arrow_controller import (  # noqa: E402
+from vla_benchmarking.arrow_grasp_controller.legacy_engine.arrow_controller import (  # noqa: E402
     ArrowCommand2D,
     ArrowEncoding,
     ArrowObservation,
@@ -32,7 +32,7 @@ from arrow_controller import (  # noqa: E402
 )
 
 
-FIXTURE_DIR = Path(__file__).parents[1] / "visual_arrow_previews_highres"
+FIXTURE_DIR = Path(__file__).parents[1] / "tools" / "visual_arrow_previews_highres"
 
 
 def _synthetic_arrow(size=(128, 128), start=(25, 100), end=(100, 25), width=3, head=14):
@@ -292,7 +292,7 @@ def test_normalized_osc_action_is_7d_finite_and_bounded():
 
 
 def test_arrow_world_xy_basis_is_derived_from_deprojected_endpoints():
-    from arrow_controller import arrow_world_xy_basis
+    from vla_benchmarking.arrow_grasp_controller.legacy_engine.arrow_controller import arrow_world_xy_basis
 
     forward, lateral = arrow_world_xy_basis((1.0, 2.0, 0.4), (1.0, 3.0, 9.0))
     assert forward == pytest.approx((0.0, 1.0, 0.0))

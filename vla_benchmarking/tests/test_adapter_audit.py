@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import adapter_audit
+from vla_benchmarking.arrow_finetuned_vla.workflows import adapter_audit
 
 
 class _Tensor:

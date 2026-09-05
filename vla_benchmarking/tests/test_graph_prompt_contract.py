@@ -5,14 +5,14 @@ import hashlib
 import os
 from pathlib import Path
 
-from scene_graph_formats import (
+from vla_benchmarking.evaluation.scene_graph_formats import (
     GRAPH_TOKENIZER_CONTRACT,
     TARGET_NATURAL_FORMAT,
     format_scene_context,
     format_target_natural_v1,
     normalize_context_format,
 )
-from prompt_audit import (
+from vla_benchmarking.tools.prompt_audit import (
     audit_graph_prompts,
     prepare_graph_policy_snapshot,
     validate_serialized_graph_preprocessor,
@@ -123,7 +123,7 @@ def test_graph_tokenizer_audit_requires_a_nonempty_vocabulary() -> None:
 
 def test_graph_pair_manifest_binds_canonical_extractor_source_and_verifies_drift() -> None:
     """Offline/live parity is only reproducible when the extractor is sealed."""
-    converter = Path(__file__).resolve().parents[1] / "hdf5_to_lerobot_dataset.py"
+    converter = Path(__file__).resolve().parents[1] / "arrow_finetuned_vla" / "workflows" / "hdf5_to_lerobot_dataset.py"
     source = converter.read_text(encoding="utf-8")
     assert '"graph_extractor_sha256": sha256_file(GRAPH_EXTRACTOR_PATH)' in source
     verify_start = source.index("def _load_sealed_manifest")

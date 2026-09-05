@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from vla_benchmarking import run_arrow_pick_place_matrix as matrix
+from vla_benchmarking.evaluation import run_arrow_pick_place_matrix as matrix
 
 
 TASKS = (4, 6, 9)

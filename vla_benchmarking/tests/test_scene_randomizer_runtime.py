@@ -2,8 +2,11 @@ import numpy as np
 import pytest
 import json
 
-from radomize_scenes import SceneRandomizerVecEnvWrapper, get_object_pose
-from run_lora_2x2_eval import build_manifest, validate_randomization_audit
+from vla_benchmarking.evaluation.randomize_scenes import SceneRandomizerVecEnvWrapper, get_object_pose
+from vla_benchmarking.arrow_finetuned_vla.workflows.run_lora_2x2_eval import (
+    build_manifest,
+    validate_randomization_audit,
+)
 
 
 class _Model:

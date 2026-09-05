@@ -4,7 +4,10 @@ import csv
 import json
 import os
 
-from run_scene_graph_visual_ablation import _find_baseline, _write_visual_outputs
+from vla_benchmarking.evaluation.run_scene_graph_visual_ablation import (
+    _find_baseline,
+    _write_visual_outputs,
+)
 
 
 def _eval_info(pc_success: float, successes: list[bool]) -> dict:

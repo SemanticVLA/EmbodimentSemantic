@@ -23,7 +23,7 @@ def _source_path(module_name: str) -> Path:
 
 def test_arrow_controller_has_no_simulator_or_scene_graph_dependency():
     """The pure controller must not import or reference runtime scene state."""
-    path = _source_path("arrow_controller")
+    path = _source_path("vla_benchmarking.arrow_grasp_controller.legacy_engine.arrow_controller")
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
     imported_roots = set()
@@ -58,7 +58,7 @@ def test_arrow_controller_has_no_simulator_or_scene_graph_dependency():
 
 def test_runner_passes_only_explicit_visual_geometry_to_controller(tmp_path, monkeypatch):
     """Strict fake signatures reject bboxes, names, env, and evaluator leakage."""
-    runner = importlib.import_module("run_arrow_pick_place_eval")
+    runner = importlib.import_module("vla_benchmarking.evaluation.run_arrow_pick_place_eval")
     calls = {"decode": [], "deproject": [], "waypoints": [], "action": []}
 
     class Arrow:

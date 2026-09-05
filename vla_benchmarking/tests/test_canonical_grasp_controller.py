@@ -6,16 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from controller_configs import (
+from vla_benchmarking.arrow_grasp_controller.configs import (
     ACTIVE_CONTROLLER_CONFIG_FILENAME,
     ACTIVE_CONTROLLER_NAME,
     ControllerConfigError,
     load_controller_config,
 )
-from grasp_controller.entrypoint import build_engine_argv
-from grasp_controller.policy import canonical_candidate_policy, canonical_settings
-from grasp_controller.molmopoint import MolmoPointRuntime, MolmoPointRuntimeConfig
-from grasp_controller.runner import (
+from vla_benchmarking.arrow_grasp_controller.controller.entrypoint import build_engine_argv
+from vla_benchmarking.arrow_grasp_controller.controller.policy import canonical_candidate_policy, canonical_settings
+from vla_benchmarking.arrow_grasp_controller.controller.molmopoint import MolmoPointRuntime, MolmoPointRuntimeConfig
+from vla_benchmarking.arrow_grasp_controller.controller.runner import (
     _candidate_motion_kwargs,
     preflight_local_molmo_runtime,
     resolve_motion_profile,
@@ -34,7 +34,7 @@ def test_canonical_policy_and_lock_are_frozen():
     assert metadata["max_grasp_attempts"] == 4
     assert metadata["shared_action_budget"] == 1200
     assert metadata == canonical_settings()
-    lock = json.loads((Path(__file__).parents[1] / "controller_configs" / "active_policy.lock.json").read_text())
+    lock = json.loads((Path(__file__).parents[1] / "arrow_grasp_controller" / "configs" / "active_policy.lock.json").read_text())
     assert lock["immutable"] is True
     assert lock["per_task_successes"] == {str(i): value for i, value in enumerate((10, 10, 10, 10, 7, 10, 8, 10, 10, 2))}
     assert lock["canonical_config_sha256"] == config["config_hash"]
@@ -91,7 +91,7 @@ def test_promoted_mechanical_treatment_is_exact():
 
 
 def test_only_one_operator_launcher_remains():
-    legion = Path(__file__).parents[1] / "legion"
+    legion = Path(__file__).parents[1] / "arrow_grasp_controller" / "legion"
     assert {path.name for path in legion.iterdir()} == {
         "grasp_controller_requirements.txt",
         "run_grasp_controller.sbatch",
@@ -100,7 +100,7 @@ def test_only_one_operator_launcher_remains():
 
 def test_launcher_verifies_results_and_serializes_runtime_setup():
     launcher = (
-        Path(__file__).parents[1] / "legion" / "run_grasp_controller.sbatch"
+        Path(__file__).parents[1] / "arrow_grasp_controller" / "legion" / "run_grasp_controller.sbatch"
     ).read_text(encoding="utf-8")
     assert 'workload_rc" -eq 0' in launcher
     assert "canonical_grasp_summary.json" in launcher

@@ -1,6 +1,8 @@
-# VLA Benchmarking — dataset_eval
+# VLA Benchmarking
 
-Evaluate vision-language-action (VLA) policies on the LIBERO benchmark with live semantic context augmentation and optional scene randomization. Policies are queried through lerobot eval with per-episode scene-graph or bounding-box context appended to the task prompt.
+Evaluate the canonical arrow-to-grasp controller and fine-tuned VLA policies
+on LIBERO Spatial with normal or sealed-randomized environments, visual arrows,
+and optional text-triplet context.
 
 ---
 
@@ -15,7 +17,46 @@ Evaluate vision-language-action (VLA) policies on the LIBERO benchmark with live
 
 ## Setup
 
-This repo (`dataset_eval/`) is the entire project. Clone it and run from inside it.
+This repo is the entire project. Clone it and run the commands below from the
+repository root (the directory containing `vla_benchmarking/`).
+
+## Repository layout
+
+The implementation is organized by policy boundary while retaining one shared
+evaluation center:
+
+- `arrow_grasp_controller/` — the frozen 87/100 MolmoPoint RGB-D controller,
+  canonical config/lock, calibration, motion adapter, Legion launcher, and
+  controller-specific docs.
+- `arrow_finetuned_vla/` — one named folder per fine-tuning policy. The primary
+  protected result is `smolvla_no_arrows/` from jobs `1910197`/`1910198`.
+- `evaluation/` — shared LIBERO Spatial task/seed conditions, manifests,
+  visual-arrow and scene-graph context plumbing, the direct matrix backend,
+  and the LeRobot evaluation backend.
+- `shared/` — policy-independent configuration.
+- `environment/` and `tools/` — setup, diagnostics, and preview utilities.
+- `EXPERIMENT_LEDGER.md` and `evaluation_results_tracker.json` — authoritative
+  cross-experiment history and result provenance.
+
+The historical root command paths are retained only in old commits and are not
+supported launchers. New code should import package-qualified modules and use
+the organized entry points below.
+
+### Migration from the historical root layout
+
+| Historical path | Supported path |
+| --- | --- |
+| `vla_benchmarking/setup_env.py` | `vla_benchmarking/environment/setup_env.py` |
+| `vla_benchmarking/randomize_scenes_demo.py` | `vla_benchmarking/environment/randomize_scenes_demo.py` |
+| `vla_benchmarking/run_lerobot_eval_with_context.py` | `vla_benchmarking/evaluation/run_lerobot_eval_with_context.py` |
+| `vla_benchmarking/run_scene_graph_format_ablation.py` | `vla_benchmarking/evaluation/run_scene_graph_format_ablation.py` |
+| `vla_benchmarking/run_scene_graph_visual_ablation.py` | `vla_benchmarking/evaluation/run_scene_graph_visual_ablation.py` |
+| `vla_benchmarking/run_lora_2x2_eval.py` | `vla_benchmarking/arrow_finetuned_vla/workflows/run_lora_2x2_eval.py` |
+| `vla_benchmarking/train_lora.sh` | `vla_benchmarking/arrow_finetuned_vla/workflows/train_lora.sh` |
+| `vla_benchmarking/run_grasp_controller.py` | `vla_benchmarking/arrow_grasp_controller/run_grasp_controller.py` |
+
+Historical absolute paths in ledgers, manifests, and result records are
+intentionally preserved as provenance and are not current launch instructions.
 
 ### 1. Clone this repo
 
@@ -34,7 +75,7 @@ conda activate vla_bench
 ### 3. Run the one-shot setup script
 
 ```bash
-python setup_env.py
+python vla_benchmarking/environment/setup_env.py
 ```
 
 This does everything in order:
@@ -82,13 +123,13 @@ All commands are run from inside the `dataset_eval/` directory.
 ### PowerShell (Windows)
 
 ```powershell
-$env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[3]"; python run_lerobot_eval_with_context.py
+$env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[3]"; python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
 ```
 
 ### bash / zsh (Linux / macOS)
 
 ```bash
-CONTEXT_MODE=scene_graph TASK_IDS=[3] python run_lerobot_eval_with_context.py
+CONTEXT_MODE=scene_graph TASK_IDS=[3] python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
 ```
 
 ### Key environment variables
@@ -111,8 +152,8 @@ CONTEXT_MODE=scene_graph TASK_IDS=[3] python run_lerobot_eval_with_context.py
 **Visualize scene swaps only (no policy, no GPU needed):**
 
 ```bash
-python randomize_scenes_demo.py        # all tasks
-python randomize_scenes_demo.py 3 7    # specific tasks
+python vla_benchmarking/environment/randomize_scenes_demo.py        # all tasks
+python vla_benchmarking/environment/randomize_scenes_demo.py 3 7    # specific tasks
 ```
 
 Output images are saved to `swap_outputs/`.
@@ -122,7 +163,7 @@ Output images are saved to `swap_outputs/`.
 Run the default big SmolVLA matrix:
 
 ```powershell
-python run_scene_graph_format_ablation.py
+python -m vla_benchmarking.evaluation.run_scene_graph_format_ablation
 ```
 
 Default conditions:
@@ -154,9 +195,9 @@ Outputs are written under `ablation_outputs/<run_id>/`:
 Useful variants:
 
 ```powershell
-python run_scene_graph_format_ablation.py --episodes 4 --tasks "[0,1,2,3,4,5,6,7,8,9]"
-python run_scene_graph_format_ablation.py --episodes 20 --formats "standard,legacy_scene_graph,triplet_published,natural_compact"
-python run_scene_graph_format_ablation.py --episodes 4 --no-token-audit
+python -m vla_benchmarking.evaluation.run_scene_graph_format_ablation --episodes 4 --tasks "[0,1,2,3,4,5,6,7,8,9]"
+python -m vla_benchmarking.evaluation.run_scene_graph_format_ablation --episodes 20 --formats "standard,legacy_scene_graph,triplet_published,natural_compact"
+python -m vla_benchmarking.evaluation.run_scene_graph_format_ablation --episodes 4 --no-token-audit
 ```
 
 ### Visual arrow ablation
@@ -169,7 +210,7 @@ relation labels and no bounding boxes. The wrist image remains unchanged.
 Preview the first policy frame for all ten tasks without loading a policy:
 
 ```powershell
-python preview_visual_arrows.py
+python -m vla_benchmarking.evaluation.preview_visual_arrows
 ```
 
 This writes individual raw/overlaid images, `preview_audit.json`, and the
@@ -181,14 +222,14 @@ policy image while the wrist image remains unchanged.
 Run the default SmolVLA visual ablation (ten tasks, four episodes each):
 
 ```powershell
-python run_scene_graph_visual_ablation.py
+python -m vla_benchmarking.evaluation.run_scene_graph_visual_ablation
 ```
 
 The runner does not rerun the raw standard condition. It auto-detects the
 newest prior `standard/eval_info.json`, or accepts an explicit baseline:
 
 ```powershell
-python run_scene_graph_visual_ablation.py --baseline-run .\ablation_outputs\sg_format_ablation_<run-id>
+python -m vla_benchmarking.evaluation.run_scene_graph_visual_ablation --baseline-run .\vla_benchmarking\ablation_outputs\sg_format_ablation_<run-id>
 ```
 
 Outputs are written under
@@ -206,7 +247,7 @@ Outputs are written under
 One-task CPU smoke run:
 
 ```powershell
-python run_scene_graph_visual_ablation.py --tasks "[0]" --episodes 1 --max-videos 1 --device cpu
+python -m vla_benchmarking.evaluation.run_scene_graph_visual_ablation --tasks "[0]" --episodes 1 --max-videos 1 --device cpu
 ```
 
 ### Canonical grasp controller
@@ -215,16 +256,16 @@ The supported manipulation path is the single canonical grasp controller. It
 is the frozen `failure_opening40_retreat80` treatment, promoted after its
 sealed-randomized Legion evaluation reached **87/100 (87%)**. Its behavior and
 operator contract are documented in
-[`controller_configs/README.md`](controller_configs/README.md).
+[`arrow_grasp_controller/README.md`](arrow_grasp_controller/README.md).
 
 Use only these public entrypoints:
 
 ```bash
-python -m vla_benchmarking.run_grasp_controller --output-dir /absolute/output/path
+python -m vla_benchmarking.arrow_grasp_controller.run_grasp_controller --output-dir /absolute/output/path
 REPO_ROOT=/absolute/isolated/checkout \
 GRASP_CONTROLLER_EXPECTED_COMMIT=<40-character-sha> \
 GRASP_CONTROLLER_LABEL=<safe-label> \
-sbatch --export=ALL vla_benchmarking/legion/run_grasp_controller.sbatch
+sbatch --export=ALL vla_benchmarking/arrow_grasp_controller/legion/run_grasp_controller.sbatch
 ```
 
 The controller uses the existing agentview RGB-D capture, MolmoPoint-8B
@@ -243,7 +284,14 @@ is `molmo_failure_sealed100_fa1ae83_1920556` under the recorded Legion archive
 root. The canonical controller must preserve the complete motion and
 evaluator contract: query the evaluator only after placement and retreat.
 
-### SmolVLA LoRA fine-tuning (Lambda GPU)
+### SmolVLA LoRA fine-tuning
+
+Policy identities and results are organized under
+[`arrow_finetuned_vla/`](arrow_finetuned_vla/README.md). The protected active
+2x2 contains exactly two trained models: SmolVLA trained without arrows and
+SmolVLA trained with all arrows, each evaluated with and without live arrows.
+See [`ACTIVE_EXPERIMENT.md`](arrow_finetuned_vla/ACTIVE_EXPERIMENT.md) for the
+exact checkpoints, scores, per-task results, and unequal evaluation scopes.
 
 The operator workflow is one command with explicit actions and profiles. The
 frozen `smolvla_libero` snapshot is the baseline; only the selected treatment
@@ -258,7 +306,7 @@ reviewed commit `8f1084e3132a39270c3a13ebe37270a43ece2a01`. On a clean Lambda
 GPU, from this directory:
 
 ```bash
-bash run_smolvla_pipeline.sh setup --profile treatment
+bash vla_benchmarking/arrow_finetuned_vla/workflows/run_smolvla_pipeline.sh setup --profile treatment
 ```
 
 `prepare_lambda_data.sh` downloads the pinned `libero_spatial_v5.zip` source
@@ -278,9 +326,9 @@ Run the real preflight without writing a run directory, then an explicitly
 authorized two-step smoke run, then the sealed full run:
 
 ```bash
-bash run_smolvla_pipeline.sh dry --profile treatment
-bash run_smolvla_pipeline.sh smoke --profile treatment --run-dir lora_runs/treatment_smoke
-bash run_smolvla_pipeline.sh full --profile treatment --run-dir lora_runs/treatment_full
+bash vla_benchmarking/arrow_finetuned_vla/workflows/run_smolvla_pipeline.sh dry --profile treatment
+bash vla_benchmarking/arrow_finetuned_vla/workflows/run_smolvla_pipeline.sh smoke --profile treatment --run-dir vla_benchmarking/lora_runs/treatment_smoke
+bash vla_benchmarking/arrow_finetuned_vla/workflows/run_smolvla_pipeline.sh full --profile treatment --run-dir vla_benchmarking/lora_runs/treatment_full
 ```
 
 `dry` performs the same preflight as a real launch and prints the one training
@@ -292,7 +340,7 @@ adapter artifact. A safe resume requires an existing run directory, a
 contained checkpoint config, and compatible preserved provenance:
 
 ```bash
-bash run_smolvla_pipeline.sh resume --profile treatment --run-dir lora_runs/treatment_full
+bash vla_benchmarking/arrow_finetuned_vla/workflows/run_smolvla_pipeline.sh resume --profile treatment --run-dir vla_benchmarking/lora_runs/treatment_full
 ```
 
 Evaluation is explicit and treatment-only. It derives the frozen base,
@@ -301,16 +349,16 @@ is launched automatically after training. Evaluation uses the fixed training
 cameras (`agentview` and `robot0_eye_in_hand`):
 
 ```bash
-bash run_smolvla_pipeline.sh eval --profile treatment \
-  --run-dir lora_runs/treatment_full --seeds 1000,1001 --episodes 50 \
-  --output-root eval_outputs/treatment_full
+bash vla_benchmarking/arrow_finetuned_vla/workflows/run_smolvla_pipeline.sh eval --profile treatment \
+  --run-dir vla_benchmarking/lora_runs/treatment_full --seeds 1000,1001 --episodes 50 \
+  --output-root vla_benchmarking/eval_outputs/treatment_full
 ```
 
 ---
 
 ## Configuration
 
-All settings are in `config.py`:
+Shared settings are in `shared/config.py`:
 
 ```python
 RANDOMIZE_SCENES = True                        # set False for standard (non-randomized) eval
@@ -353,14 +401,14 @@ have no layout entry:
 
 10 tasks from `libero_spatial`, each involving picking up a black bowl and placing it on a plate. Objects: `akita_black_bowl_1`, `akita_black_bowl_2`, `cookies_1`, `glazed_rim_porcelain_ramekin_1`, `plate_1`.
 
-### Scene randomization (`radomize_scenes.py`)
+### Scene randomization (`evaluation/randomize_scenes.py`)
 
 Before each episode, enabled object-pose operations are applied via
 `TASK_SWAP_CONFIG`, after task-specific distractors have been removed from the
 BDDL. Physics is settled after each pose operation. Controlled by
-`RANDOMIZE_SCENES` in `config.py` and audited in
+`RANDOMIZE_SCENES` in `shared/config.py` and audited in
 `randomization_audit.jsonl`.
-The standalone `randomize_scenes_demo.py` replays the same first stored LIBERO
+The standalone `environment/randomize_scenes_demo.py` replays the same first stored LIBERO
 init state on both sides of each before/after comparison and uses the same
 named-joint projection path as sealed evaluation for the filtered scene.
 For filtered tasks, evaluation briefly loads the canonical and filtered BDDL
@@ -369,7 +417,7 @@ and records projection evidence in the per-reset audit.
 The sealed evaluator requires `--batch-size 1` so each reset can be observed
 and audited independently.
 
-### Semantic context (`libero_live_semantic_context.py`)
+### Semantic context (`evaluation/libero_live_semantic_context.py`)
 
 At each policy query, the live MuJoCo simulator state is read to compute:
 
@@ -378,7 +426,7 @@ At each policy query, the live MuJoCo simulator state is read to compute:
 
 Context is appended as a JSON suffix to the task description string seen by the policy. The subject filter (`SCENE_GRAPH_SUBJECT_FILTER`) restricts which object's relations are included.
 
-### Eval wrapper (`run_lerobot_eval_with_context.py`)
+### Eval wrapper (`evaluation/run_lerobot_eval_with_context.py`)
 
 Patches `lerobot_eval.make_env` to inject two wrappers around the vectorized environment:
 
@@ -389,38 +437,38 @@ Patches `lerobot_eval.make_env` to inject two wrappers around the vectorized env
 
 ## Supported models
 
-See `models.yaml` for the full list of tested HuggingFace checkpoints. Pass any checkpoint via `MODELS`:
+See `arrow_finetuned_vla/workflows/models.yaml` for the tested HuggingFace
+checkpoints. Pass any checkpoint via `MODELS`:
 
 **PowerShell:**
 
 ```powershell
-$env:MODELS="openvla/openvla-7b-finetuned-libero-spatial"; $env:CONTEXT_MODE="standard"; $env:TASK_IDS="[3]"; python run_lerobot_eval_with_context.py
+$env:MODELS="openvla/openvla-7b-finetuned-libero-spatial"; $env:CONTEXT_MODE="standard"; $env:TASK_IDS="[3]"; python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
 ```
 
 **bash/zsh:**
 
 ```bash
-MODELS=openvla/openvla-7b-finetuned-libero-spatial CONTEXT_MODE=standard TASK_IDS=[3] python run_lerobot_eval_with_context.py
+MODELS=openvla/openvla-7b-finetuned-libero-spatial CONTEXT_MODE=standard TASK_IDS=[3] python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
 ```
 
 ---
 
-## Project structure
+## Evaluation architecture
 
-After setup, the directory looks like:
+`evaluation/` is the common orchestration layer, not a universal policy loop.
+The canonical grasp controller and ArrowStudent retain the direct per-cell
+backend; base and LoRA SmolVLA policies retain the LeRobot backend. Evaluation
+plans keep suite, visual input, and text input as independent factors:
 
-```text
-dataset_eval/              ← repo root (cd here before running anything)
-├── LIBERO/                ← cloned by setup_env.py
-├── config.py              ← all settings and swap configs
-├── radomize_scenes.py     ← object pose manipulation + SceneRandomizerVecEnvWrapper
-├── libero_live_semantic_context.py  ← live bounding box and scene graph computation
-├── run_lerobot_eval_with_context.py ← lerobot eval entry point
-├── randomize_scenes_demo.py         ← visualize scene swaps (no policy needed)
-├── models.yaml            ← catalogue of tested HuggingFace checkpoints
-├── requirements.txt       ← pip dependencies
-├── setup_env.py           ← one-shot environment setup
-└── swap_outputs/          ← demo images written here
-```
+- suite: `normal` (recorded natively as `vanilla`) or `sealed_randomized`;
+- visual input: `none`, `goal_arrow`, or `relation_arrows`;
+- text input: `none`, scene graph, or an explicit text-triplet format.
 
-`~/.libero/config.yaml` is written to your home directory by `setup_env.py` and tells lerobot where to find LIBERO's assets and init states.
+Unsupported combinations fail closed. The canonical 87% controller requires
+its goal-arrow routing input and rejects text augmentation; its evaluator
+remains callable only after placement and retreat.
+
+`~/.libero/config.yaml` is written to your home directory by
+`environment/setup_env.py` and tells lerobot where to find LIBERO's assets and
+init states.

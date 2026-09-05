@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from bddl_utils import (
+from vla_benchmarking.evaluation.bddl_utils import (
     JointSchema,
     JointSlice,
     extract_joint_schema,

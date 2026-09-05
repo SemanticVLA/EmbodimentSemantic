@@ -11,4 +11,5 @@ slurm_train_*.err
 .venv-lora/
 .cache/
 eval_outputs/
+lerobot_eval_outputs/
 visual_arrow_previews_prompt_validation/

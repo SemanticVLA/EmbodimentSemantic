@@ -13,7 +13,7 @@ import pytest
 @pytest.fixture(scope="module")
 def matrix():
     try:
-        return importlib.import_module("run_arrow_pick_place_matrix")
+        return importlib.import_module("vla_benchmarking.evaluation.run_arrow_pick_place_matrix")
     except ModuleNotFoundError as exc:
         if exc.name in {"run_arrow_pick_place_matrix", "robosuite", "libero", "lerobot"}:
             pytest.skip(f"optional dependency unavailable: {exc.name}")
@@ -76,18 +76,18 @@ def test_condition_labels_are_validated(matrix):
 def test_source_hash_inventory_covers_condition_and_control_implementations(matrix):
     hashes = matrix._source_file_hashes()
     required = {
-        "run_arrow_pick_place_matrix.py",
-        "run_arrow_pick_place_eval.py",
-        "arrow_controller.py",
-        "config.py",
-        "bddl_utils.py",
-        "radomize_scenes.py",
-        "preview_visual_arrows.py",
-        "controller_configs/canonical_molmo_rgbd_grasp.json",
-        "grasp_controller/runner.py",
-        "grasp_controller/grasp_candidates.py",
-        "grasp_controller/molmopoint.py",
-        "legion/run_grasp_controller.sbatch",
+        "evaluation/run_arrow_pick_place_matrix.py",
+        "evaluation/run_arrow_pick_place_eval.py",
+        "arrow_grasp_controller/legacy_engine/arrow_controller.py",
+        "shared/config.py",
+        "evaluation/bddl_utils.py",
+        "evaluation/randomize_scenes.py",
+        "evaluation/preview_visual_arrows.py",
+        "arrow_grasp_controller/configs/canonical_molmo_rgbd_grasp.json",
+        "arrow_grasp_controller/controller/runner.py",
+        "arrow_grasp_controller/controller/grasp_candidates.py",
+        "arrow_grasp_controller/controller/molmopoint.py",
+        "arrow_grasp_controller/legion/run_grasp_controller.sbatch",
     }
     assert required <= set(hashes)
     assert all(hashes[path] for path in required)
@@ -850,7 +850,7 @@ def test_timeout_phase_is_included_in_phase_aggregates(matrix):
 
 
 def test_external_controller_config_is_resolved_once_and_recorded(matrix, tmp_path: Path):
-    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "canonical_molmo_rgbd_grasp.json"
+    config = Path(matrix.__file__).resolve().parents[1] / "arrow_grasp_controller" / "configs" / "canonical_molmo_rgbd_grasp.json"
     observed = {}
 
     class Env:
@@ -922,7 +922,7 @@ def test_invalid_external_controller_config_fails_before_environment_build(
 
 
 def test_external_runtime_provenance_survives_controller_failure(matrix, tmp_path: Path):
-    config = Path(matrix.__file__).resolve().parent / "controller_configs" / "canonical_molmo_rgbd_grasp.json"
+    config = Path(matrix.__file__).resolve().parents[1] / "arrow_grasp_controller" / "configs" / "canonical_molmo_rgbd_grasp.json"
 
     class Env:
         _arrow_capture_contract = {"valid": True}

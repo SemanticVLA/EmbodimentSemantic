@@ -105,16 +105,14 @@ The dataset has two components:
 EmbodimentSemantic/
 ├── LIBERO_Semantic_Generation.ipynb   # Offline scene-graph annotation pipeline
 ├── vla_benchmarking/                  # Online VLA evaluation interface
-│   ├── run_lerobot_eval_with_context.py # LeRobot policy evaluation entry point
-│   ├── libero_live_semantic_context.py  # Live bounding-box and scene-graph computation
-│   ├── radomize_scenes.py               # Object pose swaps + SceneRandomizerVecEnvWrapper
-│   ├── randomize_scenes_demo.py         # Visualize scene swaps without a policy
-│   ├── config.py                        # All settings and per-task swap configs
-│   ├── bddl_utils.py                    # BDDL goal-condition helpers
-│   ├── setup_env.py                     # One-shot environment setup script
-│   ├── models.yaml                      # Catalogue of tested HuggingFace checkpoints
-│   ├── requirements.txt                 # pip dependencies
-│   └── swap_outputs/                    # Demo images written by randomize_scenes_demo.py
+│   ├── arrow_grasp_controller/         # Frozen canonical 87/100 arrow controller
+│   ├── arrow_finetuned_vla/            # Named SmolVLA/fine-tuning policy families
+│   ├── evaluation/                     # Shared LIBERO, arrow, and triplet evaluators
+│   ├── shared/                         # Policy-independent task/config contracts
+│   ├── environment/                    # Environment/bootstrap utilities
+│   ├── tools/                          # Audits, previews, and diagnostics
+│   ├── README.md                       # VLA usage and migration guide
+│   └── requirements.txt                # Python dependencies
 └── vlm_benchmarking/                  # Offline VLM benchmark
     ├── run.py                         # Inference entry point
     ├── evaluate.py                    # Standalone evaluation
@@ -128,6 +126,27 @@ EmbodimentSemantic/
     ├── run_job.sh                     # SLURM inference job
     └── eval_job.sh                    # SLURM evaluation job
 ```
+
+### VLA path migration
+
+The organized paths below are the supported interface. The former root-level
+`vla_benchmarking/*.py` and `vla_benchmarking/*.sh` launch paths are retained
+only in historical commits and are not supported entry points.
+
+| Historical path | Supported path |
+| --- | --- |
+| `vla_benchmarking/setup_env.py` | `vla_benchmarking/environment/setup_env.py` |
+| `vla_benchmarking/randomize_scenes_demo.py` | `vla_benchmarking/environment/randomize_scenes_demo.py` |
+| `vla_benchmarking/run_lerobot_eval_with_context.py` | `vla_benchmarking/evaluation/run_lerobot_eval_with_context.py` |
+| `vla_benchmarking/libero_live_semantic_context.py` | `vla_benchmarking/evaluation/libero_live_semantic_context.py` |
+| `vla_benchmarking/run_scene_graph_format_ablation.py` | `vla_benchmarking/evaluation/run_scene_graph_format_ablation.py` |
+| `vla_benchmarking/run_scene_graph_visual_ablation.py` | `vla_benchmarking/evaluation/run_scene_graph_visual_ablation.py` |
+| `vla_benchmarking/run_lora_2x2_eval.py` | `vla_benchmarking/arrow_finetuned_vla/workflows/run_lora_2x2_eval.py` |
+| `vla_benchmarking/train_lora.sh` | `vla_benchmarking/arrow_finetuned_vla/workflows/train_lora.sh` |
+| `vla_benchmarking/run_grasp_controller.py` | `vla_benchmarking/arrow_grasp_controller/run_grasp_controller.py` |
+
+Result records may intentionally retain historical absolute paths for
+provenance; those paths are evidence, not current launch instructions.
 
 ---
 
@@ -247,7 +266,7 @@ Requires Python 3.12+, a CUDA GPU, and Git.
 cd vla_benchmarking
 conda create -n vla_bench python=3.12 -y
 conda activate vla_bench
-python setup_env.py   # clones LIBERO, installs lerobot[pi] + robosuite, runs smoke test
+python environment/setup_env.py   # clones LIBERO, installs lerobot[pi] + robosuite, runs smoke test
 ```
 
 > **Windows:** Enable Developer Mode (Settings → System → For Developers) for HuggingFace symlinks, or run as Administrator.
@@ -259,13 +278,13 @@ Evaluation is controlled via environment variables from inside `vla_benchmarking
 **PowerShell:**
 
 ```powershell
-$env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[4]"; python run_lerobot_eval_with_context.py
+$env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[4]"; python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
 ```
 
 **bash/zsh:**
 
 ```bash
-CONTEXT_MODE=scene_graph TASK_IDS=[4] python run_lerobot_eval_with_context.py
+CONTEXT_MODE=scene_graph TASK_IDS=[4] python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
 ```
 
 | Variable | Default | Description |
@@ -280,8 +299,8 @@ CONTEXT_MODE=scene_graph TASK_IDS=[4] python run_lerobot_eval_with_context.py
 **Visualize scene swaps without running a policy:**
 
 ```bash
-python randomize_scenes_demo.py        # all tasks → swap_outputs/
-python randomize_scenes_demo.py 3 7    # specific tasks only
+python environment/randomize_scenes_demo.py        # all tasks → swap_outputs/
+python environment/randomize_scenes_demo.py 3 7    # specific tasks only
 ```
 
 ### Scene Perturbations
@@ -348,4 +367,4 @@ Scene-graph injection improves several Pi05 tasks without any retraining. The la
 3. Falls back to dominant-axis world-frame ordering for lateral (`is_left_of` / `is_right_of`) and depth (`is_in_front_of` / `is_behind`) relations.
 4. Writes annotations back to the HDF5 under `obs/agentview_scene_graph` and `obs/robot0_eye_in_hand_scene_graph`.
 
-The live version of this pipeline (`vla_benchmarking/libero_live_semantic_context.py`) runs the same logic at policy evaluation time.
+The live version of this pipeline (`vla_benchmarking/evaluation/libero_live_semantic_context.py`) runs the same logic at policy evaluation time.

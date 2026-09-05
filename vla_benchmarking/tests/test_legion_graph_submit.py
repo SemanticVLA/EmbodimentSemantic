@@ -9,7 +9,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "submit_legion_graph_pilot.sh"
+SCRIPT = ROOT / "arrow_finetuned_vla" / "graph_text_lora" / "submit_legion_graph_pilot.sh"
 
 
 def test_graph_pilot_submitter_has_sealed_chain_and_no_arrow_graph_run():

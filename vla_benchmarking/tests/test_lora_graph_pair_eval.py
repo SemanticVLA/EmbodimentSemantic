@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import run_lora_graph_pair_eval as graph_eval
-from scene_graph_formats import GRAPH_TOKENIZER_CONTRACT
+from vla_benchmarking.arrow_finetuned_vla.graph_text_lora import run_lora_graph_pair_eval as graph_eval
+from vla_benchmarking.evaluation.scene_graph_formats import GRAPH_TOKENIZER_CONTRACT
 
 
 def _adapter_fixture(tmp_path: Path) -> Path:

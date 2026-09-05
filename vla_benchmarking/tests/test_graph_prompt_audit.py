@@ -4,7 +4,7 @@ import io
 
 import pytest
 
-from prompt_audit import PromptAuditLogger
+from vla_benchmarking.tools.prompt_audit import PromptAuditLogger
 
 
 class _FakeTokenizer:

@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from grasp_controller import preshape
-from run_arrow_pick_place_eval import _ActionBudget
+from vla_benchmarking.arrow_grasp_controller.controller import preshape
+from vla_benchmarking.evaluation.run_arrow_pick_place_eval import _ActionBudget
 
 
 class _Env:

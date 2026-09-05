@@ -12,10 +12,10 @@ import numpy as np
 import pytest
 
 
-runner = importlib.import_module("grasp_controller.runner")
-matrix = importlib.import_module("run_arrow_pick_place_matrix")
-episode = importlib.import_module("run_arrow_pick_place_eval")
-molmopoint = importlib.import_module("grasp_controller.molmopoint")
+runner = importlib.import_module("vla_benchmarking.arrow_grasp_controller.controller.runner")
+matrix = importlib.import_module("vla_benchmarking.evaluation.run_arrow_pick_place_matrix")
+episode = importlib.import_module("vla_benchmarking.evaluation.run_arrow_pick_place_eval")
+molmopoint = importlib.import_module("vla_benchmarking.arrow_grasp_controller.controller.molmopoint")
 
 
 @dataclass
@@ -141,7 +141,7 @@ def test_parked_main_skips_hover_and_refreshes_retry_capture(tmp_path, monkeypat
         return {"bboxes": {"bowl": [1, 1, 4, 4], "plate": [5, 5, 7, 7]}, "subject": "bowl", "goal_object": "plate"}
 
     monkeypatch.setattr(matrix, "_default_arrow_inputs", current_arrow_inputs)
-    preshape_module = importlib.import_module("grasp_controller.preshape")
+    preshape_module = importlib.import_module("vla_benchmarking.arrow_grasp_controller.controller.preshape")
     monkeypatch.setattr(preshape_module, "perform_preshape", preshape)
 
     assert runner.main([

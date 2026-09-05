@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import sys
 import types
 from pathlib import Path
 
@@ -18,7 +17,7 @@ import numpy as np
 import pytest
 
 
-MODULE_NAME = "run_arrow_pick_place_eval"
+MODULE_NAME = "vla_benchmarking.evaluation.run_arrow_pick_place_eval"
 
 
 @pytest.fixture(scope="module")
@@ -1004,13 +1003,14 @@ def test_sealed_environment_audit_declares_task_specific_scene_only_and_prompt_n
 
 def test_direct_swap_adapter_reports_requested_and_applied_labels(runner, monkeypatch):
     calls = []
-    fake_preview = types.ModuleType("preview_visual_arrows")
+    fake_preview = types.ModuleType("vla_benchmarking.evaluation.preview_visual_arrows")
 
     def apply_task_swaps(env, task_id):
         calls.append((env, task_id))
 
     fake_preview._apply_task_swaps = apply_task_swaps
-    monkeypatch.setitem(sys.modules, "preview_visual_arrows", fake_preview)
+    import vla_benchmarking.evaluation as evaluation_package
+    monkeypatch.setattr(evaluation_package, "preview_visual_arrows", fake_preview, raising=False)
     result = runner._apply_direct_swaps(object(), 2)
     assert calls and calls[0][1] == 2
     assert result["requested"] == [["akita_black_bowl_2", "cookies_1"]]
@@ -1343,7 +1343,7 @@ def test_capture_contract_rejects_shape_calibration_camera_and_requested_size_mi
 def test_large_clearance_rejects_waypoint_before_first_step(runner, monkeypatch, tmp_path: Path):
     # Earlier dependency-light tests replace the runner seams directly; restore
     # the real waypoint builder here so the clearance path is exercised.
-    import arrow_controller
+    from vla_benchmarking.arrow_grasp_controller.legacy_engine import arrow_controller
 
     monkeypatch.setattr(runner, "build_bowl_waypoints", arrow_controller.build_bowl_waypoints)
     monkeypatch.setattr(
@@ -1436,7 +1436,7 @@ def test_canonical_policy_disables_legacy_recovery_overrides(runner):
 
 
 def test_canonical_config_is_the_only_active_policy(runner):
-    config_root = Path(runner.__file__).parent / "controller_configs"
+    config_root = Path(runner.__file__).resolve().parents[1] / "arrow_grasp_controller" / "configs"
     expanded = runner.load_controller_config(config_root / "canonical_molmo_rgbd_grasp.json")
     canonical = runner.controller_variant_from_config(expanded)
     assert canonical.name == runner.DEFAULT_PROFILE_NAME

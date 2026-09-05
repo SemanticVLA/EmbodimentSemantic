@@ -10,9 +10,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from grasp_controller import preshape
-from run_arrow_pick_place_eval import _ActionBudget
-from grasp_controller.runner import (
+from vla_benchmarking.arrow_grasp_controller.controller import preshape
+from vla_benchmarking.evaluation.run_arrow_pick_place_eval import _ActionBudget
+from vla_benchmarking.arrow_grasp_controller.controller.runner import (
     AGENTVIEW,
     GraspCandidate,
     run_canary_episode,

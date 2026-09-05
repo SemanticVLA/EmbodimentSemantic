@@ -8,10 +8,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import adapter_audit
+from vla_benchmarking.arrow_finetuned_vla.workflows import adapter_audit
 
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_ROOT = ROOT / "arrow_finetuned_vla" / "workflows"
+GRAPH_POLICY_ROOT = ROOT / "arrow_finetuned_vla" / "graph_text_lora"
+EVALUATION_ROOT = ROOT / "evaluation"
 
 
 def _bash_path(path: Path) -> str:
@@ -79,9 +82,9 @@ def _expected_inventory_fixture(base_policy: str) -> dict:
 
 def _runtime(tmp_path: Path, *, real_launcher: bool = True) -> tuple[Path, dict[str, str], Path]:
     """Create a no-network operator sandbox with a traceable launcher boundary."""
-    shutil.copy2(ROOT / "run_smolvla_pipeline.sh", tmp_path / "run_smolvla_pipeline.sh")
+    shutil.copy2(WORKFLOW_ROOT / "run_smolvla_pipeline.sh", tmp_path / "run_smolvla_pipeline.sh")
     if real_launcher:
-        shutil.copy2(ROOT / "launch_lora_treatment.sh", tmp_path / "launch_lora_treatment.sh")
+        shutil.copy2(WORKFLOW_ROOT / "launch_lora_treatment.sh", tmp_path / "launch_lora_treatment.sh")
     else:
         _executable(
             tmp_path / "launch_lora_treatment.sh",
@@ -163,14 +166,48 @@ def _runtime(tmp_path: Path, *, real_launcher: bool = True) -> tuple[Path, dict[
             "UPDATES_PER_EPOCH": "17",
             "SEED": "777",
             "PEFT_R": "3",
+            # The copied operator script is intentionally run as an isolated
+            # sandbox; point its organized roots at the adjacent test doubles.
+            "REPO_ROOT": _bash_path(tmp_path),
+            "VLA_ROOT": _bash_path(tmp_path),
         }
     )
     return tmp_path / "run_smolvla_pipeline.sh", env, trace
 
 
 def _run(script: Path, args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    # Set organized roots inside the shell command so Windows->WSL environment
+    # forwarding cannot silently replace the sandbox with repository defaults.
+    # The Windows bash bridge also drops POSIX path-valued entries supplied
+    # through subprocess(env=...).  Forward the fixture's path contract in the
+    # command itself so the copied launcher cannot fall back to host defaults.
+    assignments_by_key = {
+        "REPO_ROOT": _bash_path(script.parent),
+        "VLA_ROOT": _bash_path(script.parent),
+    }
+    for key in (
+        "TRACE",
+        "DATA_ROOT",
+        "PAIR_MANIFEST",
+        "PAIR_SENTINEL",
+        "BASE_POLICY",
+        "PYTHONPATH",
+        "RUN_ROOT",
+        "LIBERO_DATA_DIR",
+        "LIBERO_DIR",
+        "LIBERO_CONFIG",
+        "LAMBDA_VENV",
+    ):
+        value = env.get(key)
+        if value:
+            assignments_by_key[key] = value
+    assignments = tuple(
+        f"{key}={shlex.quote(value)}" for key, value in assignments_by_key.items()
+    )
+    command = "env " + " ".join(assignments) + " bash " + shlex.quote(script.name)
+    command += " " + " ".join(shlex.quote(arg) for arg in args)
     return subprocess.run(
-        ["bash", script.name, *args],
+        ["bash", "-lc", command],
         cwd=script.parent,
         env=env,
         text=True,
@@ -179,9 +216,9 @@ def _run(script: Path, args: list[str], env: dict[str, str]) -> subprocess.Compl
 
 
 def test_operator_pipeline_help_and_shell_syntax() -> None:
-    script = ROOT / "run_smolvla_pipeline.sh"
+    script = WORKFLOW_ROOT / "run_smolvla_pipeline.sh"
     result = subprocess.run(
-        ["bash", "run_smolvla_pipeline.sh", "--help"],
+        ["bash", _bash_path(script), "--help"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -198,15 +235,15 @@ def test_operator_pipeline_help_and_shell_syntax() -> None:
         "bootstrap_lambda_runtime.sh",
         "launch_lora_pair.sh",
     ):
-        checked = subprocess.run(["bash", "-n", name], cwd=ROOT, text=True)
+        checked = subprocess.run(["bash", "-n", _bash_path((WORKFLOW_ROOT / name) if name != "bootstrap_lambda_runtime.sh" else (ROOT / "environment" / name))], cwd=ROOT, text=True)
         assert checked.returncode == 0, name
 
 
 def test_training_schedule_is_sealed_and_data_profiles_are_explicit() -> None:
-    launch = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
-    train = (ROOT / "train_lora.sh").read_text(encoding="utf-8")
-    data = (ROOT / "prepare_lambda_data.sh").read_text(encoding="utf-8")
-    preflight = (ROOT / "lambda_preflight.sh").read_text(encoding="utf-8")
+    launch = (WORKFLOW_ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    train = (WORKFLOW_ROOT / "train_lora.sh").read_text(encoding="utf-8")
+    data = (WORKFLOW_ROOT / "prepare_lambda_data.sh").read_text(encoding="utf-8")
+    preflight = (WORKFLOW_ROOT / "lambda_preflight.sh").read_text(encoding="utf-8")
     assert "SEALED_STEPS=$((SEALED_EPOCHS * SEALED_UPDATES_PER_EPOCH))" in launch
     assert "SEALED_UPDATES_PER_EPOCH=1946" in launch
     assert "ignore ambient EPOCHS/STEPS/SAVE_FREQ" in launch
@@ -225,10 +262,10 @@ def test_training_schedule_is_sealed_and_data_profiles_are_explicit() -> None:
 
 
 def test_graph_profiles_are_explicitly_separated_and_use_the_sealed_graph_contract() -> None:
-    launch = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
-    train = (ROOT / "train_lora.sh").read_text(encoding="utf-8")
-    preflight = (ROOT / "lambda_preflight.sh").read_text(encoding="utf-8")
-    prepare = (ROOT / "prepare_lambda_data.sh").read_text(encoding="utf-8")
+    launch = (WORKFLOW_ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    train = (WORKFLOW_ROOT / "train_lora.sh").read_text(encoding="utf-8")
+    preflight = (WORKFLOW_ROOT / "lambda_preflight.sh").read_text(encoding="utf-8")
+    prepare = (WORKFLOW_ROOT / "prepare_lambda_data.sh").read_text(encoding="utf-8")
 
     for profile in ("graph_treatment", "arrow_graph_treatment"):
         assert profile in launch
@@ -250,7 +287,7 @@ def test_graph_profiles_are_explicitly_separated_and_use_the_sealed_graph_contra
 
 
 def test_graph_evaluation_routes_to_the_sealed_two_cell_evaluator() -> None:
-    pipeline = (ROOT / "run_smolvla_pipeline.sh").read_text(encoding="utf-8")
+    pipeline = (WORKFLOW_ROOT / "run_smolvla_pipeline.sh").read_text(encoding="utf-8")
     assert "run_lora_graph_pair_eval.py" in pipeline
     assert "arrow_graph_treatment is prepare-only and has no evaluation cell" in pipeline
     assert "PROFILE_CANONICAL" in pipeline
@@ -258,8 +295,8 @@ def test_graph_evaluation_routes_to_the_sealed_two_cell_evaluator() -> None:
 
 
 def test_graph_pilot_is_explicitly_non_confirmatory_and_preserves_paper_gate() -> None:
-    evaluator = (ROOT / "run_lora_graph_pair_eval.py").read_text(encoding="utf-8")
-    launcher = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    evaluator = (GRAPH_POLICY_ROOT / "run_lora_graph_pair_eval.py").read_text(encoding="utf-8")
+    launcher = (WORKFLOW_ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
     assert '"pilot": True, "confirmatory": False' in evaluator
     assert '"confirmatory_required_for_paper_claims": True' in evaluator
     assert '"status": "pilot_prepared_not_launchable"' in launcher
@@ -268,15 +305,15 @@ def test_graph_pilot_is_explicitly_non_confirmatory_and_preserves_paper_gate() -
 
 def test_lower_level_eval_rejects_graph_visual_arrow_bypasses() -> None:
     """The low-level wrapper must preserve the graph text-only contract."""
-    evaluator = (ROOT / "run_lerobot_eval_with_context.py").read_text(encoding="utf-8")
+    evaluator = (EVALUATION_ROOT / "run_lerobot_eval_with_context.py").read_text(encoding="utf-8")
     assert "graph_treatment evaluation is sealed to no visual arrows" in evaluator
     assert "arrow_graph_treatment is prepare-only and cannot be evaluated" in evaluator
     assert "graph_profile" in evaluator
 
 
 def test_historical_profiles_do_not_inherit_graph_tokenizer_or_adapter_metadata() -> None:
-    train = (ROOT / "train_lora.sh").read_text(encoding="utf-8")
-    launch = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    train = (WORKFLOW_ROOT / "train_lora.sh").read_text(encoding="utf-8")
+    launch = (WORKFLOW_ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
     assert 'if [[ "$VARIANT" == graph_treatment || "$VARIANT" == arrow_graph_treatment ]]; then' in train
     assert 'if variant in ("graph_treatment", "arrow_graph_treatment"):' in launch
     # The 96-token override must be guarded by the graph-only branch, not a
@@ -288,7 +325,7 @@ def test_historical_profiles_do_not_inherit_graph_tokenizer_or_adapter_metadata(
 
 def test_graph_pair_verification_recomputes_the_current_formatter_digest() -> None:
     """A stored formatter hash is evidence only if verification re-hashes source."""
-    converter = (ROOT / "hdf5_to_lerobot_dataset.py").read_text(encoding="utf-8")
+    converter = (WORKFLOW_ROOT / "hdf5_to_lerobot_dataset.py").read_text(encoding="utf-8")
     start = converter.index("def _load_sealed_manifest")
     end = converter.index("def validate_verified_pair", start)
     verifier = converter[start:end]
@@ -297,8 +334,8 @@ def test_graph_pair_verification_recomputes_the_current_formatter_digest() -> No
 
 
 def test_resume_binds_the_complete_scheduled_checkpoint_root() -> None:
-    launch = (ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
-    train = (ROOT / "train_lora.sh").read_text(encoding="utf-8")
+    launch = (WORKFLOW_ROOT / "launch_lora_treatment.sh").read_text(encoding="utf-8")
+    train = (WORKFLOW_ROOT / "train_lora.sh").read_text(encoding="utf-8")
     for source in (launch, train):
         assert "pretrained_model" in source
         assert "training_state" in source
@@ -315,7 +352,6 @@ def test_resume_binds_the_complete_scheduled_checkpoint_root() -> None:
 def test_active_training_and_eval_surfaces_have_no_target_arrow_profile() -> None:
     """The retired target-arrow profile must not remain operator-reachable."""
     active = (
-        "README.md",
         "run_smolvla_pipeline.sh",
         "bootstrap_lambda_runtime.sh",
         "prepare_lambda_data.sh",
@@ -329,7 +365,12 @@ def test_active_training_and_eval_surfaces_have_no_target_arrow_profile() -> Non
     )
     forbidden = ("target-arrow", "target_arrow", "target arrow")
     for name in active:
-        text = (ROOT / name).read_text(encoding="utf-8").lower()
+        source_root = WORKFLOW_ROOT
+        if name == "README.md":
+            source_root = ROOT / "arrow_finetuned_vla"
+        elif name == "bootstrap_lambda_runtime.sh":
+            source_root = ROOT / "environment"
+        text = (source_root / name).read_text(encoding="utf-8").lower()
         assert not any(token in text for token in forbidden), name
 
 
@@ -347,9 +388,11 @@ def test_parser_rejects_repeated_and_action_incompatible_options_without_invokin
 
 def test_setup_maps_no_arrow_profile_through_all_setup_stages(tmp_path: Path) -> None:
     script, env, trace = _runtime(tmp_path, real_launcher=False)
+    (tmp_path / "environment").mkdir()
     for name in ("bootstrap_lambda_runtime.sh", "prepare_lambda_data.sh", "prepare_base_snapshot.sh"):
+        target = tmp_path / "environment" / name if name == "bootstrap_lambda_runtime.sh" else tmp_path / name
         _executable(
-            tmp_path / name,
+            target,
             f"#!/usr/bin/env bash\nset -eu\nprintf '{name}:%s\\n' \"${{1-}}\" >> \"{_bash_path(trace)}\"\n",
         )
     # setup invokes its own preflight path after the data/base stages.
@@ -438,7 +481,7 @@ def test_direct_target_arrow_entry_points_fail_closed_before_side_effects(tmp_pa
         command = "env " + " ".join(
             f"{key}={shlex.quote(value)}" for key, value in assignments.items()
         )
-        command += f" bash {shlex.quote(_bash_path(ROOT / script_name))}"
+        command += f" bash {shlex.quote(_bash_path(WORKFLOW_ROOT / script_name))}"
         command += " " + " ".join(shlex.quote(value) for value in args)
         result = subprocess.run(
             [bash, "-lc", command],
@@ -508,8 +551,14 @@ def test_resume_fail_closed_for_missing_outside_incompatible_and_completed_runs(
     plan["pair_manifest_sha256"] = hashlib.sha256(pair_bytes).hexdigest()
     revision = plan["base_policy_revision"]
     base_policy = tmp_path / "base_models" / f"smolvla_libero-{revision}"
+    # The production launcher authenticates resume metadata against the
+    # explicitly selected BASE_POLICY.  Keep the sandbox environment aligned
+    # with the pending plan rather than relying on its unrelated default
+    # fixture path.
+    env["BASE_POLICY"] = _bash_path(base_policy)
     data_root = tmp_path / "lora_datasets"
     libero_dir = tmp_path / "LIBERO"
+    env["LIBERO_DIR"] = _bash_path(libero_dir)
     libero_commit = "8f1084e3132a39270c3a13ebe37270a43ece2a01"
     plan.update(
         {
@@ -863,8 +912,10 @@ def test_interrupted_resume_audits_are_append_only_and_bind_final_manifest(tmp_p
     script, env, trace = _runtime(tmp_path)
     revision = "6721902bc4d61e50a3bfdb11dfb4cb626f05d102"
     base_policy = tmp_path / "base_models" / f"smolvla_libero-{revision}"
+    env["BASE_POLICY"] = _bash_path(base_policy)
     data_root = tmp_path / "lora_datasets"
     libero_dir = tmp_path / "LIBERO"
+    env["LIBERO_DIR"] = _bash_path(libero_dir)
     libero_commit = "8f1084e3132a39270c3a13ebe37270a43ece2a01"
     pair_hash = hashlib.sha256((data_root / "sealed_lora_pair_manifest.json").read_bytes()).hexdigest()
     run_dir = tmp_path / "audit-chain"
