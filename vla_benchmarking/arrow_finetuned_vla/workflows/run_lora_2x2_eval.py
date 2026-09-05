@@ -543,16 +543,25 @@ def validate_eval_info(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         info = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"unreadable eval_info.json: {path}") from exc
+    configured_tasks = manifest.get("tasks", list(TASK_IDS))
+    if (
+        not isinstance(configured_tasks, list)
+        or not configured_tasks
+        or any(isinstance(task_id, bool) or not isinstance(task_id, int) for task_id in configured_tasks)
+        or len(set(configured_tasks)) != len(configured_tasks)
+    ):
+        raise ValueError(f"manifest task schedule is invalid: {path}")
+    expected_tasks = tuple(configured_tasks)
     per_task = info.get("per_task")
-    if not isinstance(per_task, list) or len(per_task) != len(TASK_IDS):
-        raise ValueError(f"eval_info must contain exactly {len(TASK_IDS)} task records: {path}")
+    if not isinstance(per_task, list) or len(per_task) != len(expected_tasks):
+        raise ValueError(f"eval_info must contain exactly {len(expected_tasks)} task records: {path}")
     seen: set[int] = set()
     expected_episodes = int(manifest["episodes"])
     for record in per_task:
         if not isinstance(record, dict) or not isinstance(record.get("task_id"), int):
             raise ValueError(f"eval_info has an invalid task record: {path}")
         task_id = record["task_id"]
-        if task_id in seen or task_id not in TASK_IDS:
+        if task_id in seen or task_id not in expected_tasks:
             raise ValueError(f"eval_info has duplicate or unexpected task {task_id}: {path}")
         seen.add(task_id)
         metrics = record.get("metrics")
@@ -569,11 +578,11 @@ def validate_eval_info(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"eval_info task {task_id} has invalid success values: {path}")
         if not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for values in (sum_rewards, max_rewards) for value in values):
             raise ValueError(f"eval_info task {task_id} has invalid reward values: {path}")
-    if seen != set(TASK_IDS):
+    if seen != set(expected_tasks):
         raise ValueError(f"eval_info task IDs are incomplete: {path}")
     overall = info.get("overall")
     if overall is not None:
-        if not isinstance(overall, dict) or overall.get("n_episodes") != len(TASK_IDS) * expected_episodes:
+        if not isinstance(overall, dict) or overall.get("n_episodes") != len(expected_tasks) * expected_episodes:
             raise ValueError(f"eval_info overall episode count is incomplete: {path}")
         pc_success = overall.get("pc_success")
         if not isinstance(pc_success, (int, float)) or not math.isfinite(float(pc_success)) or not 0 <= float(pc_success) <= 100:

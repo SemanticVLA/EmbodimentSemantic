@@ -183,6 +183,33 @@ def test_immutable_manifest_rejects_changed_condition(tmp_path: Path):
         eval_runner.write_immutable_manifest(tmp_path / "changed.json", changed)
 
 
+def test_smoke_eval_info_validation_uses_manifest_task_subset(tmp_path: Path):
+    path = tmp_path / "eval_info.json"
+    metric = {
+        "successes": [True],
+        "sum_rewards": [1.0],
+        "max_rewards": [1.0],
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "per_task": [
+                    {"task_id": 0, "metrics": metric},
+                    {"task_id": 4, "metrics": metric},
+                ],
+                "overall": {"n_episodes": 2, "pc_success": 100.0},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = eval_runner.validate_eval_info(
+        path,
+        {"tasks": [0, 4], "episodes": 1},
+    )
+    assert [record["task_id"] for record in result["per_task"]] == [0, 4]
+
+
 def test_cli_requires_explicit_protocol_and_supports_no_videos():
     args = eval_runner.parse_args(
         [
