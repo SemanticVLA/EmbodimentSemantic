@@ -127,3 +127,4 @@ def test_launcher_verifies_results_and_serializes_runtime_setup():
     assert "status=PRESERVED_FAILURE" in launcher
     assert "flock 9" in launcher and "flock -u 9" in launcher
     assert 'venv-py312-${REQUIREMENTS_SHA256:0:16}' in launcher
+    assert "sys.path.insert(0, str(root))" in launcher

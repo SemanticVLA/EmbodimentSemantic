@@ -114,6 +114,7 @@ import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
 from vla_benchmarking.arrow_grasp_controller.configs import load_controller_config
 
 config = load_controller_config()
