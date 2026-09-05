@@ -45,3 +45,47 @@ def test_workflow_shell_scripts_parse() -> None:
         relative_path = path.relative_to(REPO_ROOT).as_posix()
         result = subprocess.run(["bash", "-n", relative_path], capture_output=True, text=True, cwd=REPO_ROOT)
         assert result.returncode == 0, f"{path}: {result.stderr}"
+
+
+def test_target_arrow_legion_training_launcher_is_immutable_and_scoped() -> None:
+    launcher_path = (
+        ROOT
+        / "finetuned_vlas"
+        / "smolvla"
+        / "target_arrow_only"
+        / "legion"
+        / "run_training.sbatch"
+    )
+    launcher = launcher_path.read_text(encoding="utf-8")
+    assert "TARGET_ARROW_TRAINING_EXPECTED_COMMIT" in launcher
+    assert "TARGET_ARROW_TRAINING_LABEL" in launcher
+    assert "TARGET_ARROW_TRAINING_SCOPE" in launcher
+    assert "smoke) STEPS=2; SAVE_FREQ=2" in launcher
+    assert "full) STEPS=29190; SAVE_FREQ=1946" in launcher
+    assert 'bash "$PREPARE_DATA_SCRIPT" target_arrow_treatment' in launcher
+    assert 'bash "$PIPELINE_SCRIPT" "$SCOPE" --profile target-arrow' in launcher
+    assert "--python \"$PYTHON\"" in launcher
+    assert "TARGET_ARROW_BASE_POLICY" in launcher
+    assert "TARGET_ARROW_LIBERO_DIR" in launcher
+    assert "TARGET_ARROW_HDF5_ROOT" in launcher
+    assert "ARCHIVE_ROOT" in launcher
+    assert "TARGET_ARROW_TRAINING_EXPECTED_COMMIT" in launcher
+    assert 'sbatch "$PREPARE_DATA_SCRIPT"' not in launcher
+    assert 'sbatch "$PIPELINE_SCRIPT"' not in launcher
+
+
+def test_target_arrow_legion_launcher_has_no_repo_output_fallback() -> None:
+    launcher_path = (
+        ROOT
+        / "finetuned_vlas"
+        / "smolvla"
+        / "target_arrow_only"
+        / "legion"
+        / "run_training.sbatch"
+    )
+    launcher = launcher_path.read_text(encoding="utf-8")
+    assert 'REPO_ROOT="$REPO_ROOT/vla_benchmarking/libero"' not in launcher
+    assert 'case "$RUN_ROOT" in "$REPO_ROOT"' in launcher
+    assert 'case "$ARCHIVE_ROOT" in "$REPO_ROOT"' in launcher
+    assert '[[ ! -e "$RUN_ROOT" ]]' in launcher
+    assert '[[ ! -e "$ARCHIVE_ROOT" ]]' in launcher
