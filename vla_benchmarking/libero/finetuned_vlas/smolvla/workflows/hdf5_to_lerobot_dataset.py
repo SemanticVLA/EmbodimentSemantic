@@ -64,9 +64,9 @@ from vla_benchmarking.libero.evaluation.visual_scene_graph import (
     select_visual_relations,
 )
 
-VLA_ROOT = REPO_ROOT / "vla_benchmarking"
+LIBERO_ROOT = REPO_ROOT / "vla_benchmarking" / "libero"
 DEFAULT_DATA_DIR = REPO_ROOT / "vlm_benchmarking" / "data" / "libero_spatial_v5"
-DEFAULT_OUTPUT_ROOT = VLA_ROOT / "lora_datasets"
+DEFAULT_OUTPUT_ROOT = LIBERO_ROOT / "lora_datasets"
 
 VARIANTS = ("control", "treatment")
 TARGET_ARROW_VARIANT = "target_arrow_treatment"
