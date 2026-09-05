@@ -7,8 +7,8 @@ sample sizes.
 
 Training and 2x2 evaluation commands live in `workflows/`. They call the
 shared `vla_benchmarking.evaluation` package for LIBERO conditions, task/seed
-matrices, context augmentation, and result contracts. Root-level command
-paths remain transition wrappers for existing operators.
+matrices, context augmentation, and result contracts. The former root-level
+command paths were removed; operators must use the organized package paths.
 
 Every other fine-tuning policy has its own sibling folder; there is no generic
 archive bucket and no policy is silently deleted:

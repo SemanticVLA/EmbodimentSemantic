@@ -30,6 +30,5 @@ inputs.
 The package does not merge these into a universal action loop. Evaluator
 outputs are reporting data only and never enter candidate or action selection.
 
-Root-level scripts such as `run_lerobot_eval_with_context.py` and
-`run_arrow_pick_place_matrix.py` are compatibility wrappers for one transition
-release. New imports should use `vla_benchmarking.evaluation`.
+The former root-level launcher paths were removed. Imports and direct launches
+must use `vla_benchmarking.evaluation`.
