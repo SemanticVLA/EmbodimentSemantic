@@ -1284,10 +1284,18 @@ def _run_matrix_impl(
     provenance = {
         "launcher_path": Path(__file__).resolve().as_posix(),
         "repository_root": Path(__file__).resolve().parents[1].as_posix(),
+        # Experimental injected runners must identify themselves explicitly;
+        # the historical grasp-controller label is only a compatibility
+        # default for the canonical controller campaign.
         "episode_runner": (
-            "grasp_controller.runner.episode_runner"
-            if experiment_metadata is not None
-            else "run_arrow_pick_place_eval.run_episode"
+            str(experiment_metadata.get("episode_runner"))
+            if isinstance(experiment_metadata, Mapping)
+            and experiment_metadata.get("episode_runner")
+            else (
+                "grasp_controller.runner.episode_runner"
+                if experiment_metadata is not None
+                else "run_arrow_pick_place_eval.run_episode"
+            )
         ),
         "suite_mode": suite_mode,
         "controller_variant": controller_variant,
@@ -1669,6 +1677,7 @@ def _run_matrix_impl(
                     episode_kwargs = {
                         "env": env,
                         "task_id": int(cell["task_id"]),
+                        "episode_index": int(cell["episode_index"]),
                         "seed": int(cell["seed"]),
                             "output_dir": attempt_output_dir.as_posix(),
                         "dry_run": bool(dry_run),
@@ -1707,7 +1716,7 @@ def _run_matrix_impl(
                             for key, value in episode_kwargs.items()
                             if key in accepted_runner_keywords
                             or key in {
-                                "env", "task_id", "seed", "output_dir", "dry_run",
+                                "env", "task_id", "episode_index", "seed", "output_dir", "dry_run",
                                 "resolution", "allow_unvalidated_profile", "evaluator",
                                 "motion_started_callback",
                             }
