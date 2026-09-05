@@ -12,7 +12,7 @@
 [![Dataset](https://img.shields.io/badge/Dataset-HuggingFace-yellow?style=flat-square&logo=huggingface)](https://huggingface.co/datasets/SemVLA/EmbodimentSemantic)
 [![Code](https://img.shields.io/badge/Code-GitHub-black?style=flat-square&logo=github)](https://github.com/SemanticVLA/EmbodimentSemantic)
 [![Demo](https://img.shields.io/badge/Demo-LIBERO%20%7C%20SO101-087a55?style=flat-square)](https://embodimentsemantic.fly.dev/)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](vla_benchmarking/LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](vla_benchmarking/libero/LICENSE)
 
 ![LIBERO scene-graph comparison: ground-truth (top) vs. Gemini predictions (bottom). Green edges are correct triplets, red edges are errors.](assets/banner.png)
 
@@ -105,14 +105,15 @@ The dataset has two components:
 EmbodimentSemantic/
 ├── LIBERO_Semantic_Generation.ipynb   # Offline scene-graph annotation pipeline
 ├── vla_benchmarking/                  # Online VLA evaluation interface
-│   ├── arrow_grasp_controller/         # Frozen canonical 87/100 arrow controller
-│   ├── arrow_finetuned_vla/            # Named SmolVLA/fine-tuning policy families
-│   ├── evaluation/                     # Shared LIBERO, arrow, and triplet evaluators
-│   ├── shared/                         # Policy-independent task/config contracts
-│   ├── environment/                    # Environment/bootstrap utilities
-│   ├── tools/                          # Audits, previews, and diagnostics
-│   ├── README.md                       # VLA usage and migration guide
-│   └── requirements.txt                # Python dependencies
+│   └── libero/                         # Canonical LIBERO evaluation package
+│       ├── arrow_grasp_controller/     # Frozen canonical 87/100 arrow controller
+│       ├── finetuned_vlas/smolvla/     # The two retained SmolVLA profiles
+│       ├── evaluation/                 # Shared LIBERO, arrow, and triplet evaluators
+│       ├── shared/                     # Policy-independent task/config contracts
+│       ├── environment/                # Environment/bootstrap utilities
+│       ├── tools/                      # Audits, previews, and diagnostics
+│       ├── README.md                   # VLA usage and migration guide
+│       └── requirements.txt            # Python dependencies
 └── vlm_benchmarking/                  # Offline VLM benchmark
     ├── run.py                         # Inference entry point
     ├── evaluate.py                    # Standalone evaluation
@@ -135,15 +136,14 @@ only in historical commits and are not supported entry points.
 
 | Historical path | Supported path |
 | --- | --- |
-| `vla_benchmarking/setup_env.py` | `vla_benchmarking/environment/setup_env.py` |
-| `vla_benchmarking/randomize_scenes_demo.py` | `vla_benchmarking/environment/randomize_scenes_demo.py` |
-| `vla_benchmarking/run_lerobot_eval_with_context.py` | `vla_benchmarking/evaluation/run_lerobot_eval_with_context.py` |
-| `vla_benchmarking/libero_live_semantic_context.py` | `vla_benchmarking/evaluation/libero_live_semantic_context.py` |
-| `vla_benchmarking/run_scene_graph_format_ablation.py` | `vla_benchmarking/evaluation/run_scene_graph_format_ablation.py` |
-| `vla_benchmarking/run_scene_graph_visual_ablation.py` | `vla_benchmarking/evaluation/run_scene_graph_visual_ablation.py` |
-| `vla_benchmarking/run_lora_2x2_eval.py` | `vla_benchmarking/arrow_finetuned_vla/workflows/run_lora_2x2_eval.py` |
-| `vla_benchmarking/train_lora.sh` | `vla_benchmarking/arrow_finetuned_vla/workflows/train_lora.sh` |
-| `vla_benchmarking/run_grasp_controller.py` | `vla_benchmarking/arrow_grasp_controller/run_grasp_controller.py` |
+| `vla_benchmarking/setup_env.py` | `vla_benchmarking/libero/environment/setup_env.py` |
+| `vla_benchmarking/randomize_scenes_demo.py` | `vla_benchmarking/libero/environment/randomize_scenes_demo.py` |
+| `vla_benchmarking/run_lerobot_eval_with_context.py` | `vla_benchmarking/libero/evaluation/run_lerobot_eval_with_context.py` |
+| `vla_benchmarking/libero_live_semantic_context.py` | `vla_benchmarking/libero/evaluation/libero_live_semantic_context.py` |
+| `vla_benchmarking/run_scene_graph_format_ablation.py` | `vla_benchmarking/libero/evaluation/run_scene_graph_format_ablation.py` |
+| `vla_benchmarking/run_scene_graph_visual_ablation.py` | `vla_benchmarking/libero/evaluation/run_scene_graph_visual_ablation.py` |
+| `vla_benchmarking/train_lora.sh` | `vla_benchmarking/libero/finetuned_vlas/smolvla/workflows/train_lora.sh` |
+| `vla_benchmarking/run_grasp_controller.py` | `vla_benchmarking/libero/arrow_grasp_controller/run_grasp_controller.py` |
 
 Result records may intentionally retain historical absolute paths for
 provenance; those paths are evidence, not current launch instructions.
@@ -263,7 +263,7 @@ The VLA interface evaluates whether injecting live spatial scene graphs into exi
 Requires Python 3.12+, a CUDA GPU, and Git.
 
 ```bash
-cd vla_benchmarking
+cd vla_benchmarking/libero
 conda create -n vla_bench python=3.12 -y
 conda activate vla_bench
 python environment/setup_env.py   # clones LIBERO, installs lerobot[pi] + robosuite, runs smoke test
@@ -273,18 +273,18 @@ python environment/setup_env.py   # clones LIBERO, installs lerobot[pi] + robosu
 
 ### Running
 
-Evaluation is controlled via environment variables from inside `vla_benchmarking/`.
+Evaluation is controlled via environment variables from inside `vla_benchmarking/libero/`.
 
 **PowerShell:**
 
 ```powershell
-$env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[4]"; python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
+$env:CONTEXT_MODE="scene_graph"; $env:TASK_IDS="[4]"; python -m vla_benchmarking.libero.evaluation.run_lerobot_eval_with_context
 ```
 
 **bash/zsh:**
 
 ```bash
-CONTEXT_MODE=scene_graph TASK_IDS=[4] python -m vla_benchmarking.evaluation.run_lerobot_eval_with_context
+CONTEXT_MODE=scene_graph TASK_IDS=[4] python -m vla_benchmarking.libero.evaluation.run_lerobot_eval_with_context
 ```
 
 | Variable | Default | Description |
@@ -367,4 +367,4 @@ Scene-graph injection improves several Pi05 tasks without any retraining. The la
 3. Falls back to dominant-axis world-frame ordering for lateral (`is_left_of` / `is_right_of`) and depth (`is_in_front_of` / `is_behind`) relations.
 4. Writes annotations back to the HDF5 under `obs/agentview_scene_graph` and `obs/robot0_eye_in_hand_scene_graph`.
 
-The live version of this pipeline (`vla_benchmarking/evaluation/libero_live_semantic_context.py`) runs the same logic at policy evaluation time.
+The live version of this pipeline (`vla_benchmarking/libero/evaluation/libero_live_semantic_context.py`) runs the same logic at policy evaluation time.
