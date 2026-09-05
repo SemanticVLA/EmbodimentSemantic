@@ -34,6 +34,17 @@ from .registry import (
     get_policy_capabilities,
     validate_policy_condition,
 )
+from .plan import (
+    PLAN_SCHEMA,
+    SCHEDULE_SCHEMA,
+    build_evaluation_plan,
+    canonical_json,
+    canonical_sha256,
+    schedule_hash,
+    shared_source_hashes,
+    validate_native_schedule,
+    validate_plan,
+)
 
 __all__ = [
     "DEFAULT_EPISODES_PER_TASK",
@@ -58,4 +69,13 @@ __all__ = [
     "PolicyCapabilities",
     "get_policy_capabilities",
     "validate_policy_condition",
+    "PLAN_SCHEMA",
+    "SCHEDULE_SCHEMA",
+    "build_evaluation_plan",
+    "canonical_json",
+    "canonical_sha256",
+    "schedule_hash",
+    "shared_source_hashes",
+    "validate_native_schedule",
+    "validate_plan",
 ]

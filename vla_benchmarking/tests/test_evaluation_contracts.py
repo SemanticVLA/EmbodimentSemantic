@@ -1,4 +1,5 @@
 from vla_benchmarking.evaluation.backends import DIRECT_MATRIX, LEROBOT, validate_backend_condition
+import pytest
 from vla_benchmarking.evaluation.contracts import (
     EvaluationCondition,
     EvaluationResult,
@@ -7,6 +8,10 @@ from vla_benchmarking.evaluation.contracts import (
     parse_suite_mode,
 )
 from vla_benchmarking.evaluation.registry import validate_policy_condition
+from vla_benchmarking.evaluation.plan import (
+    build_evaluation_plan,
+    validate_native_schedule,
+)
 
 
 def test_shared_sealed_schedule_is_row_major_and_reproducible():
@@ -67,3 +72,30 @@ def test_result_aggregation_preserves_terminal_failures():
     assert result["successes"] == 1
     assert result["planned"] == result["terminal"] == 2
     assert result["per_task"]["0"] == {"successes": 1, "planned": 2, "terminal": 2}
+
+
+def test_policy_plans_share_schedule_but_bind_policy_and_prompt_contracts():
+    controller = build_evaluation_plan(
+        policy_kind="canonical_grasp",
+        suite_mode="sealed_randomized",
+        task_ids=[0, 4],
+        episodes_per_task=1,
+        visual_input="goal_arrow",
+    )
+    no_arrow = build_evaluation_plan(
+        policy_kind="smolvla_no_arrow",
+        suite_mode="sealed_randomized",
+        task_ids=[0, 4],
+        episodes_per_task=1,
+        visual_input="none",
+        camera="agentview_rgb,image",
+    )
+    assert controller["schedule"]["sha256"] == no_arrow["schedule"]["sha256"]
+    assert controller["sha256"] != no_arrow["sha256"]
+    assert controller["prompt_applicability"] == "not_applicable"
+    assert no_arrow["prompt_applicability"] == "applied"
+    assert no_arrow["text_contract"] == "standard_no_extra_text"
+    drifted = [dict(no_arrow["schedule"]["cells"][0]), dict(no_arrow["schedule"]["cells"][1])]
+    drifted[1]["seed"] += 1
+    with pytest.raises(ValueError, match="native planned cell schedule"):
+        validate_native_schedule(no_arrow, drifted)

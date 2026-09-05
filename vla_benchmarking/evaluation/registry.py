@@ -15,24 +15,42 @@ from .contracts import EvaluationCondition
 
 @dataclass(frozen=True)
 class PolicyCapabilities:
-    policy_kind: Literal["canonical_grasp", "arrow_student", "lerobot"]
+    policy_kind: Literal["canonical_grasp", "arrow_student", "lerobot", "smolvla_no_arrow"]
     backend: BackendCapabilities
     visual_inputs: tuple[str, ...]
     text_contexts: tuple[str, ...]
+    # The prompt is part of the randomization contract for policies that
+    # consume task text.  Arrow controllers do not consume the prompt.
+    prompt_applicability: dict[str, str]
+    text_contract: str
 
 
 POLICIES: dict[str, PolicyCapabilities] = {
     "canonical_grasp": PolicyCapabilities(
-        "canonical_grasp", DIRECT_MATRIX, ("goal_arrow",), ("none",)
+        "canonical_grasp", DIRECT_MATRIX, ("goal_arrow",), ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "not_applicable"},
+        "none",
     ),
     "arrow_student": PolicyCapabilities(
-        "arrow_student", DIRECT_MATRIX, ("goal_arrow",), ("none",)
+        "arrow_student", DIRECT_MATRIX, ("goal_arrow",), ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "not_applicable"},
+        "none",
     ),
     "lerobot": PolicyCapabilities(
         "lerobot",
         LEROBOT,
         ("none", "goal_arrow", "relation_arrows"),
         ("none", "scene_graph", "text_triplet"),
+        {"vanilla": "applied", "sealed_randomized": "applied"},
+        "policy_defined",
+    ),
+    "smolvla_no_arrow": PolicyCapabilities(
+        "smolvla_no_arrow",
+        LEROBOT,
+        ("none",),
+        ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "applied"},
+        "standard_no_extra_text",
     ),
 }
 

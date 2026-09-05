@@ -15,6 +15,8 @@ def test_no_arrow_sealed_launcher_is_isolated_and_hash_locked():
     assert "--partition=gpu_a40" in text
     assert "NO_ARROW_EVAL_SCOPE must be smoke or full" in text
     assert "EPISODES=1" in text and "EPISODES=50" in text
+    assert 'TASK_IDS_CSV="0,4"' in text
+    assert '--task-ids "$TASK_IDS_CSV"' in text
     assert "NO_ARROW_EVAL_EXPECTED_COMMIT" in text
     assert 'shared HOME checkout is forbidden' in text
     assert "80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092" in text

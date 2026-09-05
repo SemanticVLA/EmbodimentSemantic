@@ -43,6 +43,12 @@ from vla_benchmarking.arrow_finetuned_vla.workflows.run_lora_no_arrow_pair_eval 
     validate_training_manifest,
 )
 from vla_benchmarking.evaluation.randomization_contract import randomization_config_payload
+from vla_benchmarking.evaluation.plan import (
+    build_evaluation_plan,
+    shared_source_hashes,
+    validate_native_schedule,
+    validate_plan,
+)
 from vla_benchmarking.shared.config import (
     DEFAULT_CAMERAS,
     LEROBOT_CAMERA_KEYS,
@@ -59,6 +65,7 @@ SUMMARY_FILENAME = "no_arrow_trained_sealed_randomized_summary.csv"
 SCHEMA_VERSION = 1
 EVAL_EXPERIMENT = "smolvla_lora_no_arrow_trained_sealed_randomized"
 PROTOCOL_EPISODES = {"smoke": 1, "full": 50}
+PROTOCOL_TASKS = {"smoke": (0, 4), "full": tuple(TASK_IDS)}
 TRAINING_VARIANT = "no_arrow_treatment"
 DATASET_VARIANT = "control"
 
@@ -83,18 +90,34 @@ def _hash_manifest(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(manifest).encode("utf-8")).hexdigest()
 
 
-def _cell(adapter_checkpoint: str, output_root: Path) -> dict[str, Any]:
+def _cell(adapter_checkpoint: str, output_root: Path, tasks: Sequence[int]) -> dict[str, Any]:
     adapter = _adapter_directory(adapter_checkpoint)
     return {
         "cell_id": CELL_ID,
         "seed": SEALED_SEED,
         "checkpoint": adapter,
         "live_arrows": False,
+        "tasks": [int(task_id) for task_id in tasks],
         "output_dir": (output_root / f"seed_{SEALED_SEED}" / CELL_ID).as_posix(),
         "adapter_sha256": _sha256_file(Path(adapter) / "adapter_model.safetensors"),
         "adapter_config_sha256": _sha256_file(Path(adapter) / "adapter_config.json"),
         "train_config_sha256": _sha256_file(Path(adapter) / "train_config.json"),
     }
+
+
+def _native_schedule(tasks: Sequence[int], episodes: int) -> list[dict[str, int]]:
+    """Describe the cells the native LeRobot loop will execute."""
+    cells: list[dict[str, int]] = []
+    for task_id in tasks:
+        for episode_index in range(int(episodes)):
+            cells.append({
+                "cell_index": len(cells),
+                "task_id": int(task_id),
+                "episode_index": int(episode_index),
+                "seed": SEALED_SEED + int(episode_index),
+                "init_state_index": int(episode_index),
+            })
+    return cells
 
 
 def _training_pair_provenance(training_path: Path) -> dict[str, Any]:
@@ -148,12 +171,15 @@ def build_manifest(
     videos: bool = False,
     max_videos: int = 0,
     seed: int = SEALED_SEED,
-    tasks: Sequence[int] = TASK_IDS,
+    tasks: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Build and validate the immutable one-cell evaluation contract."""
-    task_ids = [int(task_id) for task_id in tasks]
-    if task_ids != list(TASK_IDS):
-        raise ValueError("sealed no-arrow eval requires task IDs exactly 0 through 9")
+    expected_tasks = list(PROTOCOL_TASKS[protocol]) if protocol in PROTOCOL_TASKS else list(TASK_IDS)
+    task_ids = expected_tasks if tasks is None else [int(task_id) for task_id in tasks]
+    if task_ids != expected_tasks:
+        raise ValueError(
+            f"protocol {protocol!r} requires task IDs exactly {expected_tasks}"
+        )
     if int(seed) != SEALED_SEED:
         raise ValueError("sealed no-arrow eval requires base seed exactly 1000")
     if protocol not in PROTOCOL_EPISODES:
@@ -181,7 +207,20 @@ def build_manifest(
             f"incomplete tasks: {incomplete}"
         )
     randomization_config = randomization_config_payload()
-    cell = _cell(adapter_checkpoint, root)
+    cell = _cell(adapter_checkpoint, root, task_ids)
+    shared_plan = build_evaluation_plan(
+        policy_kind="smolvla_no_arrow",
+        suite_mode="sealed_randomized",
+        task_ids=task_ids,
+        episodes_per_task=int(episodes),
+        seed_base=SEALED_SEED,
+        camera=TRAINING_CAMERAS,
+        resolution=256,
+        text_context="none",
+        visual_input="none",
+        source_hashes=shared_source_hashes(),
+    )
+    validate_native_schedule(shared_plan, _native_schedule(task_ids, episodes))
     pair_provenance = _training_pair_provenance(training_path)
     adapter_path = Path(adapter_checkpoint).expanduser().resolve()
     manifest: dict[str, Any] = {
@@ -233,6 +272,11 @@ def build_manifest(
         "output_root": root.as_posix(),
         "contrast": "none_single_condition",
         "cells": [cell],
+        "shared_plan": shared_plan,
+        "shared_plan_schema": shared_plan["schema"],
+        "shared_plan_hash": shared_plan["sha256"],
+        "shared_schedule_hash": shared_plan["schedule"]["sha256"],
+        "shared_source_hashes": dict(shared_plan["source_hashes"]),
         "provenance": {
             "source_commit": _source_commit(),
             "scheduler_job_id": os.environ.get("SLURM_JOB_ID"),
@@ -263,7 +307,8 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("manifest protocol is invalid")
     if manifest.get("episodes") != PROTOCOL_EPISODES[manifest["protocol"]]:
         raise ValueError("manifest episode count does not match protocol")
-    if manifest.get("planned_episodes") != len(TASK_IDS) * manifest["episodes"]:
+    expected_tasks = list(PROTOCOL_TASKS[manifest["protocol"]])
+    if manifest.get("planned_episodes") != len(expected_tasks) * manifest["episodes"]:
         raise ValueError("manifest planned episode count does not match the task schedule")
     if manifest.get("model_role") != "no_arrow_trained_lora":
         raise ValueError("manifest model role is not the no-arrow trained LoRA")
@@ -277,8 +322,8 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("manifest base policy revision is not sealed")
     if manifest.get("checkpoint_step") != int(SEALED_CHECKPOINT_ID):
         raise ValueError("manifest must use final checkpoint 029190")
-    if manifest.get("tasks") != list(TASK_IDS):
-        raise ValueError("manifest tasks must contain exactly IDs 0 through 9")
+    if manifest.get("tasks") != expected_tasks:
+        raise ValueError(f"manifest tasks must match protocol schedule: {expected_tasks}")
     if manifest.get("seed") != SEALED_SEED:
         raise ValueError("manifest seed must be exactly 1000")
     if manifest.get("seed_base") != SEALED_SEED:
@@ -304,6 +349,27 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("sealed eval must preserve checkpoint n_action_steps")
     if manifest.get("contrast") != "none_single_condition":
         raise ValueError("sealed no-arrow eval must be a single condition")
+    shared_plan = manifest.get("shared_plan")
+    if not isinstance(shared_plan, dict):
+        raise ValueError("manifest shared evaluation plan is missing")
+    validate_plan(shared_plan)
+    if shared_plan.get("policy_kind") != "smolvla_no_arrow":
+        raise ValueError("manifest shared plan policy kind is invalid")
+    if shared_plan.get("condition", {}).get("visual_input") != "none":
+        raise ValueError("manifest shared plan must disable visual input")
+    if shared_plan.get("text_contract") != "standard_no_extra_text":
+        raise ValueError("manifest shared plan text contract is invalid")
+    if shared_plan.get("prompt_applicability") != "applied":
+        raise ValueError("sealed no-arrow plan must apply the task prompt")
+    if manifest.get("shared_plan_schema") != shared_plan.get("schema"):
+        raise ValueError("manifest shared plan schema does not match")
+    if manifest.get("shared_plan_hash") != shared_plan.get("sha256"):
+        raise ValueError("manifest shared plan hash does not match")
+    if manifest.get("shared_schedule_hash") != shared_plan.get("schedule", {}).get("sha256"):
+        raise ValueError("manifest shared schedule hash does not match")
+    if manifest.get("shared_source_hashes") != shared_plan.get("source_hashes"):
+        raise ValueError("manifest shared source hashes do not match")
+    validate_native_schedule(shared_plan, _native_schedule(expected_tasks, manifest["episodes"]))
     provenance = manifest.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError("manifest provenance is missing")
@@ -341,6 +407,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         "seed": SEALED_SEED,
         "checkpoint": adapter,
         "live_arrows": False,
+        "tasks": expected_tasks,
         "adapter_sha256": manifest["adapter_sha256"],
         "adapter_config_sha256": manifest["adapter_config_sha256"],
         "train_config_sha256": manifest["train_config_sha256"],
@@ -357,7 +424,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("randomization_config_sha256") != expected_config_hash:
         raise ValueError("manifest randomization config hash does not match sealed config")
     dimensions = manifest.get("randomization_dimensions")
-    if not isinstance(dimensions, dict) or set(dimensions) != {str(task_id) for task_id in TASK_IDS}:
+    if not isinstance(dimensions, dict) or set(dimensions) != {str(task_id) for task_id in expected_tasks}:
         raise ValueError("manifest must record randomization dimensions for every task")
     for task_id, values in dimensions.items():
         if not isinstance(values, dict) or not values.get("object_removal"):
@@ -402,7 +469,7 @@ def validate_existing_outputs(output_root: Path, manifest: dict[str, Any]) -> No
         if not marker.is_file():
             raise ValueError(f"stale cell output lacks immutable marker: {expected_cell}")
         actual = json.loads(marker.read_text(encoding="utf-8"))
-        expected = {key: manifest["cells"][0][key] for key in ("cell_id", "seed", "checkpoint", "live_arrows", "output_dir")}
+        expected = {key: manifest["cells"][0][key] for key in ("cell_id", "seed", "checkpoint", "live_arrows", "tasks", "output_dir")}
         if actual != expected:
             raise ValueError(f"stale cell marker does not match manifest: {marker}")
 
@@ -411,7 +478,7 @@ def _write_cell_marker(cell: dict[str, Any]) -> None:
     cell_dir = Path(cell["output_dir"])
     cell_dir.mkdir(parents=True, exist_ok=True)
     marker = cell_dir / "cell_manifest.json"
-    expected = {key: cell[key] for key in ("cell_id", "seed", "checkpoint", "live_arrows", "output_dir")}
+    expected = {key: cell[key] for key in ("cell_id", "seed", "checkpoint", "live_arrows", "tasks", "output_dir")}
     if marker.exists():
         if json.loads(marker.read_text(encoding="utf-8")) != expected:
             raise ValueError(f"cell marker mismatch: {marker}")
@@ -426,7 +493,7 @@ def _run_cell(cell: dict[str, Any], args: argparse.Namespace) -> int:
         {
             "PYTHONUNBUFFERED": "1",
             "MODELS": cell["checkpoint"],
-            "TASK_IDS": json.dumps(list(TASK_IDS), separators=(",", ":")),
+            "TASK_IDS": json.dumps(list(cell["tasks"]), separators=(",", ":")),
             "N_EPISODES": str(args.episodes),
             "BATCH_SIZE": "1",
             "SEED": str(SEALED_SEED),
@@ -449,7 +516,7 @@ def _run_cell(cell: dict[str, Any], args: argparse.Namespace) -> int:
         "--eval.use_async_envs=false",
         f"--output_dir={cell['output_dir']}",
         f"--policy.path={cell['checkpoint']}",
-        "--env.task_ids=" + json.dumps(list(TASK_IDS), separators=(",", ":")),
+        "--env.task_ids=" + json.dumps(list(cell["tasks"]), separators=(",", ":")),
         "--env.camera_name=" + TRAINING_CAMERAS,
         "--env.observation_height=256",
         "--env.observation_width=256",
@@ -524,6 +591,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--episodes", type=int, choices=sorted(set(PROTOCOL_EPISODES.values())), required=True)
     parser.add_argument("--protocol", choices=tuple(PROTOCOL_EPISODES), required=True)
+    parser.add_argument("--task-ids", default=None, help="internal protocol-locked task subset")
     parser.add_argument("--device", default=os.environ.get("DEVICE", "cuda"))
     parser.add_argument("--no-videos", action="store_true", help="do not render or save episode videos")
     return parser.parse_args(argv)
@@ -547,6 +615,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             episodes=args.episodes,
             device=args.device,
             videos=not args.no_videos,
+            tasks=(
+                [int(value) for value in args.task_ids.split(",") if value.strip()]
+                if args.task_ids is not None else None
+            ),
         )
         validate_existing_outputs(output_root, manifest)
         validate_training_manifest(

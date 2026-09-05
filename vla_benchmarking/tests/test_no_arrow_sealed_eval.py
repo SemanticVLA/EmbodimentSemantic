@@ -79,6 +79,28 @@ def test_full_manifest_is_one_no_arrow_cell_with_500_planned_episodes(tmp_path: 
     assert len(manifest["cells"]) == 1
     assert manifest["cells"][0]["cell_id"] == eval_runner.CELL_ID
     assert manifest["cells"][0]["live_arrows"] is False
+    assert manifest["shared_plan_schema"] == "shared_evaluation_plan.v1"
+    assert manifest["shared_plan_hash"] == manifest["shared_plan"]["sha256"]
+    assert manifest["shared_schedule_hash"] == manifest["shared_plan"]["schedule"]["sha256"]
+    assert manifest["shared_plan"]["policy_kind"] == "smolvla_no_arrow"
+    assert len(manifest["shared_plan"]["schedule"]["cells"]) == 500
+
+
+def test_smoke_manifest_is_locked_to_tasks_zero_and_four(tmp_path: Path):
+    adapter, training_manifest = _artifacts(tmp_path)
+    manifest = eval_runner.build_manifest(
+        adapter_checkpoint=adapter,
+        training_manifest=training_manifest,
+        output_root=tmp_path / "outputs",
+        protocol="smoke",
+        episodes=1,
+    )
+    assert manifest["tasks"] == [0, 4]
+    assert manifest["planned_episodes"] == 2
+    assert [
+        (cell["task_id"], cell["episode_index"], cell["seed"])
+        for cell in manifest["shared_plan"]["schedule"]["cells"]
+    ] == [(0, 0, 1000), (4, 0, 1000)]
 
 
 def test_protocol_and_episode_count_must_match(tmp_path: Path):

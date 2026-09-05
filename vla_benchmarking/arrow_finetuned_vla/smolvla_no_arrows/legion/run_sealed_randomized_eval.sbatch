@@ -32,10 +32,11 @@ die() {
 
 SCOPE="${NO_ARROW_EVAL_SCOPE:-}"
 case "$SCOPE" in
-  smoke) EPISODES=1 ;;
-  full) EPISODES=50 ;;
+  smoke) EPISODES=1; TASK_IDS_CSV="0,4" ;;
+  full) EPISODES=50; TASK_IDS_CSV="0,1,2,3,4,5,6,7,8,9" ;;
   *) die 'NO_ARROW_EVAL_SCOPE must be smoke or full' ;;
 esac
+TASK_COUNT="$(awk -F, '{print NF}' <<<"$TASK_IDS_CSV")"
 
 command -v realpath >/dev/null 2>&1 || die 'realpath is required'
 command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required'
@@ -122,7 +123,7 @@ archive_on_exit() {
     {
       printf 'schema=no_arrow_vla_sealed_eval_job.v1\n'
       printf 'archive_status=%s\njob_exit_code=%s\njob_id=%s\n' "$status" "$workload_rc" "$SLURM_JOB_ID"
-      printf 'scope=%s\nepisodes_per_task=%s\nplanned_episodes=%s\n' "$SCOPE" "$EPISODES" "$((10 * EPISODES))"
+      printf 'scope=%s\nepisodes_per_task=%s\nplanned_episodes=%s\n' "$SCOPE" "$EPISODES" "$((TASK_COUNT * EPISODES))"
       printf 'expected_commit=%s\nactual_commit=%s\n' "$NO_ARROW_EVAL_EXPECTED_COMMIT" "$actual_commit"
       printf 'adapter_sha256=%s\ntraining_manifest_sha256=%s\n' "$EXPECTED_ADAPTER_SHA256" "$EXPECTED_TRAINING_MANIFEST_SHA256"
       printf 'adapter_config_sha256=%s\ntrain_config_sha256=%s\n' "$EXPECTED_ADAPTER_CONFIG_SHA256" "$EXPECTED_TRAIN_CONFIG_SHA256"
@@ -146,9 +147,10 @@ job_id=$SLURM_JOB_ID
 job_name=$SLURM_JOB_NAME
 label=$NO_ARROW_EVAL_LABEL
 scope=$SCOPE
-task_ids=0,1,2,3,4,5,6,7,8,9
+task_ids=$TASK_IDS_CSV
+task_count=$TASK_COUNT
 episodes_per_task=$EPISODES
-planned_episodes=$((10 * EPISODES))
+planned_episodes=$((TASK_COUNT * EPISODES))
 episode_seed_base=1000
 episode_seed_last=$((999 + EPISODES))
 suite_mode=sealed_randomized
@@ -210,6 +212,7 @@ PY
   --output-root "$OUTPUT_ROOT" \
   --protocol "$SCOPE" \
   --episodes "$EPISODES" \
+  --task-ids "$TASK_IDS_CSV" \
   --device cuda \
   --no-videos
 

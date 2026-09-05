@@ -167,6 +167,10 @@ def test_condition_metadata_is_forwarded_only_when_seam_accepts_it(matrix, tmp_p
     assert summary["suite_mode"] == "sealed_randomized"
     assert summary["controller_variant"] == matrix.DEFAULT_CONTROLLER_VARIANT
     assert summary["protocol"]["condition_label"] == f"sealed_randomized__{matrix.DEFAULT_CONTROLLER_VARIANT}"
+    assert summary["protocol"]["policy_kind"] == "canonical_grasp"
+    assert summary["protocol"]["shared_plan_schema"] == "shared_evaluation_plan.v1"
+    assert summary["protocol"]["shared_plan"]["condition"]["visual_input"] == "goal_arrow"
+    assert summary["protocol"]["shared_plan"]["prompt_applicability"] == "not_applicable"
     status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
     assert status["suite_mode"] == "sealed_randomized"
     assert status["controller_variant"] == matrix.DEFAULT_CONTROLLER_VARIANT

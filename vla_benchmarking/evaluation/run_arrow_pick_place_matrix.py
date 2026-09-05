@@ -35,9 +35,19 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script smoke
 if __package__:
     from .backends import DIRECT_MATRIX, validate_backend_condition
     from .contracts import build_task_seed_matrix as build_shared_task_seed_matrix
+    from .plan import (
+        build_evaluation_plan,
+        shared_source_hashes,
+        validate_native_schedule,
+    )
 else:  # pragma: no cover - direct script smoke
     from vla_benchmarking.evaluation.backends import DIRECT_MATRIX, validate_backend_condition
     from vla_benchmarking.evaluation.contracts import build_task_seed_matrix as build_shared_task_seed_matrix
+    from vla_benchmarking.evaluation.plan import (
+        build_evaluation_plan,
+        shared_source_hashes,
+        validate_native_schedule,
+    )
 
 try:  # Script and package-style imports are both useful in LIBERO checkouts.
     from vla_benchmarking.evaluation import run_arrow_pick_place_eval as _episode_module
@@ -596,6 +606,7 @@ def _protocol(
     controller_variant: str,
     controller_config: Mapping[str, Any] | None = None,
     init_state_preflight: Mapping[str, Any] | None = None,
+    shared_plan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "name": "libero_arrow_pick_place_matrix",
@@ -641,7 +652,44 @@ def _protocol(
         "arrow_generation": "existing_hardcoded_subject_goal_bbox_renderer",
         "language_translation": False,
         "prompt_variant": "not_applicable",
+        "policy_kind": "canonical_grasp",
+        "shared_plan": dict(shared_plan) if shared_plan else None,
+        "shared_plan_schema": shared_plan.get("schema") if shared_plan else None,
+        "shared_plan_hash": shared_plan.get("sha256") if shared_plan else None,
+        "shared_schedule_hash": (
+            shared_plan.get("schedule", {}).get("sha256") if shared_plan else None
+        ),
+        "shared_source_hashes": (
+            dict(shared_plan.get("source_hashes", {})) if shared_plan else {}
+        ),
     }
+
+
+def _build_shared_controller_plan(
+    *,
+    cells: Sequence[Mapping[str, Any]],
+    task_ids: Sequence[int],
+    episodes_per_task: int,
+    seed_base: int,
+    suite_mode: str,
+    resolution: int,
+) -> dict[str, Any]:
+    """Build the canonical controller plan before any environment is made."""
+
+    plan = build_evaluation_plan(
+        policy_kind="canonical_grasp",
+        suite_mode=suite_mode,
+        task_ids=task_ids,
+        episodes_per_task=episodes_per_task,
+        seed_base=seed_base,
+        camera=CAMERA_NAME,
+        resolution=resolution,
+        text_context="none",
+        visual_input="goal_arrow",
+        source_hashes=shared_source_hashes(),
+    )
+    validate_native_schedule(plan, cells)
+    return plan
 
 
 def _failure_class(stage: str, exc: BaseException) -> str:
@@ -1300,6 +1348,14 @@ def _run_matrix_impl(
         seed_base=seed_base,
         injected_builder=env_builder is not None,
     )
+    shared_plan = _build_shared_controller_plan(
+        cells=cells,
+        task_ids=task_ids,
+        episodes_per_task=episodes_per_task,
+        seed_base=seed_base,
+        suite_mode=suite_mode,
+        resolution=resolution,
+    )
     protocol = _protocol(
         task_ids=task_ids,
         episodes_per_task=episodes_per_task,
@@ -1313,6 +1369,7 @@ def _run_matrix_impl(
         controller_variant=controller_variant,
         controller_config=controller_config_provenance,
         init_state_preflight=init_state_preflight,
+        shared_plan=shared_plan,
     )
     if experiment_metadata is not None:
         protocol["experimental_identity"] = dict(experiment_metadata)
@@ -1472,6 +1529,12 @@ def _run_matrix_impl(
                     "suite_mode": suite_mode,
                     "controller_variant": controller_variant,
                     "condition_label": f"{suite_mode}__{controller_variant}",
+                    "policy_kind": "canonical_grasp",
+                    "shared_plan_schema": shared_plan["schema"],
+                    "shared_plan_hash": shared_plan["sha256"],
+                    "shared_schedule_hash": shared_plan["schedule"]["sha256"],
+                    "shared_source_hashes": dict(shared_plan["source_hashes"]),
+                    "shared_plan": shared_plan,
                     "protocol": protocol,
                     "contract_hash": contract_hash,
                     "provenance": provenance,
@@ -1508,6 +1571,12 @@ def _run_matrix_impl(
                     "suite_mode": suite_mode,
                     "controller_variant": controller_variant,
                     "condition_label": f"{suite_mode}__{controller_variant}",
+                    "policy_kind": "canonical_grasp",
+                    "shared_plan_schema": shared_plan["schema"],
+                    "shared_plan_hash": shared_plan["sha256"],
+                    "shared_schedule_hash": shared_plan["schedule"]["sha256"],
+                    "shared_source_hashes": dict(shared_plan["source_hashes"]),
+                    "shared_plan": shared_plan,
                     "protocol": protocol,
                     "contract_hash": contract_hash,
                     "provenance": provenance,
@@ -1997,6 +2066,12 @@ def _run_matrix_impl(
         "controller_variant": controller_variant,
         "controller_config": controller_config_provenance,
         "condition_label": f"{suite_mode}__{controller_variant}",
+        "policy_kind": "canonical_grasp",
+        "shared_plan_schema": shared_plan["schema"],
+        "shared_plan_hash": shared_plan["sha256"],
+        "shared_schedule_hash": shared_plan["schedule"]["sha256"],
+        "shared_source_hashes": dict(shared_plan["source_hashes"]),
+        "shared_plan": shared_plan,
         "protocol": protocol,
         "provenance": provenance,
         **({"execution_selection": execution_selection} if execution_selection is not None else {}),
