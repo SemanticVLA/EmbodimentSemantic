@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# This launcher must retain LF endings for Bash/SLURM portability.
 # Canonical grasp-controller evaluation launcher.
 #
 # This is the sole active Legion launcher for the frozen default treatment.
