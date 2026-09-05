@@ -40,6 +40,9 @@ def test_unified_demo_serves_selector_apps_and_both_api_namespaces(tmp_path):
         "black_bowl",
         cache_dir=tmp_path / "cache",
         so101_repository=_So101Repository(),
+        demo_mode="offline",
+        demo_mode_label="localhost scene-graph tool",
+        demo_dataset_scope="local LIBERO/SO101 datasets and writable proxy artifacts",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -134,7 +137,11 @@ def test_docker_defaults_to_cached_production_and_keeps_optional_libero_runtime(
     assert "from libero.libero.envs import OffScreenRenderEnv" in dockerfile
     assert "RUN python -m demo.deployment_smoke" in dockerfile
     assert "python -m demo.deployment_smoke --cached-only" in dockerfile
-    assert '"--bundled-cache-dir", "demo/libero_frame_cache", "--cached-only"' in dockerfile
+    assert "python -m demo.deployment_smoke --cached-only --bundled-cache-dir demo/libero_frame_cache" in dockerfile
+    # The hosted production target selects cached-only behavior through the
+    # online launch mode, avoiding a second copy of the mode's argv defaults.
+    assert 'CMD ["python", "-u", "-m", "demo", "online"]' in dockerfile
+    assert 'CMD ["python", "-u", "-m", "demo", "online", "--cached-only"]' not in dockerfile
     assert "termcolor==3.3.0" in requirements
     assert "future==0.18.2" in requirements
     assert "hydra-core==1.3.2" in requirements
