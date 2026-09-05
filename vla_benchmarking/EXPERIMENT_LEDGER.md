@@ -1,5 +1,34 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## No-arrow-trained SmolVLA expanded regression — 2026-09-05 18:34 UTC
+
+The final checkpoint from training job **1910197**, historically evaluated at
+**43/100 without arrows** in job **1910198**, was found intact on Legion.  The
+adapter, adapter configuration, training configuration, and training manifest
+SHA-256 values are respectively `80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092`,
+`6382c39c1df2e4ccfc43946b36aa014abb73e1767366f009999415981b01efb1`,
+`89a570fb1d07e93ec16adde1e78f18b0f0f7c0148da7896a7b5ba257797658f8`,
+and `95e376aff504265bea2bb53e63cc221fb42d7baa01dd6c3810317de85875c391`.
+
+Corrected immutable release `e634d8d3a83cf66609d84c05446a6cb6e21a4322`
+is being exercised through the organized LeRobot evaluator.  Smoke job
+**1921255** is RUNNING on one A40 for 10 cells; full job **1921256** is PENDING
+with dependency `afterok:1921255` for tasks 0-9, 50 episodes per task, and
+episode seeds 1000-1049.  Both keep the input condition at no arrows and use
+separate scratch/archive identities from grasp-controller job 1921211.
+
+Job **1921244** is a preserved pre-inference failure.  It revealed that the
+training-time pair sentinel had later been regenerated, although its referenced
+sealed pair manifest still retains the exact historical hash.  Dependent job
+**1921245** was cancelled without running.  The corrected release records both
+sentinel hashes and permits only semantic revalidation against the unchanged
+historical pair-manifest identity; the historical paired evaluator remains
+strict by default.  Neither failed/cancelled job contributes a result.
+
+This is an expanded current-code regression, not an exact replication of the
+historical 43/100 sample.  Any score remains partial until all 500 cells are
+validated and archived.
+
 ## Canonical cleanup regression run — 2026-09-05 17:48:06 UTC
 
 The organized canonical controller is being re-evaluated on **500**

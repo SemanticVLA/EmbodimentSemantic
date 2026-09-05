@@ -80,6 +80,55 @@
     },
     "conclusion_limit": "This is a refactor regression evaluation of the frozen policy. Until all 500 cells are terminal, every reported score is partial."
   },
+  "no_arrow_trained_expanded_regression": {
+    "status": "SMOKE_RUNNING_FULL_DEPENDENT",
+    "audited_at_utc": "2026-09-05T18:34:00Z",
+    "purpose": "Verify the preserved no-arrow-trained SmolVLA through the organized evaluator and measure an expanded 500-cell sealed-randomized score.",
+    "execution_commit": "e634d8d3a83cf66609d84c05446a6cb6e21a4322",
+    "training_job_id": "1910197",
+    "historical_evaluation_job_id": "1910198",
+    "historical_no_arrow_result": {
+      "successes": 43,
+      "planned": 100,
+      "per_task_successes": [9, 9, 6, 4, 1, 1, 6, 4, 3, 0]
+    },
+    "checkpoint_step": "029190",
+    "adapter_sha256": "80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092",
+    "adapter_config_sha256": "6382c39c1df2e4ccfc43946b36aa014abb73e1767366f009999415981b01efb1",
+    "train_config_sha256": "89a570fb1d07e93ec16adde1e78f18b0f0f7c0148da7896a7b5ba257797658f8",
+    "training_manifest_sha256": "95e376aff504265bea2bb53e63cc221fb42d7baa01dd6c3810317de85875c391",
+    "suite": "sealed_randomized",
+    "visual_condition": "none",
+    "tasks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "episodes_per_task": 50,
+    "seed_base": 1000,
+    "seed_range": [1000, 1049],
+    "planned_cells": 500,
+    "failed_preinference_attempt": {
+      "job_id": "1921244",
+      "status": "FAILED_BEFORE_INFERENCE",
+      "episodes_executed": 0,
+      "archive_status": "PRESERVED_FAILURE",
+      "reason": "The training-time pair sentinel file had been regenerated after job 1910197; the unchanged pair manifest remained recoverable."
+    },
+    "cancelled_dependent_attempt": {
+      "job_id": "1921245",
+      "status": "CANCELLED_WITHOUT_RUNNING"
+    },
+    "smoke": {
+      "job_id": "1921255",
+      "status": "RUNNING",
+      "planned_cells": 10,
+      "node": "compute-4-11"
+    },
+    "full_run": {
+      "job_id": "1921256",
+      "status": "PENDING_DEPENDENCY",
+      "dependency": "afterok:1921255",
+      "planned_cells": 500
+    },
+    "conclusion_limit": "This changes the evaluator revision and sample count relative to 43/100. Treat 43/100 as historical descriptive evidence and all new scores as partial until 500 validated cells are terminal."
+  },
   "v9d_molmo_candidate_campaigns": {
     "audited_at_utc": "2026-09-05T17:27:12Z",
     "frozen_baseline_commit": "fd24a4c5cf8da4991013ab18b15704523ad0836b",
