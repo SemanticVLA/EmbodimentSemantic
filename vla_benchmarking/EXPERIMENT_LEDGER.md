@@ -1,5 +1,242 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Placement XY partial — 2026-09-04 10:30:24 UTC
+
+Job1920138 RUNNING on compute-3-14, elapsed16:01. **3 successes /12 planned,
+10 terminal**, two remaining (sealed T9/1000 running, T9/1001 planned).
+Vanilla2/6, sealed1/6 planned. Retained-lift heuristic4, successful retries0,
+1483 reported actions, no unknown action counts,686.648s perception.
+Failure categories:no_candidates4,task_failure1,recovery_failed1,input_failure1.
+Sealed T6/1000 failed with ambiguous arrow direction; preserve it, no new glyph
+tuning. No arm stop recorded yet. Maximum possible final successes5/12 only
+ties the winner's matching screen; complete remaining cells and apply the
+predefined tie-breakers if needed. No improvement claim or full60 extension yet.
+Winner remains20/60 unchanged. CPU archive verification1920120 still pending
+Priority; no duplicate verification or GPU submission.
+
+## Placement XY live startup — 2026-09-04 10:17:14 UTC
+
+Job1920138 is RUNNING on compute-3-14 (elapsed2:50). Verified actual allocation
+reports one NVIDIA A40, BF16 support, and exact pinned Torch/Transformers and
+other package versions. All8 Molmo checkpoint shards loaded. Result counts
+not inspected in this startup check; do not infer canary improvement yet.
+CPU archive verification1920120 remains pending Priority. Ten-minute heartbeat
+updated and ACTIVE; winning Molmo-dense20/60 is preserved, not replaced.
+
+## Placement XY ablation submitted — 2026-09-04 10:13:53 UTC
+
+Job **1920138 PENDING (Priority)**: one A40, eight CPUs, 64 GB, four-hour cap;
+exactly 12 planned cells (T4/T6/T9, seeds1000/1001, vanilla/sealed_randomized).
+Fresh label `v9d_molmo_parked_visualxy_e8fcc99`, same clean immutable e8fcc99
+source, dense_agentview_clearance arm, rim_clearance prompt, parked observation,
+full_open, release20_visual_xy, RGB-D/no SAM, explicit screen-only.
+No default changes and no automatic full60 extension. Compare against the
+winning full-open arm's matching 5/12 (retained heuristic6,2788actions,949.150s
+perception); full60 winner remains20/60. Advance only if eligible and stronger
+under successes/planned then retained lifts, actions, latency; otherwise pivot.
+
+Operator `.codex/legion-local/molmo-parked-visualxy-e8fcc99/launch_visualxy_12.sbatch`
+SHA256 `59ef86da239fd52c8689307121717aef2ae3119b2acab8207ece1634ace4a8bd`,
+matched exactly on Legion before submission; remote immutable operator directory
+`/home/hjaber/EmbodimentSemantic_runtime/operator/molmo-parked-visualxy-e8fcc99-59ef86da`.
+Submission lock/receipt prevents duplicates. Targeted22 tests and independent
+reviewer APPROVE/bash syntax passed; no production-code change or full-suite loop.
+
+Run root: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/visualxy12/v9d_molmo_parked_visualxy_e8fcc99_1920138_run`.
+Output root: same parent, `v9d_molmo_parked_visualxy_e8fcc99_1920138_results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo_visualxy12/v9d_molmo_parked_visualxy_e8fcc99_1920138`.
+Logs: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/molmo_visualxy12_1920138.out` and `.err`.
+Archive is COPIED_UNVERIFIED until independently checked after completion.
+Runtime/startup/results are not yet verified: scheduler submission is not task success.
+
+## Continued improvement authorized — 2026-09-04 10:05 UTC
+
+User explicitly requests continued ten-minute repair/test work beyond the first
+improvement. Keep the existing heartbeat ACTIVE; 20/60 is now the score to beat.
+Preserve both the winning e8fcc99 release and frozen fd24 v9d. No timer-only
+code changes, running-release mutations, default promotion, or 200-cell expansion.
+
+Next: a fresh 12-cell parked/full-open dense-agentview rim_clearance run using
+existing release20_visual_xy instead of release_plus20mm. This single-factor
+placement-anchor ablation shifts placement XY by (+20.3,-5.2) mm while preserving
+grasping, opening, yaw, Z, release height, camera, model, and action budgets.
+Compare with the winner's matching 5/12 prefix, not its aggregate 20/60.
+Architect recommended the existing profile: no production changes needed.
+Preparation in progress; no new GPU job submitted yet. CPU archive verification
+1920120 remains pending (Priority) at 10:05:24 UTC.
+
+Post-hoc audit: 12 completed placement/retreat sequences ended task_failure
+(T4:2, T6:3, T9:7). Another overlapping 12 cells had a retained-lift heuristic
+followed by a placement-phase timeout (T4:0, T6:5, T9:7). These observations
+justify a placement experiment, not a claim that the offset is wrong or every
+retention heuristic represented a physically held bowl. No evaluator/object
+state is used to select online targets.
+
+Root inspected observed retreat images for sealed T4/1007, T6/1009 and T9/1004
+(local ignored placement-evidence-1919325 directory). They do not establish a
+systematic XY bias; gripper occlusion limits interpretation. T9/1004 open EEF
+was within 0.751 mm of its requested release target. Keep this an exploratory
+profile comparison, not a verified geometry repair. Independent targeted
+transfer-XY/integration/motion-profile/identity tests: 22 passed.
+
+## Completed canary improvement — 2026-09-04 09:52:51 UTC audit
+
+Job1919325 finished at05:01:33UTC, campaignstatuspartial_failed/exit2 because
+the40mm arm reached its repeated-operational-failure stop. The full-open arm
+continued and completed ALL60planned cells with returncode0,no stop/fatal:
+**20/60 =33.33%**, versus historical15/60=25% and14/60=23.33%. That is5more
+successes/+8.33percentage points over the better historical baseline. This is
+an observed exploratory canary improvement across different code revisions,
+not isolated proof of Molmo's causal effect or generalization.
+
+Winner: dense agentview MolmoPoint, rim_clearance prompt, parked observation,
+full_open, release_plus20mm, adaptive_short_v1, no SAM. Immutable source
+e8fcc99aacf962f8f43e14b25111f9df46c0c944, scientificidentity
+8db821deba40ff43a565b7a94a4893729baa08671017004bdacd26a2573ef176.
+Vanilla11/30, sealed9/30. T4/T6/T9 totals4/20,15/20,1/20 respectively.
+Retained-lift heuristic40, successfulretries3,17238actions,5480.213s perception.
+Failures:no_candidates13,task_failure12,grasp_failed10,recovery_failed5.
+All reported per-cell actions<=1200 (vanilla max933,sealed max1000),noneunknown.
+The15new successes supplement5preserved prefix successes;48new cells executed.
+
+40mm stopped with **16/60 planned,25terminal,35unattempted** after vanilla
+T6/1006 repeated the carried sealedT6/1000 ambiguous-arrow error.13newcells,
+retainedheuristic17,retry successes3,7108actions,1494.742s perception;
+vanilla13/30planned,sealed3/30planned. Failures:no_candidates3,grasp_failed1,
+input_failure2,task_failure1,recovery_failed2. No more renderer tuning or
+replacement of its stopped results. It is not a completed60-cell result.
+
+No active GPU runs at audit. Durable archive exists asCOPIED_UNVERIFIED;
+CPU-only verificationjob1920120 submitted09:55:04 to compare allrun/output
+file hashes and exact preservedprefixrecords. No new GPU experiments or
+defaultpromotion. Frozenfd24a4c v9d and main-checkout user edits untouched.
+
+## Full60 continuation partial — 2026-09-04 03:25:34 UTC
+
+Job **1919325 RUNNING** on compute-3-12.40mm has **15/60 planned successes,
+23terminal cells**, including the12preserved prefix cells plus11new cells.
+The new cells contributed9successes. Retained-lift heuristic16,successful
+retries2,5999reported actions,1326.706s perception; failure categories
+no_candidates3,grasp_failed1,task_failure1,recovery_failed2,input_failure1.
+Per-suite successes: vanilla12/30planned,sealed3/30planned. Only vanilla
+extension cells have executed so far; full-open extension has not started.
+No new operational-stop evidence; original input failure remains counted.
+
+This partial count matches the better historical baseline's final15/60 total,
+but37cells remain and historical commits differ. Do not declare a completed
+canary improvement or promote the default. Continue the current immutable run
+unchanged; no repair or new launch is justified by this audit.
+
+## Full60 continuation live verified — 2026-09-04 03:13:07 UTC
+
+Job **1919325 RUNNING** on compute-3-12; submitted03:10:25,started03:11:23.
+One NVIDIA A40/BF16 and all pinned packages verified, including Torch2.10.0
+and Transformers4.57.1; Molmo checkpoint shards loaded. Continuation manifest
+records exacte8fcc99 execution and matching40mm scientific identity. The first
+NEW vanillaT4/1002 cell is RUNNING; all prior prefix cells are present unchanged,
+including sealedT6/1000 failed. No new terminal result at this audit. This is
+verified live resume, not merely a submitted job; full-open follows sequentially.
+
+## Continuation path correction resubmitted — 2026-09-04 03:10:24 UTC
+
+Job **1919325** submitted with the SAME reviewed operator/source and disjoint
+run/results directories. Job1919324 failed before any workload or trial at
+03:08:23(exit2,elapsed0): root supplied OUTPUT_ROOT inside RUN_ROOT, which the
+wrapper correctly rejected. This was an operator submission mistake, not a
+canary outcome. Its logs are preserved. No prior trial was executed or replaced.
+
+Active label `v9d_molmo_full60_e8fcc99_op8d4af55c_r2`; do not duplicate.
+Run: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/full60/v9d_molmo_full60_e8fcc99_op8d4af55c_r2_run`.
+Results: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/full60/v9d_molmo_full60_e8fcc99_op8d4af55c_r2_results`.
+Archive: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo_full60/v9d_molmo_full60_e8fcc99_op8d4af55c_r2_1919325`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/molmo_parked_full60_1919325.out`.
+All prefix preservation,48newcells/arm,shared stop history and4h/A40 limits
+remain unchanged. This job has no new canary result at submission.
+
+## Same-SHA full60 continuation submitted — 2026-09-04 03:07:33 UTC
+
+Job **1919324** submitted successfully and is PENDING(Priority) at this audit.
+One A40/eight CPUs/64GB/four hours, sequential40mm then full-open, one persistent
+Molmo worker. Both eligible treatments advance to60planned cells each; retain
+their12terminal prefix cells and run only48new cells per arm (96new total).
+No SAM, no scientific-code revision, no default promotion, no200-cell expansion.
+
+Prefix job1919323 completed with exit0 and VERIFIED durable archive (03:06:30).
+Final40mm **6/12**, vanilla3/6,sealed3/6,retained evidence7,retry successes1,
+3231actions,683.125s perception. Full-open **5/12**, vanilla2/6,sealed3/6,
+retained evidence6,retry successes2,2788actions,949.150s perception;
+failuresno_candidates4,recovery_failed2,task_failure1. Both arms12terminal,
+returncode0,no stopreason/fatal. Historicalmatchingprefixes3/12each are from
+different commits; these are screen improvements, not final60-cell claims.
+
+External operator independently APPROVED; six focused tests include REAL matrix
+copy/resume48new calls, prefixfailure/interruption preservation, sourcebyte
+immutability and realStopRules history/deduplication. Existing identity/campaign
+checks50passed. Live `_validate_prefix` accepted BOTH complete Legionarms before
+submission. Prefix errors are replayed so their stop history is not reset.
+The original prefix remains untouched; continuation copies into a NEW root.
+
+Execution remains clean `e8fcc99aacf962f8f43e14b25111f9df46c0c944`.
+Operator driverSHA256 `8d4af55ccc27f79fa4b346006ea15c3d717656d79e18c5c0318bfa600169a451`;
+sbatchSHA256 `c9264d539d574b7eace6d7e93545e0fbb76c3a44024a487f221d7831abbd2062`.
+These are separately archived operator artifacts, not changes inside thatcommit.
+Operator directory: `/home/hjaber/EmbodimentSemantic_runtime/operator/molmo-full60-e8fcc99-8d4af55c`.
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/full60/v9d_molmo_full60_e8fcc99_op8d4af55c/results`.
+Archive target: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo_full60/v9d_molmo_full60_e8fcc99_op8d4af55c_1919324`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/molmo_parked_full60_1919324.out`.
+Do not resubmit. This wrapper marks archives COPIED_UNVERIFIED until independent
+post-run content-hash verification. SLURM accounting service was unavailable
+at03:06:30; prefix exit/archive evidence and fresh scheduler state were available.
+
+## Short-arrow 40 mm screen complete — 2026-09-04 02:50:03 UTC
+
+Job1919323 remains RUNNING on compute-3-12; the full-open arm is now running.
+The40mm arm completed all12planned cells with returncode0,no stop reason,
+and no fatal flag: **6/12 successes**, vanilla3/6,sealed3/6,retained-lift
+evidence7,one successful retry,3231actions,683.125s perception. Failures:
+input_failure1,no_candidates2,recovery_failed2,task_failure1. Retention is a
+proprioceptive heuristic, not physical proof. Full-open has4terminal vanilla
+cells withT9/1000running; no final comparison yet.
+
+Live short-arrow evidence: sealedT9/1000 refresh03/04 decoded the14.765px
+arrow and the retry placed successfully; sealedT6/1000 refresh03 still failed
+closed on the10.198px ambiguous arrow. That failed terminal cell stays counted.
+One targeted renderer repair was used; a second matching operational failure
+in the same extended cohort triggers the stop rule, not more glyph tuning.
+
+The complete40mm screen qualifies for a separately recorded same-SHA full60
+continuation; preparing an external no-SAM operator driver without changing
+the immutablee8fcc99 runner. Copy to a NEW root, preserve all12terminal cells,
+replay their StopRules history, and execute only48new cells. No submission yet.
+The historical matching prefixes were3/12 each, but their commits differ;
+6/12 is promising exploratory screen evidence, not a completed60-cell win.
+
+## Short-arrow canary first live result — 2026-09-04 02:33:14 UTC
+
+Job1919323 remains RUNNING.40mm arm:1/12planned,2finished; vanillaT4/1000
+placed successfully(222actions),T4/1001no evaluator result(64actions),T6/1000
+running. New clean/rendered frame hashes and decode audits are present on
+Legion; observed first arrows use the unchanged long-arrow branch. The short
+retry branch has not yet been observed in this audit. Full-open arm not started.
+
+## Short-arrow paired canary launched — 2026-09-04 02:30:40 UTC
+
+Job **1919323** is RUNNING on compute-3-12, submitted02:30:16 and started
+02:30:22 UTC. One A40/eight CPUs/64GB,two-hour limit. Clean immutable source
+`e8fcc99aacf962f8f43e14b25111f9df46c0c944`, label
+`v9d_molmo_shortarrow_e8fcc99`, matching source/runtime,CUDA,BF16,Torch2.10.0
+and Transformers4.57.1 verified. First parked_opening40mm arm started.
+No task results at startup audit. Both12-cell arms use adaptive_short_v1;
+no SAM, no automatic extension, no replacement of prior failed results.
+
+Output: `/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/v9d_molmo/runs/v9d_molmo_shortarrow_e8fcc99_1919323/results`.
+Archive target: `/home/hjaber/EmbodimentSemantic_archive/v9d_molmo/v9d_molmo_shortarrow_e8fcc99_1919323`.
+Log: `/home/hjaber/EmbodimentSemantic_runtime/operator/logs/v9d_molmo_campaign_1919323.out`.
+Bundle SHA256: `61efad938746768440d0c1b4499a9f896bffc17cceebc92e28cff599c217322b`.
+Do not resubmit. One targeted short-arrow repair has now been used; if the same
+failure persists twice, stop the arm and pivot from evidence without decoder
+relaxation or per-cell arrow-style tuning. Prior5/12 is promising, not a full60 win.
+
 ## Parked paired screen terminal — 2026-09-04 02:16:30 UTC
 
 Job1919322 is terminal, exit2, durable archive VERIFIED. Both arms stopped
