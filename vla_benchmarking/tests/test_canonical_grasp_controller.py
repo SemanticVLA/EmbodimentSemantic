@@ -40,6 +40,25 @@ def test_canonical_policy_and_lock_are_frozen():
     assert lock["canonical_config_sha256"] == config["config_hash"]
 
 
+def test_canonical_lock_matches_authoritative_result_tracker():
+    root = Path(__file__).parents[1]
+    lock = json.loads(
+        (root / "arrow_grasp_controller" / "configs" / "active_policy.lock.json").read_text()
+    )
+    tracker = json.loads((root / "evaluation_results_tracker.json").read_text())
+    result = tracker["canonical_grasp_controller"]
+
+    assert result["status"] == "FINAL"
+    assert result["job_id"] == lock["source_job_id"]
+    assert result["source_release_commit"] == lock["source_release_commit"]
+    assert result["canonical_config_sha256"] == lock["canonical_config_sha256"]
+    assert result["scientific_identity_hash"] == lock["scientific_identity_hash"]
+    assert result["archive_root"] == lock["archive"]
+    assert result["per_task_successes"] == lock["per_task_successes"]
+    assert result["successes"] == sum(result["per_task_successes"].values()) == 87
+    assert result["planned"] == result["terminal_cells"] == 100
+
+
 def test_historical_controller_config_is_not_executable():
     with pytest.raises(ControllerConfigError):
         load_controller_config("obsolete_controller.json")

@@ -1,5 +1,44 @@
 # SmolVLA Arrow Experiments: Authoritative Takeover Ledger
 
+## Canonical grasp controller — 2026-09-05 17:27:12 UTC audit
+
+The sole active grasp-controller treatment is `failure_opening40_retreat80`,
+verified on the 100-cell sealed-randomized matrix as **87/100 (87%)** in Legion
+job **1920556**. Per-task successes were T0 10/10, T1 10/10, T2 10/10,
+T3 10/10, T4 7/10, T5 10/10, T6 8/10, T7 10/10, T8 10/10, and T9 2/10.
+This terminal record supersedes older ledger snapshots that call the 20/60 e8
+canary the winner; those entries remain below as time-stamped history only.
+
+The executed source release was
+`b4fb87759ae3a1ea2cd518cd201a1a737bb14e80`. Scientific identity
+`717d00640ab5b73fed0dcbbf9d7703786d2a527efc2e02205d16f34bbc13465a`;
+underlying controller digest
+`60f4f5f9ecfde7b4830f376ab06cfc706e2ef175d86817c42a0adb7cddd46c0c`;
+canonical configuration SHA-256
+`37497fd0b2f60346b9ffd1501ccc743046c7fa2370ef6fa9531a7204f69cc044`.
+Summary, manifest, status, and runtime-version SHA-256 values are respectively
+`569ac1e8400af9f80047fd8f6a6060946c3c0e80dfaeb348e04b655e51d3472a`,
+`eb0788ce41e10215f4ee730d53d52360cd1731a6e6a91999af385babd127b369`,
+`b15e0bd6b9bda542a7c7662723a22ac36f9181ae2e2e3b0320a5661370a7cd52`, and
+`dcb7f35401b81cb634b23ced3866b7124c8bab54b3f79bdecfd2372a4fcf1ec3`.
+The immutable archive is
+`/home/hjaber/EmbodimentSemantic_archive/molmo_failure_sealed100/molmo_failure_sealed100_fa1ae83_1920556`.
+The 87% result belongs to the executed release; the organized default is
+behavior-equivalent code and is not claimed as a separately rerun experiment.
+
+## Placement XY terminal correction — 2026-09-05 17:27:12 UTC audit
+
+Legion job **1920138** completed its 12-cell screen with exit code 0:
+**3/12**, 12 terminal, retained-lift heuristic 5, successful retries 0,
+2,866 reported actions, and 1,222.745 seconds of perception latency. Vanilla
+was 2/6 and sealed-randomized was 1/6. Failures were no_candidates 4,
+recovery_failed 3, task_failure 1, and input_failure 1. It did not outperform
+the matching 5/12 reference prefix and was not extended. Its archive remains
+`COPIED_UNVERIFIED` at
+`/home/hjaber/EmbodimentSemantic_archive/v9d_molmo_visualxy12/v9d_molmo_parked_visualxy_e8fcc99_1920138`.
+This terminal correction supersedes the earlier RUNNING snapshots immediately
+below without deleting their historical observations.
+
 ## Placement XY partial — 2026-09-04 10:30:24 UTC
 
 Job1920138 RUNNING on compute-3-14, elapsed16:01. **3 successes /12 planned,
