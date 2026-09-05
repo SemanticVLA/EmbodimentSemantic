@@ -72,6 +72,23 @@ def test_task6_archived_missing_audit_uses_schedule_only(tmp_path: Path) -> None
     assert result["checks"]["archived_state_hash_evidence"] is True
 
 
+def test_archived_missing_hash_set_includes_non_task6_cells(tmp_path: Path) -> None:
+    _manifest_pair(tmp_path)
+    missing = {(4, 1, 1001), (4, 5, 1005), (6, 0, 1000), (9, 1, 1001), (9, 2, 1002), (9, 8, 1008)}
+    terminal_path = tmp_path / "arrow_pick_place_matrix_manifest.jsonl"
+    records = []
+    for line in terminal_path.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        if (record["task_id"], record["episode_index"], record["seed"]) in missing:
+            del record["audit"]["environment_audit"]["state_hash_sha256_pre_settle"]
+            del record["audit"]["environment_audit"]["state_hash_sha256"]
+        records.append(record)
+    terminal_path.write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
+    loaded = load_reference_protocol(tmp_path, require_expected_hash=False)
+    target = next(cell for cell in loaded.cells if cell["task_id"] == 4 and cell["episode_index"] == 1)
+    assert target["state_hash_evidence"] == "unavailable_due_archived_input_failure"
+
+
 def test_episode_runner_emits_no_language_and_actions(monkeypatch, tmp_path: Path) -> None:
     class Env:
         def __init__(self):

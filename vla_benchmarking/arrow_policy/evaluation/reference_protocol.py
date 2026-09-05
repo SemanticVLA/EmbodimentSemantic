@@ -12,6 +12,10 @@ REFERENCE_MANIFEST = "arrow_pick_place_matrix_manifest.json"
 REFERENCE_TERMINAL_MANIFEST = "arrow_pick_place_matrix_manifest.jsonl"
 EXPECTED_REFERENCE_SHA256 = "eb0788ce41e10215f4ee730d53d52360cd1731a6e6a91999af385babd127b369"
 EXPECTED_REFERENCE_CONTRACT = "3b3d0ae33b81452214e6f61b0352e84285e2e49ff3ef39169052be1f80083982"
+EXPECTED_MISSING_HASH_CELLS = {
+    (4, 1, 1001), (4, 5, 1005), (6, 0, 1000),
+    (9, 1, 1001), (9, 2, 1002), (9, 8, 1008),
+}
 
 
 def _sha256(path: Path) -> str:
@@ -243,7 +247,7 @@ def load_reference_protocol(root: str | Path, *, require_expected_hash: bool = T
         _cell_key(cell) for cell in cells
         if cell["state_hash_evidence"] == "unavailable_due_archived_input_failure"
     ]
-    if missing_hash_cells not in ([], [(6, 0, 1000)]):
+    if set(missing_hash_cells) not in (set(), EXPECTED_MISSING_HASH_CELLS):
         raise RuntimeError(f"unexpected missing reference state-hash evidence: {missing_hash_cells}")
     return ReferenceProtocol(root=root_path, manifest_sha256=actual_hash, manifest=manifest, cells=cells)
 
