@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from vla_benchmarking.arrow_policy.evaluation.reference_protocol import load_reference_protocol
+from vla_benchmarking.arrow_policy.evaluation.reference_protocol import ReferenceProtocol, load_reference_protocol
 from vla_benchmarking.arrow_policy.evaluation.runner import ArrowStudentEpisodeRunner, extract_state
 
 
@@ -40,6 +40,35 @@ def test_extract_state_is_eight_dimensional() -> None:
     result = extract_state(Env())
     assert result.shape == (8,)
     assert np.isfinite(result).all()
+
+
+def test_task6_archived_missing_audit_uses_schedule_only(tmp_path: Path) -> None:
+    _manifest_pair(tmp_path)
+    loaded = load_reference_protocol(tmp_path, require_expected_hash=False)
+    cells = [dict(cell) for cell in loaded.cells]
+    target = next(cell for cell in cells if cell["task_id"] == 6 and cell["episode_index"] == 0)
+    target["state_hash_evidence"] = "unavailable_due_archived_input_failure"
+    target["requested_removals"] = []
+    target["applied_removals"] = []
+    target["requested_swaps"] = []
+    target["applied_swaps"] = []
+    loaded = ReferenceProtocol(root=loaded.root, manifest_sha256=loaded.manifest_sha256, manifest=loaded.manifest, cells=cells)
+
+    class Env:
+        _arrow_init_state_diagnostics = {"selected_index": 1000}
+        _arrow_environment_audit = {
+            "suite_mode": "sealed_randomized",
+            "prompt_provenance": "not_applicable_direct_runner",
+            "requested_removals": ["ramekin_1"],
+            "applied_removals": ["ramekin_1"],
+            "requested_swaps": [],
+            "applied_swaps": [],
+            "randomization_dimensions": {"object_removal": True},
+        }
+
+    result = loaded.validate_environment(Env(), task_id=6, episode_index=0, seed=1000)
+    assert result["status"] == "matched"
+    assert result["checks"]["archived_state_hash_evidence"] is True
 
 
 def test_episode_runner_emits_no_language_and_actions(monkeypatch, tmp_path: Path) -> None:

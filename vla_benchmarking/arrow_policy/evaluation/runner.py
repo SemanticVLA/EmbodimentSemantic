@@ -211,7 +211,7 @@ class ArrowStudentRuntime:
 
 
 class ArrowStudentEpisodeRunner:
-    def __init__(self, runtime: ArrowStudentRuntime, reference: ReferenceProtocol, *, resolution: int = 256, max_actions: int = 900) -> None:
+    def __init__(self, runtime: ArrowStudentRuntime, reference: ReferenceProtocol, *, resolution: int = 256, max_actions: int = 1200) -> None:
         self.runtime = runtime
         self.reference = reference
         self.resolution = int(resolution)

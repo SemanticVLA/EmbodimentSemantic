@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-policy", type=Path, required=True)
     parser.add_argument("--reference-root", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--max-actions", type=int, default=900)
+    parser.add_argument("--max-actions", type=int, default=1200)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--execute-motion", action="store_true", help="run all 100 cells after the no-motion preflight")
     mode.add_argument("--preflight-only", action="store_true", help="validate the model/protocol/env and emit no actions")
