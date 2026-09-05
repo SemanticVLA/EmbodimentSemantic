@@ -14,15 +14,26 @@ param(
 
     [switch]$VideosOnly,
 
-    [string]$DesktopRoot = [Environment]::GetFolderPath('Desktop')
+    [string]$DesktopRoot = [Environment]::GetFolderPath('Desktop'),
+
+    [string]$LegionHelperRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $gateway = 'cagliero_thesis_students@mp4.polito.it'
 $legion = 'hjaber@hpc-legionlogin.polito.it'
-$invokeLegion = Join-Path $PSScriptRoot 'Invoke-Legion.ps1'
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+if ([string]::IsNullOrWhiteSpace($LegionHelperRoot)) {
+    $LegionHelperRoot = Join-Path $repositoryRoot '.codex\legion-local'
+}
+$helperRoot = [IO.Path]::GetFullPath($LegionHelperRoot)
+$invokeLegion = Join-Path $helperRoot 'Invoke-Legion.ps1'
+$askpass = Join-Path $helperRoot 'legion-askpass.cmd'
 if (-not (Test-Path -LiteralPath $invokeLegion -PathType Leaf)) {
     throw "Missing Legion command helper: $invokeLegion"
+}
+if (-not (Test-Path -LiteralPath $askpass -PathType Leaf)) {
+    throw "Missing Legion askpass helper: $askpass"
 }
 
 if ([string]::IsNullOrWhiteSpace($DesktopRoot)) { throw 'DesktopRoot is required.' }
@@ -47,7 +58,7 @@ function Invoke-ScopedSsh {
     try {
         # Reuse the repository's credential-vault askpass path; credentials are
         # never placed in command arguments, files, or exported environment.
-        $env:SSH_ASKPASS = Join-Path $PSScriptRoot 'legion-askpass.cmd'
+        $env:SSH_ASKPASS = $askpass
         $env:SSH_ASKPASS_REQUIRE = 'force'
         $env:DISPLAY = 'codex-legion'
         & $Operation

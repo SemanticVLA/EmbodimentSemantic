@@ -10,7 +10,7 @@ pytest.ini
 *.mp4
 CLAUDE.md
 ~BROMIUM/
-.codex
+.codex/
 PROJECT_CONTEXT.md
 AGENTS.md
 .cursor/

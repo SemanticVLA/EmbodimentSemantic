@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[2] / ".codex" / "legion-local" / "Export-LegionCanaryArtifacts.ps1"
+SCRIPT = Path(__file__).resolve().parents[1] / "tools" / "legion" / "Export-LegionCanaryArtifacts.ps1"
 
 
 def test_canary_export_uses_scoped_legion_wrapper_and_verifies_artifacts():
