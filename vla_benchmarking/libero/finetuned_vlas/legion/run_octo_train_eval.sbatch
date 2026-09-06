@@ -80,7 +80,7 @@ git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 # TensorFlow 2.15 environment intentionally uses protobuf 4.x.  Keep the
 # training/materialization environment internally compatible.
 "$PYTHON" -m pip install --disable-pip-version-check \
-  "tensorflow-metadata==1.15.0" "protobuf==3.20.3"
+  "tensorflow-metadata==1.15.0" "protobuf==3.20.3" "etils==1.5.2"
 "$PYTHON" -m pip install --disable-pip-version-check h5py pillow
 "$PYTHON" -m pip install --disable-pip-version-check -e "$OCTO_REPO" --no-deps
 "$PYTHON" -m pip install --disable-pip-version-check \
