@@ -4,11 +4,12 @@
 
 #SBATCH --job-name=robocasa_arrow21
 #SBATCH --partition=gpu_a40
+#SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=1-23:59:00
+#SBATCH --time=1-00:00:00
 #SBATCH --output=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%j.out
 #SBATCH --error=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%j.err
 
