@@ -332,7 +332,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from .preflight import run_preflight
     from .preflight import runtime_closure_paths
     from vla_benchmarking.libero.evaluation.policy_adapter import derive_runtime_receipt
-    from vla_benchmarking.libero.evaluation.plan import validate_plan
+    from vla_benchmarking.libero.evaluation.plan import validate_libero_source_hashes, validate_plan
     from vla_benchmarking.libero.evaluation.libero_policy_rollout import run_native_policy_eval
 
     evidence = run_preflight(
@@ -356,6 +356,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if evidence.get("checkpoint_sha256") and str(evidence["checkpoint_sha256"]) != str(observed_checkpoint_sha256):
         raise SystemExit("native Octo checkpoint tree hash disagrees with its preflight receipt")
     plan = validate_plan(json.loads(args.plan.read_text(encoding="utf-8")))
+    validate_libero_source_hashes(plan)
     config = COMMUNITY_EVAL_CONFIG if args.mode == "community_eval" else MATCHED_TRAIN_CONFIG
     if args.mode == "community_eval" and args.dataset_manifest is not None:
         raise SystemExit("community evaluation is bound to checkpoint-owned statistics, not a caller manifest")

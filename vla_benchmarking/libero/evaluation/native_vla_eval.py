@@ -26,7 +26,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .libero_policy_rollout import ProductionLiberoEnvironmentFactory, run_native_policy_eval
-from .plan import validate_plan
+from .plan import validate_libero_source_hashes, validate_plan
 from .policy_adapter import (
     bind_adapter_provenance,
     derive_checkpoint_receipt,
@@ -336,6 +336,7 @@ def run_native_vla_eval(
     checkpoint_revision: str | None = None,
 ) -> list[Any]:
     plan = validate_plan(json.loads(Path(plan_path).read_text(encoding="utf-8")))
+    validate_libero_source_hashes(plan)
     checkpoint = Path(checkpoint_path).expanduser().resolve()
     if not checkpoint.exists():
         raise FileNotFoundError(

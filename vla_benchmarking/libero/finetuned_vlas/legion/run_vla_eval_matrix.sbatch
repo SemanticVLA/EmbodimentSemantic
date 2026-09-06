@@ -26,9 +26,6 @@ archive_on_exit() {
   rc=$?
   trap - EXIT
   set +e
-  if [[ -f "${LIBERO_CONFIG_BACKUP:-}" ]]; then
-    cp -a "$LIBERO_CONFIG_BACKUP" "$HOME/.libero/config.yaml"
-  fi
   mkdir -p "$ARCHIVE_ROOT"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a "$RUN_ROOT/" "$ARCHIVE_ROOT/"
@@ -40,27 +37,31 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
-LIBERO_CONFIG_BACKUP="$RUN_ROOT/libero_config.yaml.backup"
-if [[ -f "$HOME/.libero/config.yaml" ]]; then
-  cp -a "$HOME/.libero/config.yaml" "$LIBERO_CONFIG_BACKUP"
-  sed "s|~/.cache/libero|$HOME/.cache/libero|g" "$LIBERO_CONFIG_BACKUP" > "$HOME/.libero/config.yaml"
-fi
-
 cd "$HOME/EmbodimentSemantic"
-export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$HOME/.libero}"
+export LIBERO_CONFIG_PATH="$RUN_ROOT/libero_config"
 export MUJOCO_GL=egl
 export HF_HOME="${HF_HOME:-$SCRATCH_FLASH/EmbodimentSemantic_runtime/cache/hf}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export PYTHONNOUSERSITE=1
 
-# The pip LIBERO package resolves BDDL files from the user cache, while the
-# pinned source checkout carries the canonical task definitions.  Materialize
-# that exact source tree before constructing any simulator environment.
-LIBERO_BDDL_SOURCE="$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO/libero/libero/bddl_files"
-LIBERO_BDDL_TARGET="$HOME/.cache/libero/bddl_files"
+# Each concurrent job gets its own LIBERO config and BDDL tree.  Never mutate
+# the shared ~/.libero/config.yaml while another SLURM job may be rolling out.
+export LIBERO_SOURCE_ROOT="$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO"
+export LIBERO_SOURCE_COMMIT="8f1084e3132a39270c3a13ebe37270a43ece2a01"
+export LIBERO_BDDL_SOURCE="$LIBERO_SOURCE_ROOT/libero/libero/bddl_files"
+export LIBERO_BDDL_TARGET="$RUN_ROOT/libero_cache/bddl_files"
 test -d "$LIBERO_BDDL_SOURCE"
-mkdir -p "$LIBERO_BDDL_TARGET"
+[[ "$(git -C "$LIBERO_SOURCE_ROOT" rev-parse HEAD)" == "$LIBERO_SOURCE_COMMIT" ]]
+[[ -z "$(git -C "$LIBERO_SOURCE_ROOT" status --porcelain --untracked-files=all)" ]]
+mkdir -p "$LIBERO_CONFIG_PATH" "$LIBERO_BDDL_TARGET"
 rsync -a "$LIBERO_BDDL_SOURCE/" "$LIBERO_BDDL_TARGET/"
+cat > "$LIBERO_CONFIG_PATH/config.yaml" <<YAML
+benchmark_root: $HOME/.cache/libero/benchmark
+bddl_files: $LIBERO_BDDL_TARGET
+init_states: $HOME/.cache/libero/init_files
+datasets: $HOME/.cache/libero/datasets
+assets: $HOME/.cache/libero/assets
+YAML
 
 nvidia-smi -L
 "$BASE_PYTHON" -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
@@ -139,6 +140,7 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
     "pi05": {"repo_id": "$PI05_REPO", "revision": "$PI05_REVISION", "path": "$PI05_CHECKPOINT", "fine_tuned_again": false}
   },
   "schedule": {"tasks": 10, "episodes_per_task": 10, "conditions": ["vanilla", "sealed_randomized"], "episodes_per_model": 200},
+  "libero_source": {"commit": "$LIBERO_SOURCE_COMMIT", "bddl_tree_sha256": "$(LIBERO_SOURCE_ROOT="$LIBERO_SOURCE_ROOT" LIBERO_BDDL_SOURCE="$LIBERO_BDDL_SOURCE" LIBERO_SOURCE_COMMIT="$LIBERO_SOURCE_COMMIT" "$PYTHON" -c 'from vla_benchmarking.libero.evaluation.plan import libero_source_hashes; print(libero_source_hashes()[\"libero_bddl_tree_sha256\"])')"},
   "dataset_manifest": "$DATASET_MANIFEST"
 }
 JSON

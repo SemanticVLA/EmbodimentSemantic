@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -107,7 +109,63 @@ def shared_source_hashes(repo_root: str | Path | None = None) -> dict[str, str |
         "vla_benchmarking/libero/finetuned_vlas/common/source_contract.py",
         "vla_benchmarking/libero/shared/config.py",
     )
-    return {relative: _sha256_file(root / relative) for relative in paths}
+    hashes: dict[str, str | None] = {relative: _sha256_file(root / relative) for relative in paths}
+    # LIBERO task definitions are supplied by a separately maintained nested
+    # checkout on Legion.  Bind that exact checkout when a launcher provides
+    # it, so plans cannot silently drift away from the evaluated BDDL files.
+    if os.environ.get("LIBERO_SOURCE_ROOT"):
+        hashes.update(libero_source_hashes())
+    return hashes
+
+
+def _tree_sha256(root: Path) -> str:
+    digest = hashlib.sha256()
+    files = sorted(path for path in root.rglob("*") if path.is_file())
+    if not files:
+        raise ValueError(f"source tree is empty: {root}")
+    for path in files:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def libero_source_hashes() -> dict[str, str]:
+    """Return and validate the nested LIBERO checkout provenance."""
+
+    source_root = Path(os.environ["LIBERO_SOURCE_ROOT"]).expanduser().resolve()
+    bddl_root = Path(os.environ["LIBERO_BDDL_SOURCE"]).expanduser().resolve()
+    if not source_root.is_dir() or not bddl_root.is_dir():
+        raise ValueError("LIBERO source/BDDL roots are missing")
+    commit = subprocess.check_output(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    dirty = subprocess.check_output(
+        ["git", "-C", str(source_root), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    ).strip()
+    if dirty:
+        raise ValueError(f"nested LIBERO checkout is dirty: {source_root}")
+    expected = os.environ.get("LIBERO_SOURCE_COMMIT", "").strip()
+    if expected and commit != expected:
+        raise ValueError(f"nested LIBERO commit mismatch: {commit} != {expected}")
+    return {
+        "libero_source_commit": commit,
+        "libero_bddl_tree_sha256": _tree_sha256(bddl_root),
+    }
+
+
+def validate_libero_source_hashes(plan: Mapping[str, Any]) -> None:
+    """Fail closed if the runtime LIBERO task definitions differ from plan."""
+
+    expected = plan.get("source_hashes", {})
+    if not isinstance(expected, Mapping) or "libero_source_commit" not in expected:
+        return
+    observed = libero_source_hashes()
+    for key in ("libero_source_commit", "libero_bddl_tree_sha256"):
+        if str(expected.get(key, "")) != str(observed.get(key, "")):
+            raise ValueError(f"LIBERO provenance mismatch for {key}")
 
 
 def _schedule_cells(cells: Sequence[EvaluationCell]) -> list[dict[str, int]]:
