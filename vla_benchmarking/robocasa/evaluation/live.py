@@ -18,7 +18,12 @@ import numpy as np
 
 from ..environment.runtime import create_robocasa_env, validate_action_layout
 from ..shared.task_manifest import PickPlaceTask, RoleSpec, get_task
-from .adapter import PandaOmronActionAdapter, ROBOCASA_CAMERA
+from .adapter import (
+    PandaOmronActionAdapter,
+    ROBOCASA_CAMERA,
+    adapt_capture_to_base,
+    world_base_transform,
+)
 from .arrow import render_bbox_center_arrow
 from .prompt import adapt_source_noun
 
@@ -218,6 +223,11 @@ def _world_points(env: Any, entity: Any, role: RoleSpec) -> np.ndarray:
             # interior placement target.
             points = np.asarray(regions, dtype=np.float64)
     elif callable(getattr(entity, "get_bbox_points", None)):
+        if role.kind in {"fixture", "region"}:
+            raise RoboCasaLiveError(
+                f"fixture role {role.key!r} exposes no interior placement region; "
+                "refusing to target its exterior bbox"
+            )
         pose = _object_pose(env, entity, str(role.key)) if role.kind == "object" else None
         if pose is None:
             if role.kind == "object" and getattr(env, "sim", None) is not None:
@@ -332,6 +342,10 @@ class RoboCasaControllerEnv:
         if self._horizon is not None and self._horizon <= 0:
             raise RoboCasaLiveError(f"invalid RoboCasa horizon {self._horizon}")
         self._steps = 0
+        self._arrow_depth_encoding = "normalized"
+        self._arrow_physical_camera_name = ROBOCASA_CAMERA
+        self._world_from_base_B0: np.ndarray | None = None
+        self._base_from_world_B0: np.ndarray | None = None
         self._arrow_settle_diagnostics = {"settled": True, "source": "robocasa_reset"}
 
     def __getattr__(self, name: str) -> Any:
@@ -346,10 +360,46 @@ class RoboCasaControllerEnv:
         self._steps = 0
         observation = result[0] if isinstance(result, tuple) and result else result
         if isinstance(observation, Mapping):
-            self._last_observation = observation
-        if isinstance(result, tuple) and len(result) == 2:
-            return result
+            self._freeze_base_frame(observation)
+            adapted = self._last_observation
+            if isinstance(result, tuple):
+                return (adapted, *result[1:])
+            return adapted
         return result
+
+    def _freeze_base_frame(self, observation: Mapping[str, Any]) -> None:
+        """Freeze B0 at reset and expose only base-relative EEF aliases downstream."""
+        if self._base_from_world_B0 is None:
+            if "robot0_base_pos" not in observation or "robot0_base_quat" not in observation:
+                # Dependency-light contract fixtures may intentionally omit
+                # robot observations; keep their identity frame without making
+                # this path executable for a real RoboCasa cell.
+                if observation:
+                    raise RoboCasaLiveError(
+                        "RoboCasa reset observation must expose robot0_base_pos and robot0_base_quat"
+                    )
+                self._world_from_base_B0 = np.eye(4, dtype=np.float64)
+                self._base_from_world_B0 = np.eye(4, dtype=np.float64)
+            else:
+                self._world_from_base_B0, self._base_from_world_B0 = world_base_transform(observation)
+        adapted = dict(observation)
+        base_pos = adapted.get("robot0_base_to_eef_pos")
+        base_quat = adapted.get("robot0_base_to_eef_quat")
+        if base_pos is None or base_quat is None:
+            if not observation:
+                self._last_observation = adapted
+                return
+            raise RoboCasaLiveError(
+                "RoboCasa reset observation must expose robot0_base_to_eef_pos and "
+                "robot0_base_to_eef_quat"
+            )
+        # The canonical controller's aliases now mean EEF pose in B0.  Do not
+        # pass world-frame robot0_eef_* values to the motion engine.
+        adapted["robot0_eef_pos"] = np.asarray(base_pos, dtype=np.float64)
+        adapted["robot0_eef_quat"] = np.asarray(base_quat, dtype=np.float64)
+        adapted.pop("eef_pos", None)
+        adapted.pop("eef_quat", None)
+        self._last_observation = adapted
 
     def step(self, action: Sequence[float]) -> Any:
         if self._horizon is not None and self._steps >= self._horizon:
@@ -382,7 +432,11 @@ class RoboCasaControllerEnv:
         self._steps += 1
         observation = result[0] if isinstance(result, tuple) and result else result
         if isinstance(observation, Mapping):
-            self._last_observation = observation
+            self._freeze_base_frame(observation)
+            if isinstance(result, tuple):
+                result = (self._last_observation, *result[1:])
+            else:
+                result = self._last_observation
         if isinstance(result, tuple) and result and isinstance(result[-1], Mapping):
             self._last_info = dict(result[-1])
         return result
@@ -396,13 +450,19 @@ class RoboCasaControllerEnv:
         if sim is not None:
             width = int(kwargs.pop("width", 256))
             height = int(kwargs.pop("height", 256))
-            kwargs.pop("depth", None)
-            result = render_owner.render(height=height, width=width, **kwargs)
+            depth = bool(kwargs.pop("depth", False))
+            result = render_owner.render(height=height, width=width, depth=depth, **kwargs)
         else:
             result = render_owner.render(*args, **kwargs)
+        if sim is not None:
+            # ``sim.render`` is the sole native bottom-left producer.  Flip
+            # that raw result once; wrapper observation fallbacks pass through.
+            if isinstance(result, tuple) and len(result) >= 2:
+                return (np.asarray(result[0])[::-1].copy(), np.asarray(result[1])[::-1].copy(), *result[2:])
+            return np.asarray(result)[::-1].copy()
         if isinstance(result, tuple) and len(result) >= 2:
-            return (np.asarray(result[0])[::-1].copy(), np.asarray(result[1])[::-1].copy(), *result[2:])
-        return np.asarray(result)[::-1].copy()
+            return (np.asarray(result[0]).copy(), np.asarray(result[1]).copy(), *result[2:])
+        return np.asarray(result).copy()
 
     @property
     def steps(self) -> int:
@@ -428,6 +488,16 @@ def official_success(env: RoboCasaControllerEnv) -> bool:
     if callable(checker):
         return bool(checker())
     return False
+
+
+def _official_outcome_from_controller_audit(audit: Mapping[str, Any]) -> tuple[bool, bool]:
+    """Return ``(evaluator_called, official_success)`` from the canary manifest."""
+
+    final_result = audit.get("final_result")
+    if not isinstance(final_result, Mapping):
+        return False, False
+    evaluator_called = bool(final_result.get("evaluator_called"))
+    return evaluator_called, evaluator_called and final_result.get("evaluator_success") is True
 
 
 def run_live_cell(*, task_name: str, seed: int, output_dir: Path, resolution: int = 256, execute_motion: bool = True) -> dict[str, Any]:
@@ -476,8 +546,29 @@ def run_live_cell(*, task_name: str, seed: int, output_dir: Path, resolution: in
         if not execute_motion:
             result.update({"status": "preflight_complete", "terminal_reason": "motion_not_requested"})
             return result
+        def arrow_refresh_builder(controller_env: RoboCasaControllerEnv, controller_capture: Any):
+            """Reproject current roles against the exact fresh RGB-D frame."""
+            if controller_env._world_from_base_B0 is None:
+                raise RoboCasaLiveError("cannot refresh arrow before freezing B0")
+            world_capture = adapt_capture_to_base(
+                controller_capture, controller_env._world_from_base_B0
+            )
+            refreshed_bboxes, refreshed_source = project_task_bboxes(
+                controller_env, world_capture, task
+            )
+            refreshed_arrow, _ = render_bbox_center_arrow(
+                np.asarray(controller_capture.rgb, dtype=np.uint8),
+                refreshed_bboxes,
+                source=refreshed_source,
+                destination=task.destination.key,
+                allow_fallback=False,
+            )
+            return refreshed_arrow, refreshed_bboxes, refreshed_source, task.destination.key
         try:
             from ..arrow_grasp_controller.controller.runner import run_episode
+            if env._base_from_world_B0 is None:
+                raise RoboCasaLiveError("reset did not establish frozen PandaOmron base frame")
+            controller_capture = adapt_capture_to_base(capture, env._base_from_world_B0)
             audit = run_episode(
                 env=env,
                 seed=seed,
@@ -487,10 +578,23 @@ def run_live_cell(*, task_name: str, seed: int, output_dir: Path, resolution: in
                 source=source_key,
                 destination=task.destination.key,
                 resolution=resolution,
-                capture=capture,
+                capture=controller_capture,
                 evaluator=official_success,
+                arrow_refresh_builder=arrow_refresh_builder,
+                source_prompt=adapt_source_noun(source_label),
             )
-            result.update({"status": "success" if bool(audit.get("evaluator_success")) else "task_failure", "terminal_reason": "official_success_evaluated", "audit": audit, "official_success": bool(audit.get("evaluator_success")), "actions_executed": env.steps})
+            evaluator_called, succeeded = _official_outcome_from_controller_audit(audit)
+            result.update({
+                "status": "success" if succeeded else "task_failure",
+                "terminal_reason": (
+                    "official_success_evaluated"
+                    if evaluator_called
+                    else "controller_completed_without_official_evaluation"
+                ),
+                "audit": audit,
+                "official_success": succeeded,
+                "actions_executed": env.steps,
+            })
         except Exception as exc:
             status = "horizon_exhaustion" if isinstance(exc, RoboCasaHorizonError) else "controller_failure"
             result.update({"status": status, "terminal_reason": type(exc).__name__, "error": str(exc), "actions_executed": env.steps})

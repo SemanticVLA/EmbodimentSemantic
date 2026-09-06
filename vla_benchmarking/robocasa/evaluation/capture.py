@@ -143,7 +143,8 @@ def capture_robocasa_rgbd(env: Any, *, camera_name: str, resolution: int) -> Cap
         except (TypeError, NotImplementedError):
             result = None
     observation = getattr(env, "_last_observation", None)
-    if isinstance(result, tuple) and len(result) >= 2:
+    from_render = isinstance(result, tuple) and len(result) >= 2
+    if from_render:
         rgb_raw, depth_raw = result[0], result[1]
     elif isinstance(observation, Mapping):
         rgb_raw = observation.get(f"video.{camera_name}")
@@ -156,8 +157,13 @@ def capture_robocasa_rgbd(env: Any, *, camera_name: str, resolution: int) -> Cap
         raise RuntimeError(f"could not capture aligned {camera_name} RGB/depth")
     if rgb_raw is None or depth_raw is None:
         raise RuntimeError("RoboCasa capture did not provide both RGB and depth")
-    rgb = _as_rgb(np.asarray(rgb_raw)[::-1])
-    normalized = _as_depth(np.asarray(depth_raw)[::-1], rgb.shape[:2])
+    # Only raw ``sim.render`` is bottom-left-origin.  Observation dictionaries
+    # are already wrapper-normalized top-left images and must not be flipped.
+    if from_render:
+        rgb_raw = np.asarray(rgb_raw)[::-1]
+        depth_raw = np.asarray(depth_raw)[::-1]
+    rgb = _as_rgb(rgb_raw)
+    normalized = _as_depth(depth_raw, rgb.shape[:2])
     _, sanitization = sanitize_normalized_depth(normalized)
     calibration = build_camera_calibration(sim, camera_name, rgb.shape[1], rgb.shape[0])
     metric = normalized_depth_to_metric(sim, normalized)

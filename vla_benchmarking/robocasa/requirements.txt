@@ -1,11 +1,22 @@
 # RoboCasa PickPlace-21 isolated environment.
 # Do not install this into the LIBERO robosuite 1.4.0 environment.
 # Python 3.11 is the RoboCasa reference setup.
+#
+# The controller loads the pinned MolmoPoint checkpoint locally.  These pins
+# mirror the known-good controller runtime; torch/torchvision remain supplied
+# by RoboCasa's pinned LeRobot dependency and the isolated Python environment.
 numpy==2.2.5
 numba==0.61.2
 scipy==1.15.3
 opencv-python-headless==4.11.0.86
 mujoco==3.3.1
 lerobot==0.3.3
+transformers==4.57.1
+huggingface-hub==0.36.0
+tokenizers==0.22.1
+einops==0.8.1
+decord2==3.4.0
+accelerate==1.10.1
+safetensors==0.8.0
 robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@5ce6643f3092639d08f7b0f90ed1c6a84f50552c
 robocasa @ git+https://github.com/robocasa/robocasa.git@4f8a2980def75a55dff96b990745b83540425f09

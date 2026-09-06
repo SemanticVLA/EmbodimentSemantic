@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -16,6 +16,56 @@ ROBOCASA_CAMERA = "robot0_agentview_left"
 ROBOCASA_RESOLUTION = 256
 CONTROLLER_ACTION_DIM = 7
 PANDA_OMRON_ACTION_DIM = 12
+
+
+def _quat_xyzw_to_matrix(quaternion: Sequence[float]) -> np.ndarray:
+    """Convert robosuite/MuJoCo ``xyzw`` quaternion to SO(3)."""
+    q = np.asarray(quaternion, dtype=np.float64).reshape(-1)
+    if q.shape != (4,) or not np.isfinite(q).all():
+        raise ValueError("base quaternion must be a finite 4-vector")
+    norm = float(np.linalg.norm(q))
+    if norm <= 1e-12:
+        raise ValueError("base quaternion must be non-zero")
+    x, y, z, w = q / norm
+    return np.asarray([
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+        [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+        [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+    ], dtype=np.float64)
+
+
+def world_base_transform(observation: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    """Return frozen reset-time ``T_WB0`` and its inverse from official sensors."""
+    position = np.asarray(observation.get("robot0_base_pos"), dtype=np.float64).reshape(-1)
+    quaternion = np.asarray(observation.get("robot0_base_quat"), dtype=np.float64).reshape(-1)
+    if position.shape != (3,) or not np.isfinite(position).all():
+        raise ValueError("robot0_base_pos must be a finite 3-vector")
+    rotation = _quat_xyzw_to_matrix(quaternion)
+    world_from_base = np.eye(4, dtype=np.float64)
+    world_from_base[:3, :3] = rotation
+    world_from_base[:3, 3] = position
+    return world_from_base, np.linalg.inv(world_from_base)
+
+
+def adapt_capture_to_base(capture: Any, base_from_world: np.ndarray) -> Any:
+    """Express capture calibration in frozen B0 while leaving pixels/depth unchanged."""
+    transform = np.asarray(base_from_world, dtype=np.float64)
+    if transform.shape != (4, 4) or not np.isfinite(transform).all():
+        raise ValueError("base_from_world must be a finite 4x4 transform")
+    calibration = getattr(capture, "calibration", None)
+    if calibration is None:
+        raise ValueError("capture has no camera calibration")
+    world_from_camera = np.asarray(calibration.world_from_camera, dtype=np.float64)
+    if world_from_camera.shape != (4, 4):
+        raise ValueError("capture calibration world_from_camera must be 4x4")
+    base_from_camera = transform @ world_from_camera
+    adapted_calibration = replace(
+        calibration,
+        world_from_camera=base_from_camera.tolist(),
+        world_frame="robocasa_pandaomron_base_B0",
+        extrinsic_direction="base_from_camera",
+    )
+    return replace(capture, calibration=adapted_calibration)
 
 
 @dataclass(frozen=True)
@@ -178,8 +228,10 @@ __all__ = [
     "PANDA_OMRON_ACTION_DIM",
     "PandaOmronActionAdapter",
     "PandaOmronActionLayout",
+    "adapt_capture_to_base",
     "ROBOCASA_CAMERA",
     "ROBOCASA_RESOLUTION",
     "RoboCasaFrame",
     "RoboCasaObservationAdapter",
+    "world_base_transform",
 ]

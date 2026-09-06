@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import importlib.util
+import inspect
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -17,6 +19,119 @@ DEFAULT_EPISODES_PER_TASK = 10
 DEFAULT_SEED_BASE = 1000
 DEFAULT_SPLIT = "target"
 _INFRASTRUCTURE_FAILURES = {"dependency_missing", "runtime_backend_unavailable"}
+
+# These markers identify failures at the RoboCasa input/action boundary. They
+# are deliberately narrower than all controller errors: a true policy or
+# task failure must remain a controller/task failure in the accounting.
+_GEOMETRY_CONTRACT_MARKERS = (
+    "bbox",
+    "projection",
+    "visible area",
+    "behind the camera",
+    "calibration",
+    "deproject",
+    "arrow endpoint",
+    "frame contract",
+    "workspace point",
+    "workspace bounds",
+    "intrinsic",
+    "extrinsic",
+)
+_DEPENDENCY_MARKERS = (
+    "no module named",
+    "not installed",
+    "install the controller dependencies",
+    "missing dependency",
+)
+
+
+def _robocasa_controller_identity() -> dict[str, Any]:
+    """Resolve stable controller provenance without importing live backends.
+
+    The RoboCasa-local entrypoint is intentionally imported lazily. This keeps
+    runner usable for manifests, preflight, and result accounting on hosts
+    that do not have MuJoCo/RoboCasa installed. The returned payload is both
+    human-readable provenance and part of the experiment identity.
+    """
+
+    identity: dict[str, Any] = {
+        "schema": "robocasa_controller_identity.v2",
+        "availability": "available",
+        "canonical_controller": {
+            "name": None,
+            "config_filename": None,
+            "config_hash": None,
+            "policy_lock_canonical_config_sha256": None,
+            "policy_lock_sha256": None,
+        },
+        "robocasa_adapter": {
+            "module": None,
+            "entrypoint": None,
+            "source_sha256": None,
+            "frame_contract": "robocasa_base_frame_v1",
+            "camera_contract": "post_flip_xy_positive_k_world_from_camera_v1",
+            "action_contract": "pandaomron_12d_embed_canonical_7d_v1",
+        },
+        "errors": [],
+    }
+
+    try:
+        module = importlib.import_module(
+            "vla_benchmarking.robocasa.arrow_grasp_controller.controller.runner"
+        )
+        entrypoint = getattr(module, "run_episode")
+        identity["robocasa_adapter"].update({
+            "module": str(module.__name__),
+            "entrypoint": f"{module.__name__}.{entrypoint.__name__}",
+        })
+        identity_factory = getattr(module, "controller_identity", None)
+        if not callable(identity_factory):
+            identity_factory = getattr(module, "get_controller_identity", None)
+        if callable(identity_factory):
+            declared = identity_factory()
+            identity["robocasa_adapter"]["declared_identity"] = _json_safe(declared)
+            identity["robocasa_adapter"]["identity_function"] = (
+                f"{module.__name__}.{identity_factory.__name__}"
+            )
+        source_path = inspect.getsourcefile(entrypoint)
+        if source_path:
+            identity["robocasa_adapter"]["source_sha256"] = hashlib.sha256(
+                Path(source_path).read_bytes()
+            ).hexdigest()
+    except Exception as exc:  # pragma: no cover - exercised on partial installs
+        identity["errors"].append({
+            "stage": "robocasa_adapter",
+            "type": type(exc).__name__,
+        })
+
+    try:
+        config_module = importlib.import_module(
+            "vla_benchmarking.robocasa.arrow_grasp_controller.configs"
+        )
+        config = config_module.load_controller_config()
+        lock_path = Path(config_module.ACTIVE_POLICY_LOCK_PATH)
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        identity["canonical_controller"].update({
+            "name": str(config_module.ACTIVE_CONTROLLER_NAME),
+            "config_filename": str(config_module.ACTIVE_CONTROLLER_CONFIG_FILENAME),
+            "config_hash": str(config.get("config_hash")),
+            "policy_lock_canonical_config_sha256": lock.get("canonical_config_sha256"),
+            "policy_lock_sha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
+        })
+        if config.get("config_hash") != lock.get("canonical_config_sha256"):
+            identity["errors"].append({
+                "stage": "canonical_config",
+                "type": "ControllerConfigLockMismatch",
+            })
+    except Exception as exc:  # pragma: no cover - exercised on partial installs
+        identity["errors"].append({
+            "stage": "canonical_config",
+            "type": type(exc).__name__,
+        })
+
+    if identity["errors"]:
+        identity["availability"] = "partial"
+    return identity
 
 
 @dataclass(frozen=True)
@@ -56,9 +171,13 @@ def _json_safe(value: Any) -> Any:
 def _experiment_identity(
     *, tasks: Sequence[TaskSpec], episodes_per_task: int, seed_base: int,
     split: str, mode: str, resolution: int = 256,
+    controller_identity: Mapping[str, Any] | None = None,
 ) -> str:
     from ..shared.config import CAMERA, ROBOSUITE_COMMIT, ROBOCASA_COMMIT
     from .prompt import canonical_prompt
+    resolved_controller_identity = dict(
+        controller_identity or _robocasa_controller_identity()
+    )
     payload = {
         "schema": "robocasa-pick-place-21.v1",
         "tasks": [task.name for task in tasks],
@@ -71,8 +190,9 @@ def _experiment_identity(
         "depth_encoding": CAMERA.depth_encoding,
         "robocasa_commit": ROBOCASA_COMMIT,
         "robosuite_commit": ROBOSUITE_COMMIT,
-        "controller": "vla_benchmarking.robocasa.arrow_grasp_controller.controller.runner",
-        "controller_source": "canonical_arrow_engine_read_only",
+        "controller": resolved_controller_identity.get("canonical_controller", {}),
+        "controller_source": "robocasa_local_adapter",
+        "controller_identity": resolved_controller_identity,
         "controller_camera_seam": CAMERA.name,
         "prompt_sha256": hashlib.sha256(canonical_prompt().encode()).hexdigest(),
     }
@@ -204,25 +324,88 @@ def _write_outputs(
     )
 
 
-def _failure_category(status: str, error: str | None = None) -> str | None:
+def _failure_category(
+    status: str,
+    error: str | None = None,
+    *,
+    error_type: str | None = None,
+) -> str | None:
     if status == "success":
         return None
-    if status in {"task_failure", "controller_failure", "horizon_exhaustion", "dependency_missing", "runtime_backend_unavailable"}:
+    normalized_error = (error or "").lower()
+    normalized_type = (error_type or "").lower()
+    if (
+        status in {"runtime_backend_unavailable", "controller_failure"}
+        and (
+            any(marker in normalized_error for marker in _DEPENDENCY_MARKERS)
+            or normalized_type in {"modulenotfounderror", "importerror"}
+        )
+    ):
+        return "dependency_missing"
+    if status in {
+        "task_failure",
+        "controller_failure",
+        "horizon_exhaustion",
+        "dependency_missing",
+        "runtime_backend_unavailable",
+        "geometry_contract_failure",
+    }:
+        if status == "geometry_contract_failure":
+            return status
+        if status in {"controller_failure", "runtime_backend_unavailable"} and (
+            "robocasaliveerror" in normalized_type
+            or any(marker in normalized_error for marker in _GEOMETRY_CONTRACT_MARKERS)
+        ):
+            # Environment import/render failures remain infrastructure errors.
+            # Only explicit input/action contract evidence is promoted here.
+            if not any(marker in normalized_error for marker in _DEPENDENCY_MARKERS):
+                return "geometry_contract_failure"
         return status
-    if error and "not installed" in error.lower():
+    normalized_error = (error or "").lower()
+    if any(marker in normalized_error for marker in _DEPENDENCY_MARKERS):
         return "dependency_missing"
     return "runtime_backend_unavailable"
 
 
+def _canonical_phase_timeout(live: Mapping[str, Any]) -> int | None:
+    """Extract canonical controller timeout without conflating task horizon."""
+    audit = live.get("audit")
+    if not isinstance(audit, Mapping):
+        return None
+    variant = audit.get("controller_variant")
+    if not isinstance(variant, Mapping):
+        final_result = audit.get("final_result")
+        if isinstance(final_result, Mapping):
+            motion_audit = final_result.get("audit")
+            if isinstance(motion_audit, Mapping):
+                variant = motion_audit.get("controller_variant")
+    if not isinstance(variant, Mapping):
+        return None
+    value = variant.get("phase_timeout_steps")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _run_live_cell(
     *, task: TaskSpec, episode_index: int, seed: int, output_dir: Path,
-    mode: str, experiment_identity: str, execute_motion: bool = True, resolution: int = 256
+    mode: str, experiment_identity: str,
+    controller_identity: Mapping[str, Any] | None = None,
+    execute_motion: bool = True, resolution: int = 256
 ) -> TerminalRow:
     if importlib.util.find_spec("robocasa") is None:
         return TerminalRow(
             task=task.name, episode_index=episode_index, seed=seed, split=DEFAULT_SPLIT,
             mode=mode, terminal=True, success=False, failure_category="dependency_missing",
-            metadata={"robocasa_available": False, "execution_started": False, "experiment_identity": experiment_identity},
+            metadata={
+                "robocasa_available": False,
+                "execution_started": False,
+                "experiment_identity": experiment_identity,
+                "controller_identity": dict(controller_identity or {}),
+                "task_horizon": None,
+                "canonical_phase_timeout_steps": None,
+            },
         )
     try:
         from .live import run_live_cell
@@ -240,6 +423,8 @@ def _run_live_cell(
         }
     status = str(live.get("status", "runtime_backend_unavailable"))
     preflight = not execute_motion
+    error = str(live.get("error", ""))
+    error_type = str(live.get("terminal_reason", ""))
     return TerminalRow(
         task=task.name,
         episode_index=episode_index,
@@ -248,8 +433,20 @@ def _run_live_cell(
         mode=mode,
         terminal=not preflight,
         success=status == "success",
-        failure_category=(None if status == "preflight_complete" else _failure_category(status, str(live.get("error", "")))),
-        metadata={"robocasa_available": True, "execution_started": bool(execute_motion), "experiment_identity": experiment_identity, "live": live},
+        failure_category=(
+            None
+            if status == "preflight_complete"
+            else _failure_category(status, error, error_type=error_type)
+        ),
+        metadata={
+            "robocasa_available": True,
+            "execution_started": bool(execute_motion),
+            "experiment_identity": experiment_identity,
+            "controller_identity": dict(controller_identity or {}),
+            "task_horizon": live.get("horizon"),
+            "canonical_phase_timeout_steps": _canonical_phase_timeout(live),
+            "live": live,
+        },
     )
 
 
@@ -266,16 +463,24 @@ def run(
     if mode not in {"preflight", "smoke", "full"}:
         raise ValueError("mode must be preflight, smoke, or full")
     tasks = selected_tasks(task_names)
+    controller_identity = _robocasa_controller_identity()
     experiment_identity = _experiment_identity(
         tasks=tasks, episodes_per_task=episodes_per_task, seed_base=seed_base,
-        split=split, mode=mode,
+        split=split, mode=mode, controller_identity=controller_identity,
     )
     if mode == "preflight":
         if importlib.util.find_spec("robocasa") is None:
             rows = build_rows(
                 tasks=tasks, episodes_per_task=episodes_per_task, seed_base=seed_base,
                 split=split, mode=mode,
-                metadata={"preflight": True, "runtime_required": False, "experiment_identity": experiment_identity},
+                metadata={
+                    "preflight": True,
+                    "runtime_required": False,
+                    "experiment_identity": experiment_identity,
+                    "controller_identity": controller_identity,
+                    "task_horizon": None,
+                    "canonical_phase_timeout_steps": None,
+                },
             )
         else:
             rows = []
@@ -286,7 +491,10 @@ def run(
                             task=task, episode_index=episode_index,
                             seed=seed_base + episode_index,
                             output_dir=output_dir / "cells" / f"{task.name}__seed{seed_base + episode_index}",
-                            mode="preflight", experiment_identity=experiment_identity, execute_motion=False,
+                            mode="preflight",
+                            experiment_identity=experiment_identity,
+                            controller_identity=controller_identity,
+                            execute_motion=False,
                         )
                     )
         _write_outputs(output_dir, rows, mode=mode, experiment_identity=experiment_identity)
@@ -302,6 +510,9 @@ def run(
                 "execution_started": False,
                 "requires_explicit_execute_motion": True,
                 "experiment_identity": experiment_identity,
+                "controller_identity": controller_identity,
+                "task_horizon": None,
+                "canonical_phase_timeout_steps": None,
             },
         )
     else:
@@ -323,7 +534,9 @@ def run(
                         episode_index=episode_index,
                         seed=seed,
                         output_dir=output_dir / "cells" / f"{task.name}__seed{seed}",
-                        mode=mode, experiment_identity=experiment_identity,
+                        mode=mode,
+                        experiment_identity=experiment_identity,
+                        controller_identity=controller_identity,
                     )
                 )
     _write_outputs(output_dir, rows, mode=mode, experiment_identity=experiment_identity)
