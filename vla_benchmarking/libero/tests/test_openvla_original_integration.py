@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from vla_benchmarking.libero.evaluation.native_vla_eval import _canonical_observation
@@ -48,3 +50,14 @@ def test_original_openvla_is_a_distinct_native_policy_kind() -> None:
     capabilities = get_policy_capabilities("openvla")
     assert capabilities.backend.name == "native_policy"
     assert capabilities.visual_inputs == ("none",)
+
+
+def test_legion_job_isolates_original_openvla_transformers_pin() -> None:
+    root = Path(__file__).resolve().parents[3]
+    requirements = (root / "vla_benchmarking/libero/finetuned_vlas/openvla/requirements.txt").read_text()
+    job = (root / "vla_benchmarking/libero/finetuned_vlas/legion/run_vla_eval_matrix.sbatch").read_text()
+    assert "transformers==4.40.1" in requirements
+    assert '"$RUN_ROOT/openvla_venv"' in job
+    assert 'local python_bin="$1"' in job
+    assert 'run_model "$OPENVLA_PYTHON" openvla' in job
+    assert 'run_model "$PYTHON" pi05' in job

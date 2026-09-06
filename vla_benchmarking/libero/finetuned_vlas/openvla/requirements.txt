@@ -1,0 +1,4 @@
+# Original OpenVLA uses the pre-5.x Hugging Face AutoModelForVision2Seq API.
+# Install this file only in the isolated original-OpenVLA runtime environment;
+# the shared LeRobot/Pi05 environment remains on its own pinned transformers.
+transformers==4.40.1

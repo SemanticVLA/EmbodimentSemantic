@@ -53,6 +53,17 @@ export PYTHON="$RUN_ROOT/venv/bin/python"
 
 "$PYTHON" -m pip install --disable-pip-version-check ml-collections sentencepiece timm
 
+# Original OpenVLA requires the pre-5.x AutoModelForVision2Seq API.  LeRobot's
+# pinned Pi05 extra intentionally stays on transformers 5.3.0, so keep the
+# original OpenVLA runtime in a separate provenance-bound environment.
+"$BASE_PYTHON" -m venv --system-site-packages "$RUN_ROOT/openvla_venv"
+export OPENVLA_PYTHON="$RUN_ROOT/openvla_venv/bin/python"
+"$OPENVLA_PYTHON" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel
+"$OPENVLA_PYTHON" -m pip install --disable-pip-version-check \
+  -r vla_benchmarking/libero/finetuned_vlas/openvla/requirements.txt
+"$OPENVLA_PYTHON" -c 'import transformers; from transformers import AutoModelForVision2Seq; assert transformers.__version__ == "4.40.1"; print("original OpenVLA transformers", transformers.__version__)'
+"$PYTHON" -c 'import transformers; print("Pi05 transformers", transformers.__version__)'
+
 SNAPSHOT_SCRIPT="$RUN_ROOT/resolve_hf_snapshot.py"
 cat > "$SNAPSHOT_SCRIPT" <<'PY'
 from huggingface_hub import HfApi, snapshot_download
@@ -93,7 +104,7 @@ out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 
 PLAN_DIR="$RUN_ROOT/plans"
-"$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.prepare_eval_plans \
+"$OPENVLA_PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.prepare_eval_plans \
   --model openvla --checkpoint-path "$OPENVLA_CHECKPOINT" \
   --checkpoint-revision "$OPENVLA_REVISION" --dataset-manifest "$DATASET_MANIFEST" --output-dir "$PLAN_DIR"
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.prepare_eval_plans \
@@ -115,12 +126,12 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
 JSON
 
 run_model() {
-  local model="$1"; local ckpt="$2"; local revision="$3"; local factory="${4:-}"
+  local python_bin="$1"; local model="$2"; local ckpt="$3"; local revision="$4"; local factory="${5:-}"
   local extra=()
   if [[ -n "$factory" ]]; then extra+=(--policy-config-factory "$factory"); fi
   for condition in vanilla sealed; do
     echo "START model=$model condition=$condition job=$SLURM_JOB_ID"
-    "$PYTHON" -m vla_benchmarking.libero.evaluation.native_vla_eval \
+    "$python_bin" -m vla_benchmarking.libero.evaluation.native_vla_eval \
       --model "$model" --plan "$PLAN_DIR/${model}_${condition}_100.json" \
       --checkpoint-path "$ckpt" --checkpoint-revision "$revision" \
       --dataset-manifest "$DATASET_MANIFEST" \
@@ -130,8 +141,8 @@ run_model() {
 }
 
 export PYTHONPATH="$HOME/EmbodimentSemantic:${PYTHONPATH:-}"
-run_model openvla "$OPENVLA_CHECKPOINT" "$OPENVLA_REVISION"
-run_model pi05 "$PI05_CHECKPOINT" "$PI05_REVISION"
+run_model "$OPENVLA_PYTHON" openvla "$OPENVLA_CHECKPOINT" "$OPENVLA_REVISION"
+run_model "$PYTHON" pi05 "$PI05_CHECKPOINT" "$PI05_REVISION"
 
 "$PYTHON" - "$RUN_ROOT" <<'PY'
 import json, pathlib, sys
