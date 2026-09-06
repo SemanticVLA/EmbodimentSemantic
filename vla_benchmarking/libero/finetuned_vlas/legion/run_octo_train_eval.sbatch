@@ -90,6 +90,11 @@ git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 "$PYTHON" -m pip install --disable-pip-version-check \
   "jax[cuda11_pip]==0.4.20" "scipy==1.11.4" \
   -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# The Octo release imports W&B at module import time.  Keep its generated
+# protobuf bindings compatible with the training environment's protobuf 3.20.3
+# pin, and disable network logging for this reproducibility run.
+"$PYTHON" -m pip install --disable-pip-version-check --no-deps "wandb==0.15.12"
+export WANDB_MODE=disabled
 
 # LeRobot's pinned LIBERO API requires Python >=3.12, while the Octo training
 # environment is intentionally Python 3.10.  Evaluation therefore runs as a
