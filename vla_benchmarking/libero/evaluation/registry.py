@@ -9,13 +9,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .backends import DIRECT_MATRIX, LEROBOT, BackendCapabilities
+from .backends import DIRECT_MATRIX, LEROBOT, NATIVE, BackendCapabilities
 from .contracts import EvaluationCondition
 
 
 @dataclass(frozen=True)
 class PolicyCapabilities:
-    policy_kind: Literal["canonical_grasp", "lerobot", "smolvla_no_arrow", "smolvla_target_arrow"]
+    policy_kind: Literal[
+        "canonical_grasp", "lerobot", "smolvla_no_arrow", "smolvla_target_arrow",
+        "pi05", "openvla", "openvla_oft", "octo_community_multisuite_190k",
+        "octo_base15_spatial_no_arrow_matched",
+    ]
     backend: BackendCapabilities
     visual_inputs: tuple[str, ...]
     text_contexts: tuple[str, ...]
@@ -53,6 +57,34 @@ POLICIES: dict[str, PolicyCapabilities] = {
         ("none", "goal_arrow"),
         ("none",),
         {"vanilla": "applied", "sealed_randomized": "applied"},
+        "standard_no_extra_text",
+    ),
+    # These policies consume the standard task description but no visual
+    # arrows or injected context.  OpenVLA-OFT and Octo retain their native
+    # inference loops behind the native backend boundary.
+    "pi05": PolicyCapabilities(
+        "pi05", LEROBOT, ("none",), ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "applied"},
+        "standard_no_extra_text",
+    ),
+    "openvla_oft": PolicyCapabilities(
+        "openvla_oft", NATIVE, ("none",), ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "applied"},
+        "standard_no_extra_text",
+    ),
+    "openvla": PolicyCapabilities(
+        "openvla", NATIVE, ("none",), ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "applied"},
+        "standard_no_extra_text",
+    ),
+    "octo_community_multisuite_190k": PolicyCapabilities(
+        "octo_community_multisuite_190k", NATIVE, ("none",), ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "applied"},
+        "standard_no_extra_text",
+    ),
+    "octo_base15_spatial_no_arrow_matched": PolicyCapabilities(
+        "octo_base15_spatial_no_arrow_matched", NATIVE, ("none",), ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "applied"},
         "standard_no_extra_text",
     ),
 }

@@ -1,0 +1,12 @@
+# Octo runtime for the A40 job.  The repository commit is pinned so that the
+# config/loader API used by native_finetune_config.py cannot drift silently.
+octo @ git+https://github.com/octo-models/octo.git@241fb3514b7c40957a86d869fecb7c7fc353f540
+flax
+ml-collections
+optax
+tensorflow
+tensorflow-datasets
+huggingface_hub
+wandb
+# Install the CUDA-matched JAX wheel separately on the target image; the
+# upstream Octo README documents the CUDA-specific extra for this release.

@@ -1,0 +1,6 @@
+# LeRobot source is pinned to the locally installed 0.5.2 API contract used
+# by pi05/train.py and pi05/trainer.py.  The A40 image must still install the
+# CUDA-matched torch.
+lerobot[pi] @ git+https://github.com/huggingface/lerobot.git@d656da8ccca5989ff0a2207e81fbfa2c2d5bafb1
+torch
+numpy

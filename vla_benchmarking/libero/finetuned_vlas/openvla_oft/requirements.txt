@@ -1,0 +1,9 @@
+# OpenVLA-OFT source is pinned to the revision whose FinetuneConfig is used by
+# train.py (the launch command targets vla-scripts/finetune.py directly).
+openvla-oft @ git+https://github.com/moojink/openvla-oft.git@e4287e94541f459edc4feabc4e181f537cd569a8
+# Install its Python 3.10 environment first, then verify these capabilities.
+torch==2.2.*
+transformers==4.40.1
+numpy
+tensorflow
+tensorflow-datasets

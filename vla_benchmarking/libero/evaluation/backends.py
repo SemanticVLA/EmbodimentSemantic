@@ -13,7 +13,7 @@ class BackendCapabilities:
     """Describe policy-specific boundaries without sharing action loops."""
 
     name: str
-    kind: Literal["direct_matrix", "lerobot"]
+    kind: Literal["direct_matrix", "lerobot", "native"]
     supports_text_context: bool
     supports_visual_arrow: bool
     evaluator_timing: str
@@ -26,6 +26,10 @@ DIRECT_MATRIX = BackendCapabilities(
 LEROBOT = BackendCapabilities(
     name="lerobot", kind="lerobot", supports_text_context=True,
     supports_visual_arrow=True, evaluator_timing="policy_defined",
+)
+NATIVE = BackendCapabilities(
+    name="native_policy", kind="native", supports_text_context=True,
+    supports_visual_arrow=False, evaluator_timing="policy_defined",
 )
 
 
@@ -48,4 +52,4 @@ def validate_backend_condition(
         raise ValueError(f"{capabilities.name} backend does not support visual arrows")
 
 
-__all__ = ["BackendCapabilities", "DIRECT_MATRIX", "LEROBOT", "validate_backend_condition"]
+__all__ = ["BackendCapabilities", "DIRECT_MATRIX", "LEROBOT", "NATIVE", "validate_backend_condition"]

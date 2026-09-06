@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -25,8 +26,48 @@ from .randomization_contract import randomization_config_payload
 from .registry import validate_policy_condition
 
 
-PLAN_SCHEMA = "shared_evaluation_plan.v1"
+LEGACY_PLAN_SCHEMA = "shared_evaluation_plan.v1"
+PLAN_SCHEMA = LEGACY_PLAN_SCHEMA
+PLAN_SCHEMA_V2 = "shared_evaluation_plan.v2"
+SUPPORTED_PLAN_SCHEMAS = (LEGACY_PLAN_SCHEMA, PLAN_SCHEMA_V2)
+_V2_POLICY_KINDS = frozenset({
+    "pi05", "openvla", "openvla_oft", "octo_community_multisuite_190k",
+    "octo_base15_spatial_no_arrow_matched",
+})
+_V2_BINDING_KEYS = frozenset({"artifact", "runtime", "io", "dataset_manifest", "adapter_kind"})
+_IMMUTABLE_REVISION = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$", re.IGNORECASE)
+_IMMUTABLE_SHA256 = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 SCHEDULE_SCHEMA = "shared_evaluation_schedule.v1"
+
+
+def _validate_v2_bindings(bindings: Mapping[str, Any]) -> None:
+    """Validate the receipt identities embedded in a v2 plan.
+
+    The function is shared by plan construction and loading so a plan cannot
+    be emitted with weaker provenance checks than the evaluator applies later.
+    """
+
+    missing = sorted(_V2_BINDING_KEYS.difference(bindings))
+    if missing:
+        raise ValueError("v2 evaluation plans require bindings for: " + ", ".join(missing))
+    if not str(bindings["adapter_kind"]).strip():
+        raise ValueError("v2 adapter_kind binding must be non-empty")
+    for binding_name in ("artifact", "runtime", "io", "dataset_manifest"):
+        binding = bindings[binding_name]
+        if not isinstance(binding, Mapping):
+            raise ValueError(f"v2 {binding_name} binding must be an object")
+        if not any(str(binding.get(key, "")).strip() for key in ("id", "sha256", "checkpoint_sha256", "manifest_sha256", "revision")):
+            raise ValueError(f"v2 {binding_name} binding has no identity")
+    artifact = bindings["artifact"]
+    artifact_id = artifact.get("artifact_id", artifact.get("id"))
+    if not str(artifact_id or "").strip():
+        raise ValueError("v2 artifact binding requires an artifact id")
+    revision = artifact.get("checkpoint_revision", artifact.get("revision"))
+    if not revision or not _IMMUTABLE_REVISION.fullmatch(str(revision)):
+        raise ValueError("v2 artifact binding requires an immutable 40- or 64-character checkpoint SHA")
+    checkpoint_sha256 = artifact.get("checkpoint_sha256", artifact.get("artifact_sha256"))
+    if not checkpoint_sha256 or not _IMMUTABLE_SHA256.fullmatch(str(checkpoint_sha256)):
+        raise ValueError("v2 artifact binding requires a canonical checkpoint_sha256")
 
 
 def canonical_json(value: Any) -> str:
@@ -59,8 +100,11 @@ def shared_source_hashes(repo_root: str | Path | None = None) -> dict[str, str |
     paths = (
         "vla_benchmarking/libero/evaluation/contracts.py",
         "vla_benchmarking/libero/evaluation/plan.py",
+        "vla_benchmarking/libero/evaluation/policy_adapter.py",
         "vla_benchmarking/libero/evaluation/registry.py",
         "vla_benchmarking/libero/evaluation/randomization_contract.py",
+        "vla_benchmarking/libero/finetuned_vlas/common/manifest.py",
+        "vla_benchmarking/libero/finetuned_vlas/common/source_contract.py",
         "vla_benchmarking/libero/shared/config.py",
     )
     return {relative: _sha256_file(root / relative) for relative in paths}
@@ -130,8 +174,14 @@ def build_evaluation_plan(
     visual_arrow: bool | None = None,
     randomization: Mapping[str, Any] | None = None,
     source_hashes: Mapping[str, str | None] | None = None,
+    bindings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the single serialized plan consumed by either native evaluator."""
+    """Build the single serialized plan consumed by either native evaluator.
+
+    New VLA plans are v2 and must bind the exact artifact, runtime, I/O,
+    dataset-manifest identity, and adapter kind.  Historical policies retain
+    v1 output and intentionally do not require those bindings.
+    """
 
     condition = EvaluationCondition(
         suite_mode=suite_mode,
@@ -156,8 +206,14 @@ def build_evaluation_plan(
     )
     payload = dict(randomization if randomization is not None else randomization_config_payload())
     schedule = _schedule_cells(cells)
+    plan_schema = PLAN_SCHEMA_V2 if str(policy_kind) in _V2_POLICY_KINDS else PLAN_SCHEMA
+    normalized_bindings = dict(bindings or {})
+    if plan_schema == PLAN_SCHEMA_V2:
+        _validate_v2_bindings(normalized_bindings)
     plan = {
-        "schema": PLAN_SCHEMA,
+        # Keep historical SmolVLA/controller manifests byte-compatible. New
+        # native VLA policies opt into v2 without invalidating old results.
+        "schema": plan_schema,
         "policy_kind": str(policy_kind),
         "condition": condition.as_dict(),
         "text_contract": capabilities.text_contract,
@@ -174,6 +230,8 @@ def build_evaluation_plan(
         },
         "source_hashes": dict(sorted((source_hashes or shared_source_hashes()).items())),
     }
+    if plan_schema == PLAN_SCHEMA_V2:
+        plan["bindings"] = normalized_bindings
     plan["sha256"] = canonical_sha256(plan)
     return plan
 
@@ -181,7 +239,7 @@ def build_evaluation_plan(
 def validate_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a serialized plan and its internal hashes before execution."""
 
-    if plan.get("schema") != PLAN_SCHEMA:
+    if plan.get("schema") not in SUPPORTED_PLAN_SCHEMAS:
         raise ValueError(f"unsupported evaluation plan schema: {plan.get('schema')!r}")
     schedule = plan.get("schedule")
     if not isinstance(schedule, Mapping) or schedule.get("schema") != SCHEDULE_SCHEMA:
@@ -194,6 +252,11 @@ def validate_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     randomization = plan.get("randomization")
     if not isinstance(randomization, Mapping) or randomization.get("sha256") != canonical_sha256(randomization.get("payload")):
         raise ValueError("evaluation plan randomization hash is invalid")
+    if plan.get("schema") == PLAN_SCHEMA_V2:
+        bindings = plan.get("bindings")
+        if not isinstance(bindings, Mapping):
+            raise ValueError("v2 evaluation plan bindings are missing")
+        _validate_v2_bindings(bindings)
     expected = dict(plan)
     observed_hash = expected.pop("sha256", None)
     if observed_hash != canonical_sha256(expected):
@@ -224,7 +287,10 @@ def validate_native_schedule(
 
 __all__ = [
     "PLAN_SCHEMA",
+    "LEGACY_PLAN_SCHEMA",
+    "PLAN_SCHEMA_V2",
     "SCHEDULE_SCHEMA",
+    "SUPPORTED_PLAN_SCHEMAS",
     "canonical_json",
     "canonical_sha256",
     "shared_source_hashes",

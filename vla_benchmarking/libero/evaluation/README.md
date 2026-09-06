@@ -18,7 +18,7 @@ robot actions.
 declares which combinations each policy accepts and fails closed on unsupported
 inputs.
 
-## Two execution backends
+## Execution backends
 
 - `run_arrow_pick_place_matrix.py` is the direct per-cell backend used by the
   canonical controller and language-free ArrowStudent. Their policy adapters
@@ -26,6 +26,21 @@ inputs.
 - `run_lerobot_eval_with_context.py` is the LeRobot backend used by base and
   LoRA VLA policies. It retains the existing processor, camera, vector-env,
   reset, and `eval_info.json` behavior.
+- `run_policy_eval.py` is the native-policy boundary used by Pi0.5,
+  OpenVLA-OFT, and Octo. It validates each adapter's native action chunk
+  (`10`, `8`, and `4` respectively) without forcing the models through one
+  model-specific loop.
+- `native_vla_eval.py` is the plan-consuming bridge for Pi0.5/OpenVLA-OFT.
+  Their command builders switch to it whenever a shared v2 plan is supplied;
+  the legacy upstream commands remain available only when no plan is passed.
+
+`policy_adapter.py` defines the shared `reset(task_description, episode_seed)` /
+`act(observation)` contract, immutable artifact metadata, arrow-free markers,
+and action shape/range/finite-value validation. Model packages remain
+responsible for their own preprocessing, normalization, and simulator stepping.
+
+New policy plans use `shared_evaluation_plan.v2`; existing SmolVLA and controller
+manifests continue to validate as `shared_evaluation_plan.v1`.
 
 The package does not merge these into a universal action loop. Evaluator
 outputs are reporting data only and never enter candidate or action selection.

@@ -4374,6 +4374,7 @@ def build_libero_env(
     suite_mode: str | None = None,
     controller_variant: ControllerVariantConfig | str | None = None,
     extra_camera_names: Sequence[str] = (),
+    init_state_index: int | None = None,
 ) -> Any:
     """Construct direct LIBERO OffScreenRenderEnv with explicit suite semantics."""
     if isinstance(controller_variant, ControllerVariantConfig):
@@ -4501,7 +4502,14 @@ def build_libero_env(
             "available_count": int(available_count),
         })
         if available_count:
-            selected_index = int(seed) % int(available_count)
+            if init_state_index is None:
+                selected_index = int(seed) % int(available_count)
+            else:
+                selected_index = int(init_state_index)
+                if selected_index < 0 or selected_index >= int(available_count):
+                    raise ValueError(
+                        f"init_state_index {selected_index} is outside the {available_count}-state LIBERO task"
+                    )
             selected_state = init_states[selected_index]
             projection = {"required": False, "projected": False, "source": "canonical_task_init_states"}
             if suite_mode == "sealed_randomized":
