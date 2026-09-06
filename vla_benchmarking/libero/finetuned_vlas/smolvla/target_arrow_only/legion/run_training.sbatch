@@ -9,7 +9,7 @@
 #   REPO_ROOT                                isolated clean checkout
 #   TARGET_ARROW_TRAINING_EXPECTED_COMMIT   exact lowercase 40-char SHA
 #   TARGET_ARROW_TRAINING_LABEL             safe run label
-#   TARGET_ARROW_TRAINING_SCOPE             smoke or full
+#   TARGET_ARROW_TRAINING_SCOPE             smoke, reuse_verified, or full
 #
 # Optional pinned Legion roots may be overridden explicitly for a site-specific
 # release, but are never inferred from the submitted script's working directory.
@@ -37,7 +37,8 @@ die() {
   exit 2
 }
 
-[[ -n "${SLURM_JOB_ID:-}" ]] || die 'submit this launcher directly with sbatch'
+[[ -n "${SLURM_JOB_ID:-}" && "$SLURM_JOB_ID" =~ ^[0-9]+$ ]] ||
+  die 'submit this launcher directly with sbatch; SLURM_JOB_ID must be numeric'
 [[ -n "${REPO_ROOT:-}" ]] || die 'REPO_ROOT is required'
 EXPECTED_COMMIT="${TARGET_ARROW_TRAINING_EXPECTED_COMMIT:-${TARGET_ARROW_EXPECTED_COMMIT:-}}"
 [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
@@ -47,8 +48,9 @@ LABEL="${TARGET_ARROW_TRAINING_LABEL:-${TARGET_ARROW_LABEL:-${2:-}}}"
   die 'TARGET_ARROW_TRAINING_LABEL is required and must be safe'
 SCOPE="${TARGET_ARROW_TRAINING_SCOPE:-${TARGET_ARROW_SCOPE:-${1:-}}}"
 case "$SCOPE" in
-  smoke) STEPS=2; SAVE_FREQ=2 ;;
-  full) STEPS=29190; SAVE_FREQ=1946 ;;
+  smoke) STEPS=2; SAVE_FREQ=2; PIPELINE_SCOPE=smoke; REUSE_VERIFIED=false ;;
+  reuse_verified) STEPS=2; SAVE_FREQ=2; PIPELINE_SCOPE=smoke; REUSE_VERIFIED=true ;;
+  full) STEPS=29190; SAVE_FREQ=1946; PIPELINE_SCOPE=full; REUSE_VERIFIED=false ;;
   *) die 'TARGET_ARROW_TRAINING_SCOPE must be smoke or full' ;;
 esac
 
@@ -156,6 +158,14 @@ done
 [[ ! -e "$RUN_ROOT" ]] || die "RUN_ROOT already exists: $RUN_ROOT"
 [[ ! -e "$ARCHIVE_ROOT" ]] || die "ARCHIVE_ROOT already exists: $ARCHIVE_ROOT"
 
+TMP_ROOT="${TARGET_ARROW_TMP_ROOT:-/tmp/ta-${SLURM_JOB_ID}}"
+[[ "$TMP_ROOT" == "/tmp/ta-${SLURM_JOB_ID}" ]] ||
+  die 'TARGET_ARROW_TMP_ROOT must be the exact job-unique /tmp/ta-$SLURM_JOB_ID path'
+[[ "$TMP_ROOT" =~ ^/tmp/ta-[0-9]+$ ]] || die "unsafe TMP_ROOT: $TMP_ROOT"
+(( ${#TMP_ROOT} <= 64 )) || die "TMP_ROOT is too long for AF_UNIX paths: $TMP_ROOT"
+[[ ! -L "$TMP_ROOT" ]] || die "TMP_ROOT must not be a symlink: $TMP_ROOT"
+[[ ! -e "$TMP_ROOT" ]] || die "TMP_ROOT already exists: $TMP_ROOT"
+
 mkdir -p "$RUN_ROOT" "$HDF5_ROOT" "$DATA_ROOT" "$DATA_CACHE"
 export REPO_ROOT VLA_ROOT="$REPO_ROOT/vla_benchmarking/libero"
 export PYTHON LIBERO_DIR LIBERO_CONFIG LIBERO_DATA_DIR="$HDF5_ROOT" DATA_ROOT
@@ -164,7 +174,8 @@ export LIBERO_DATASET_CACHE="$DATA_CACHE"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_DISABLE_TELEMETRY=1
-export TMPDIR="$RUN_ROOT/tmp" XDG_CACHE_HOME="$RUN_ROOT/xdg"
+mkdir -p "$TMP_ROOT"
+export TMPDIR="$TMP_ROOT" XDG_CACHE_HOME="$RUN_ROOT/xdg"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME"
 
 cat > "$RUN_ROOT/job_context.env" <<EOF
@@ -173,6 +184,8 @@ job_id=$SLURM_JOB_ID
 job_name=${SLURM_JOB_NAME:-smolvla_target_arrow_train}
 label=$LABEL
 scope=$SCOPE
+pipeline_scope=$PIPELINE_SCOPE
+reuse_verified=$REUSE_VERIFIED
 steps=$STEPS
 save_freq=$SAVE_FREQ
 expected_commit=$EXPECTED_COMMIT
@@ -189,6 +202,7 @@ dataset_root=$DATA_ROOT
 run_root=$RUN_ROOT
 output_root=$OUTPUT_ROOT
 archive_root=$ARCHIVE_ROOT
+tmp_root=$TMP_ROOT
 profile=target_arrow_treatment
 EOF
 
@@ -227,6 +241,9 @@ archive_on_exit() {
       sort -z | xargs -0 -r sha256sum > "$ARCHIVE_ROOT/inventory.sha256" || archive_rc=$?
     sha256sum "$ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$ARCHIVE_ROOT/tree_sha256" || archive_rc=$?
   fi
+  if [[ "$TMP_ROOT" == "/tmp/ta-${SLURM_JOB_ID}" && "$TMP_ROOT" =~ ^/tmp/ta-[0-9]+$ && -e "$TMP_ROOT" ]]; then
+    rm -rf -- "$TMP_ROOT" || archive_rc=$?
+  fi
   if [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]]; then workload_rc=$archive_rc; fi
   exit "$workload_rc"
 }
@@ -238,12 +255,21 @@ DATA_LOCK="$DATA_CACHE/.sealed-target-arrow-${BASE_POLICY_REVISION}-target_arrow
 exec 8>>"$DATA_LOCK"
 flock -x 8
 printf 'dataset_lock=%s\n' "$DATA_LOCK" >> "$RUN_ROOT/job_context.env"
-bash "$PREPARE_DATA_SCRIPT" target_arrow_treatment
+if [[ "$REUSE_VERIFIED" == true ]]; then
+  CONVERTER_SCRIPT="$WORKFLOW_ROOT/hdf5_to_lerobot_dataset.py"
+  [[ -f "$CONVERTER_SCRIPT" ]] || die "dataset converter is missing: $CONVERTER_SCRIPT"
+  "$PYTHON" "$CONVERTER_SCRIPT" --mode verify-target-arrow \
+    --data-dir "$HDF5_ROOT" --output-root "$DATA_ROOT"
+  "$PYTHON" "$CONVERTER_SCRIPT" --mode preflight-target-arrow \
+    --data-dir "$HDF5_ROOT" --output-root "$DATA_ROOT"
+else
+  bash "$PREPARE_DATA_SCRIPT" target_arrow_treatment
+fi
 flock -u 8
 exec 8>&-
 
 printf '[%s] launching sealed target-arrow training (%s, %s steps)\n' "$(date +'%F %T')" "$SCOPE" "$STEPS"
-bash "$PIPELINE_SCRIPT" "$SCOPE" --profile target-arrow --run-dir "$OUTPUT_ROOT" --python "$PYTHON"
+bash "$PIPELINE_SCRIPT" "$PIPELINE_SCOPE" --profile target-arrow --run-dir "$OUTPUT_ROOT" --python "$PYTHON"
 
 [[ -f "$OUTPUT_ROOT/training_manifest.json" ]] || die 'training manifest is missing after pipeline completion'
 touch "$RUN_ROOT/COMPLETED"

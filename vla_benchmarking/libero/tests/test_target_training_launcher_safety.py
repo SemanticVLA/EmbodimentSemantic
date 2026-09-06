@@ -41,9 +41,12 @@ def test_target_training_serializes_shared_dataset_preparation() -> None:
 def test_target_training_keeps_scope_and_absolute_helper_contract() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
     assert "smoke) STEPS=2; SAVE_FREQ=2" in source
+    assert "reuse_verified) STEPS=2; SAVE_FREQ=2" in source
     assert "full) STEPS=29190; SAVE_FREQ=1946" in source
     assert 'bash "$PREPARE_DATA_SCRIPT" target_arrow_treatment' in source
-    assert 'bash "$PIPELINE_SCRIPT" "$SCOPE" --profile target-arrow' in source
+    assert "--mode verify-target-arrow" in source
+    assert "--mode preflight-target-arrow" in source
+    assert 'bash "$PIPELINE_SCRIPT" "$PIPELINE_SCOPE" --profile target-arrow' in source
     assert '--python "$PYTHON"' in source
     assert 'sbatch "$PREPARE_DATA_SCRIPT"' not in source
     assert 'sbatch "$PIPELINE_SCRIPT"' not in source
@@ -59,3 +62,14 @@ def test_target_training_requires_fresh_external_run_and_archive_roots() -> None
     assert 'case "$RUN_ROOT" in "$ARCHIVE_ROOT"' in source
     assert 'TARGET_ARROW_RUN_ROOT' in source
     assert 'TARGET_ARROW_ARCHIVE_ROOT' in source
+
+
+def test_target_training_uses_short_job_unique_tmp_and_cleans_it() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+    assert 'TMP_ROOT="${TARGET_ARROW_TMP_ROOT:-/tmp/ta-${SLURM_JOB_ID}}"' in source
+    assert 'TARGET_ARROW_TMP_ROOT must be the exact job-unique /tmp/ta-$SLURM_JOB_ID path' in source
+    assert '[[ "$TMP_ROOT" =~ ^/tmp/ta-[0-9]+$ ]]' in source
+    assert '(( ${#TMP_ROOT} <= 64 ))' in source
+    assert 'export TMPDIR="$TMP_ROOT"' in source
+    assert 'rm -rf -- "$TMP_ROOT"' in source
+    assert 'TMP_ROOT" == "/tmp/ta-${SLURM_JOB_ID}"' in source

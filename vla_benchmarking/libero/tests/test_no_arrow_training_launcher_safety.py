@@ -77,3 +77,17 @@ def test_no_arrow_training_launcher_canonicalizes_and_isolates_roots() -> None:
     assert 'case "$ARCHIVE_ROOT" in "$REPO_ROOT"' in source
     assert "archive_on_exit" in source
     assert "inventory.sha256" in source
+
+
+def test_no_arrow_training_launcher_uses_bounded_job_temp_and_cleans_only_it() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+    assert 'TMP_ROOT="/tmp/smvla-noarrow-${SLURM_JOB_ID}"' in source
+    assert 'export TMPDIR="$TMP_ROOT"' in source
+    assert '[[ "$TMP_ROOT" == "/tmp/smvla-noarrow-${SLURM_JOB_ID}" ]]' in source
+    assert '[[ ! -e "$TMP_ROOT" ]]' in source
+    assert 'rm -rf -- "$TMP_ROOT"' in source
+    assert "cleanup_short_tmp" in source
+    assert 'TMPDIR="$RUN_ROOT/tmp"' not in source
+    # The fixed prefix plus a normal numeric Slurm job id stays well below the
+    # Linux AF_UNIX pathname limit even before Python appends socket names.
+    assert len("/tmp/smvla-noarrow-" + "9" * 10) < 50

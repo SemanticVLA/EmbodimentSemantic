@@ -187,8 +187,20 @@ export LIBERO_DATASET_CACHE="$DATA_CACHE"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_DISABLE_TELEMETRY=1
-export TMPDIR="$RUN_ROOT/tmp" XDG_CACHE_HOME="$RUN_ROOT/xdg"
-mkdir -p "$TMPDIR" "$XDG_CACHE_HOME"
+[[ "$SLURM_JOB_ID" =~ ^[0-9]+$ ]] || die 'SLURM_JOB_ID must contain only digits'
+TMP_ROOT="/tmp/smvla-noarrow-${SLURM_JOB_ID}"
+[[ "$TMP_ROOT" == "/tmp/smvla-noarrow-${SLURM_JOB_ID}" ]] || die 'unsafe temporary root'
+[[ ! -e "$TMP_ROOT" ]] || die "temporary root already exists: $TMP_ROOT"
+export TMPDIR="$TMP_ROOT" XDG_CACHE_HOME="$RUN_ROOT/xdg"
+
+cleanup_short_tmp() {
+  [[ "$TMP_ROOT" == "/tmp/smvla-noarrow-${SLURM_JOB_ID}" ]] || return 0
+  [[ -d "$TMP_ROOT" ]] || return 0
+  rm -rf -- "$TMP_ROOT"
+}
+trap cleanup_short_tmp EXIT
+
+mkdir -p "$TMP_ROOT" "$XDG_CACHE_HOME"
 
 "$PYTHON" - "$RUN_ROOT/runtime_versions.json" <<'PY'
 import importlib.metadata as md
@@ -272,6 +284,7 @@ archive_on_exit() {
       sort -z | xargs -0 -r sha256sum > "$ARCHIVE_ROOT/inventory.sha256" || archive_rc=$?
     sha256sum "$ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$ARCHIVE_ROOT/tree_sha256" || archive_rc=$?
   fi
+  cleanup_short_tmp || archive_rc=$?
   if [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]]; then workload_rc=$archive_rc; fi
   exit "$workload_rc"
 }
