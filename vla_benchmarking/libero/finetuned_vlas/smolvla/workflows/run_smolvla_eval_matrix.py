@@ -125,6 +125,12 @@ def _resolve_training_lineage(
         training_path,
         validation_manifest,
         profile=DEFAULT_PROFILE,
+        # The archived training manifest points at the canonical sentinel, but
+        # the scratch/archive copy may have harmless formatting drift.  The
+        # validator still requires the sentinel to identify the exact pair
+        # manifest, so this preserves semantic lineage without requiring a
+        # byte-for-byte copy of the sentinel JSON.
+        allow_revalidated_pair_sentinel=True,
     )
     base_policy = Path(validated["base_policy"]).expanduser().resolve()
     if not base_policy.is_dir():
