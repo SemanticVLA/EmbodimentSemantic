@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import numpy as np
 import pytest
@@ -276,6 +277,48 @@ def test_runner_validates_plan_metadata_schedule_and_derives_action_counts():
             adapter, plan, [EpisodeSpec(cell, "pick up the bowl")],
             lambda _policy, _episode: EpisodeOutcome(True),
         )
+
+
+def test_runner_flushes_each_completed_episode_to_jsonl(tmp_path):
+    bindings = {
+        "adapter_kind": "pi05",
+        "artifact": {"id": "artifact", "revision": "a" * 40, "checkpoint_sha256": "d" * 64},
+        "runtime": {"id": "runtime", "sha256": "a" * 64},
+        "io": {"id": "io", "sha256": "b" * 64, "action_horizon": 1, "action_dim": 7},
+        "dataset_manifest": {"id": "dataset", "manifest_sha256": "c" * 64},
+    }
+    plan = build_evaluation_plan(
+        policy_kind="pi05", suite_mode="vanilla", task_ids=[0], episodes_per_task=2,
+        bindings=bindings,
+    )
+    metadata = PolicyMetadata(
+        policy_kind="pi05", artifact_id="artifact", checkpoint_revision="a" * 40,
+        backend="test", adapter_kind="pi05", native_action_horizon=1,
+        extra={
+            "runtime_id": "runtime", "runtime_sha256": "a" * 64,
+            "io_id": "io", "io_sha256": "b" * 64,
+            "dataset_manifest_id": "dataset", "dataset_manifest_sha256": "c" * 64,
+            "checkpoint_sha256": "d" * 64,
+        },
+    )
+    adapter = CallablePolicyAdapter(metadata, act_fn=lambda _: np.zeros((1, 7), dtype=np.float32))
+    output = tmp_path / "episodes.jsonl"
+    episodes = [EpisodeSpec(cell, "pick up the bowl") for cell in build_task_seed_matrix(task_ids=[0], episodes_per_task=2)]
+    calls = 0
+
+    def rollout(policy, _episode):
+        nonlocal calls
+        calls += 1
+        action = policy.act({"agentview": np.zeros((256, 256, 3), dtype=np.uint8)})
+        for _ in action:
+            policy.record_environment_step()
+        if calls == 2:
+            assert len(output.read_text(encoding="utf-8").splitlines()) == 1
+        return EpisodeOutcome(False)
+
+    records = run_policy_eval(adapter, plan, episodes, rollout, output_jsonl=output)
+    assert len(records) == 2
+    assert [json.loads(line)["episode_index"] for line in output.read_text().splitlines()] == [0, 1]
 
 
 def test_v2_metadata_validation_checks_receipt_ids_as_well_as_digests():

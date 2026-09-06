@@ -204,38 +204,45 @@ def run_policy_eval(
     validate_native_schedule(checked_plan, [episode.cell.as_dict() for episode in episode_list])
     plan_sha256 = str(checked_plan["sha256"])
     records: list[PolicyEpisodeRecord] = []
-    for episode in episode_list:
-        counted = ActionCountingAdapter(adapter)
-        counted.reset(episode.task_description, episode.cell.seed)
-        outcome = rollout(counted, episode)
-        if not isinstance(outcome, EpisodeOutcome):
-            raise TypeError("rollout must return EpisodeOutcome")
-        counted.finalize()
-        observed_chunks = counted.action_calls
-        observed_actions = counted.executed_actions
-        if outcome.success and observed_chunks == 0:
-            raise RuntimeError("rollout returned success without calling adapter.act")
-        if outcome.action_chunks is not None and int(outcome.action_chunks) != observed_chunks:
-            raise ValueError("rollout action_chunks disagrees with policy action calls")
-        if outcome.executed_actions is not None and int(outcome.executed_actions) != observed_actions:
-            raise ValueError("rollout executed_actions disagrees with native action chunks")
-        records.append(PolicyEpisodeRecord(
-            cell=episode.cell,
-            policy=adapter.metadata.as_dict(),
-            success=outcome.success,
-            terminal=outcome.terminal,
-            action_chunks=observed_chunks,
-            executed_actions=observed_actions,
-            failure_category=outcome.failure_category,
-            metadata=dict(outcome.metadata),
-            plan_sha256=plan_sha256,
-        ))
+    handle = None
     if output_jsonl is not None:
         target = Path(output_jsonl)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8") as handle:
-            for record in records:
+        handle = target.open("w", encoding="utf-8")
+    try:
+        for episode in episode_list:
+            counted = ActionCountingAdapter(adapter)
+            counted.reset(episode.task_description, episode.cell.seed)
+            outcome = rollout(counted, episode)
+            if not isinstance(outcome, EpisodeOutcome):
+                raise TypeError("rollout must return EpisodeOutcome")
+            counted.finalize()
+            observed_chunks = counted.action_calls
+            observed_actions = counted.executed_actions
+            if outcome.success and observed_chunks == 0:
+                raise RuntimeError("rollout returned success without calling adapter.act")
+            if outcome.action_chunks is not None and int(outcome.action_chunks) != observed_chunks:
+                raise ValueError("rollout action_chunks disagrees with policy action calls")
+            if outcome.executed_actions is not None and int(outcome.executed_actions) != observed_actions:
+                raise ValueError("rollout executed_actions disagrees with native action chunks")
+            record = PolicyEpisodeRecord(
+                cell=episode.cell,
+                policy=adapter.metadata.as_dict(),
+                success=outcome.success,
+                terminal=outcome.terminal,
+                action_chunks=observed_chunks,
+                executed_actions=observed_actions,
+                failure_category=outcome.failure_category,
+                metadata=dict(outcome.metadata),
+                plan_sha256=plan_sha256,
+            )
+            records.append(record)
+            if handle is not None:
                 handle.write(json.dumps(record.as_dict(), sort_keys=True) + "\n")
+                handle.flush()
+    finally:
+        if handle is not None:
+            handle.close()
     return records
 
 
