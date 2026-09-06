@@ -14,6 +14,15 @@ Evaluation archive:
 
 The implementation is shared with the paired workflow under `../workflows/`.
 
+## Legion training launcher
+
+Submit `legion/run_training.sbatch` directly through Slurm. It supports a
+two-step `smoke` scope and the sealed 29,190-step `full` scope, requires an
+exact clean release commit, and archives the checkpoint, manifest, hashes, and
+Slurm logs. A smoke may explicitly use `reuse_verified` data mode after the
+launcher re-verifies the byte-bound full dataset pair; full training always
+uses the standard preparation contract.
+
 ## Sealed evaluation detail
 
 The final Legion evaluation was job `1910198`, with seed `1000`, ten episodes
