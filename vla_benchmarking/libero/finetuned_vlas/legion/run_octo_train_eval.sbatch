@@ -40,19 +40,22 @@ export PYTHONNOUSERSITE=1
 nvidia-smi -L
 "$BASE_PYTHON" -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 
-"$BASE_PYTHON" -m venv --system-site-packages "$RUN_ROOT/venv"
-export PYTHON="$RUN_ROOT/venv/bin/python"
+export OCTO_ENV="$RUN_ROOT/octo_env_py310"
+conda create --prefix "$OCTO_ENV" python=3.10 -y
+export PYTHON="$OCTO_ENV/bin/python"
 "$PYTHON" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel
 
 OCTO_COMMIT="241fb3514b7c40957a86d869fecb7c7fc353f540"
 OCTO_REPO="$RUN_ROOT/octo"
+export OCTO_REPO OCTO_COMMIT
 if [[ ! -d "$OCTO_REPO/.git" ]]; then git clone https://github.com/octo-models/octo.git "$OCTO_REPO"; fi
 git -C "$OCTO_REPO" fetch --quiet origin "$OCTO_COMMIT"
 git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 [[ "$(git -C "$OCTO_REPO" rev-parse HEAD)" == "$OCTO_COMMIT" ]]
+"$PYTHON" -m pip install --disable-pip-version-check -r "$OCTO_REPO/requirements.txt"
 "$PYTHON" -m pip install --disable-pip-version-check -e "$OCTO_REPO" --no-deps
 "$PYTHON" -m pip install --disable-pip-version-check \
-  "jax[cuda12]" flax tensorflow tensorflow-datasets ml-collections clu distrax optax
+  "jax[cuda11_pip]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 export PYTHONPATH="$HOME/EmbodimentSemantic:$OCTO_REPO:${PYTHONPATH:-}"
 export JAX_PLATFORMS=cuda
@@ -88,6 +91,7 @@ CONFIG_PATH="$HOME/EmbodimentSemantic/vla_benchmarking/libero/finetuned_vlas/oct
 declare -A MICRO=( [32]=32 [16]=16 [8]=8 )
 declare -A ACCUM=( [32]=1 [16]=2 [8]=4 )
 declare -A PEAK
+declare -A STATUS
 SMOKE_OK=0
 for mb in 32 16 8; do
   smoke_root="$RUN_ROOT/memory_smoke/mb${mb}"
@@ -101,12 +105,13 @@ for mb in 32 16 8; do
     done
   ) &
   monitor_pid=$!
+  microsteps=$((2 * ${ACCUM[$mb]}))
   set +e
   "$PYTHON" "$OCTO_REPO/scripts/finetune.py" \
     --config="$CONFIG_PATH:full,language_conditioned" \
     --config.pretrained_path="$BASE_ROOT" --config.pretrained_step=300000 \
     --config.dataset_kwargs.data_dir="$DATASET_ROOT" \
-    --config.save_dir="$smoke_root/output" --config.num_steps=2 \
+    --config.save_dir="$smoke_root/output" --config.num_steps="$microsteps" \
     --config.batch_size="$mb" --config.optimizer.grad_accumulation_steps="${ACCUM[$mb]}" \
     --config.seed=1000 --config.window_size=1 --config.traj_transform_kwargs.action_horizon=4 \
     > "$smoke_root/train.log" 2>&1
@@ -117,8 +122,8 @@ for mb in 32 16 8; do
   peak_mib="$(awk 'BEGIN{m=0} {gsub(/[^0-9.]/,""); if ($1+0>m) m=$1+0} END{printf "%.0f",m}' "$monitor" 2>/dev/null || echo 0)"
   if [[ "$peak_mib" -le 0 ]]; then peak_mib=999999; fi
   PEAK[$mb]="$(awk -v x="$peak_mib" 'BEGIN{printf "%.6f",x/1024.0}')"
-  printf '{"microbatch":%s,"return_code":%s,"peak_vram_gb":%s}\n' "$mb" "$rc" "${PEAK[$mb]}" | tee "$smoke_root/receipt.json"
-  if [[ "$rc" -eq 0 ]]; then SMOKE_OK=1; fi
+  if [[ "$rc" -eq 0 ]]; then STATUS[$mb]=PASS; SMOKE_OK=1; else STATUS[$mb]=FAILED; fi
+  printf '{"microbatch":%s,"return_code":%s,"microsteps":%s,"status":"%s","peak_vram_gb":%s}\n' "$mb" "$rc" "$microsteps" "${STATUS[$mb]}" "${PEAK[$mb]}" | tee "$smoke_root/receipt.json"
 done
 if [[ "$SMOKE_OK" -ne 1 ]]; then
   echo "all Octo memory smoke candidates failed" >&2
@@ -127,16 +132,19 @@ fi
 
 DATASET_DIGEST="$($PYTHON -c 'import json,sys; from vla_benchmarking.libero.finetuned_vlas.octo.manifest import completion_manifest_sha256; print(completion_manifest_sha256(json.load(open(sys.argv[1]))))' "$MANIFEST")"
 CONFIG_DIGEST="$($PYTHON -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONFIG_PATH")"
+OCTO_RUNTIME_SHA="$($PYTHON -c 'from vla_benchmarking.libero.finetuned_vlas.octo.preflight import runtime_closure_paths; from vla_benchmarking.libero.evaluation.policy_adapter import derive_runtime_receipt; print(derive_runtime_receipt(closure_paths=runtime_closure_paths(), require_clean=True)["sha256"])')"
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.write_octo_memory_receipt \
   --output "$RUN_ROOT/a40_memory_receipt.json" --checkpoint-revision "$BASE_REVISION" \
   --dataset-manifest-sha256 "$DATASET_DIGEST" --config-sha256 "$CONFIG_DIGEST" \
-  --peaks "${PEAK[32]}" "${PEAK[16]}" "${PEAK[8]}"
+  --runtime-sha256 "$OCTO_RUNTIME_SHA" --octo-commit "$OCTO_COMMIT" \
+  --peaks "${PEAK[32]}" "${PEAK[16]}" "${PEAK[8]}" \
+  --statuses "${STATUS[32]}" "${STATUS[16]}" "${STATUS[8]}"
 
 TRAIN_ROOT="$RUN_ROOT/training"
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.octo.train \
   --execute --dataset-manifest "$MANIFEST" --checkpoint-path "$BASE_ROOT" \
   --dataset-root "$DATASET_ROOT" --memory-measurements "$RUN_ROOT/a40_memory_receipt.json" \
-  --entrypoint "$OCTO_REPO/scripts/finetune.py" --config-path "$CONFIG_PATH" --output-dir "$TRAIN_ROOT"
+  --entrypoint "$HOME/EmbodimentSemantic/vla_benchmarking/libero/finetuned_vlas/octo/native_train.py" --config-path "$CONFIG_PATH" --output-dir "$TRAIN_ROOT"
 
 # Normalize the native trainer's output into the pinned 300000/default/checkpoint
 # layout expected by the strict matched-mode loader, while preserving the
@@ -144,8 +152,9 @@ TRAIN_ROOT="$RUN_ROOT/training"
 FINAL_ROOT="$RUN_ROOT/final_octo_base15_finetuned"
 FINAL_CKPT="$FINAL_ROOT/300000/default/checkpoint"
 mkdir -p "$FINAL_CKPT"
-FOUND="$(find "$TRAIN_ROOT" -type d -path '*/default/checkpoint' -print | sort | tail -n1)"
-if [[ -z "$FOUND" ]]; then FOUND="$(find "$TRAIN_ROOT" -type f -path '*/default/checkpoint/*' -printf '%h\n' | sort -u | tail -n1)"; fi
+FINAL_RECEIPT="$TRAIN_ROOT/octo_final_checkpoint_receipt.json"
+[[ -f "$FINAL_RECEIPT" ]]
+FOUND="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["checkpoint_path"])' "$FINAL_RECEIPT")"
 [[ -n "$FOUND" && -e "$FOUND" ]]
 cp -a "$FOUND/." "$FINAL_CKPT/"
 cp -a "$TRAIN_ROOT/." "$FINAL_ROOT/trainer_output/"

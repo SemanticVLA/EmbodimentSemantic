@@ -15,6 +15,8 @@ from vla_benchmarking.libero.evaluation.policy_adapter import (
     derive_runtime_receipt,
 )
 from vla_benchmarking.libero.finetuned_vlas.octo.config import MATCHED_TRAIN_CONFIG
+from vla_benchmarking.libero.finetuned_vlas.octo.preflight import _checkpoint_tree_sha256
+from vla_benchmarking.libero.finetuned_vlas.octo.preflight import runtime_closure_paths
 
 
 def main() -> int:
@@ -25,18 +27,17 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[4]
-    closure = (
-        root / "vla_benchmarking/libero/evaluation",
-        root / "vla_benchmarking/libero/finetuned_vlas/common",
-        root / "vla_benchmarking/libero/finetuned_vlas/octo",
-    )
     artifact = derive_checkpoint_receipt(
         args.checkpoint_path,
         artifact_id="octo_base15_spatial_no_arrow_matched_finetuned",
         checkpoint_revision=args.checkpoint_revision,
     )
-    runtime = derive_runtime_receipt(closure_paths=closure, require_clean=True)
+    # Octo preflight uses the published checkpoint-tree digest (including
+    # relative file names); bind the exact same digest in the v2 plan.
+    tree_sha = _checkpoint_tree_sha256(args.checkpoint_path.expanduser().resolve())
+    artifact["checkpoint_sha256"] = tree_sha
+    artifact["sha256"] = tree_sha
+    runtime = derive_runtime_receipt(closure_paths=runtime_closure_paths(), require_clean=True)
     io = derive_io_receipt(
         {
             "action_horizon": 4,

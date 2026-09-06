@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -171,11 +172,17 @@ def _file_sha256(path: Path) -> str:
 
 def runtime_closure_paths() -> tuple[Path, ...]:
     repo_root = Path(__file__).resolve().parents[4]
-    return (
+    paths = [
         repo_root / "vla_benchmarking/libero/evaluation",
         repo_root / "vla_benchmarking/libero/finetuned_vlas/common",
         repo_root / "vla_benchmarking/libero/finetuned_vlas/octo",
-    )
+    ]
+    upstream_value = os.environ.get("OCTO_REPO", "").strip()
+    if upstream_value:
+        upstream = Path(upstream_value).expanduser()
+        if upstream.is_dir():
+            paths.append(upstream.resolve())
+    return tuple(paths)
 
 
 def _provenance_digests(*, require_clean: bool = False) -> dict[str, str]:

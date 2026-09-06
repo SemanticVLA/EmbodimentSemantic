@@ -162,7 +162,10 @@ class OctoPolicyAdapter:
         artifact_id: str | None = None,
         checkpoint_revision: str | None = None,
         dataset_manifest_sha256: str | None = None,
+        dataset_manifest_id: str | None = None,
+        runtime_id: str | None = None,
         runtime_sha256: str | None = None,
+        io_id: str | None = None,
         io_sha256: str | None = None,
         checkpoint_sha256: str | None = None,
         checkpoint_tree_sha256: str | None = None,
@@ -186,7 +189,10 @@ class OctoPolicyAdapter:
         self._checkpoint_revision = str(checkpoint_revision or config.checkpoint.revision)
         self._stats_source = stats_source
         self._dataset_manifest_sha256 = str(dataset_manifest_sha256) if dataset_manifest_sha256 else None
+        self._dataset_manifest_id = str(dataset_manifest_id) if dataset_manifest_id else None
+        self._runtime_id = str(runtime_id) if runtime_id else None
         self._runtime_sha256 = str(runtime_sha256) if runtime_sha256 else None
+        self._io_id = str(io_id) if io_id else None
         self._io_sha256 = str(io_sha256) if io_sha256 else None
         if checkpoint_sha256 and checkpoint_tree_sha256 and str(checkpoint_sha256) != str(checkpoint_tree_sha256):
             raise ValueError("checkpoint_sha256 and deprecated checkpoint_tree_sha256 disagree")
@@ -212,7 +218,10 @@ class OctoPolicyAdapter:
         checkpoint_revision: str | None = None,
         artifact_id: str | None = None,
         dataset_manifest_sha256: str | None = None,
+        dataset_manifest_id: str | None = None,
+        runtime_id: str | None = None,
         runtime_sha256: str | None = None,
+        io_id: str | None = None,
         io_sha256: str | None = None,
         checkpoint_sha256: str | None = None,
         checkpoint_tree_sha256: str | None = None,
@@ -282,7 +291,10 @@ class OctoPolicyAdapter:
             artifact_id=artifact_id,
             checkpoint_revision=revision,
             dataset_manifest_sha256=dataset_manifest_sha256,
+            dataset_manifest_id=dataset_manifest_id,
+            runtime_id=runtime_id,
             runtime_sha256=runtime_sha256,
+            io_id=io_id,
             io_sha256=io_sha256,
             checkpoint_sha256=checkpoint_sha256,
             checkpoint_tree_sha256=checkpoint_tree_sha256,
@@ -301,8 +313,14 @@ class OctoPolicyAdapter:
         }
         if self._dataset_manifest_sha256 is not None:
             extra["dataset_manifest_sha256"] = self._dataset_manifest_sha256
+        if self._dataset_manifest_id is not None:
+            extra["dataset_manifest_id"] = self._dataset_manifest_id
+        if self._runtime_id is not None:
+            extra["runtime_id"] = self._runtime_id
         if self._runtime_sha256 is not None:
             extra["runtime_sha256"] = self._runtime_sha256
+        if self._io_id is not None:
+            extra["io_id"] = self._io_id
         if self._io_sha256 is not None:
             extra["io_sha256"] = self._io_sha256
         if self._checkpoint_sha256 is not None:

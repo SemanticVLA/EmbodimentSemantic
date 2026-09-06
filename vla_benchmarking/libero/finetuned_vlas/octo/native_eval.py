@@ -296,6 +296,35 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_plan_provenance(
+    plan: Mapping[str, Any], *, runtime_sha256: str, io_sha256: str,
+    dataset_sha256: str, checkpoint_sha256: str | None,
+    checkpoint_revision: str,
+) -> None:
+    """Check v2 receipt bindings before loading the native checkpoint."""
+
+    if plan.get("schema") != "shared_evaluation_plan.v2":
+        return
+    bindings = plan.get("bindings")
+    if not isinstance(bindings, Mapping):
+        raise SystemExit("Octo v2 plan lacks provenance bindings")
+    artifact = bindings.get("artifact")
+    if not isinstance(artifact, Mapping):
+        raise SystemExit("Octo v2 plan artifact binding is invalid")
+    if str(artifact.get("checkpoint_revision", artifact.get("revision", ""))) != str(checkpoint_revision):
+        raise SystemExit("Octo plan checkpoint revision disagrees with preflight")
+    expected_hash = artifact.get("checkpoint_sha256", artifact.get("artifact_sha256", artifact.get("sha256")))
+    if expected_hash is not None and str(expected_hash) != str(checkpoint_sha256):
+        raise SystemExit("Octo plan checkpoint hash disagrees with preflight")
+    for name, observed in (("runtime", runtime_sha256), ("io", io_sha256), ("dataset_manifest", dataset_sha256)):
+        binding = bindings.get(name)
+        if not isinstance(binding, Mapping):
+            raise SystemExit(f"Octo v2 plan {name} binding is invalid")
+        expected = binding.get("sha256", binding.get("manifest_sha256", binding.get("id")))
+        if expected is not None and str(expected) != str(observed):
+            raise SystemExit(f"Octo plan {name} receipt disagrees with preflight")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.action_horizon != 4 or args.execute_horizon != 4:
@@ -334,14 +363,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("matched Octo evaluation requires the completed local dataset manifest")
     if plan["policy_kind"] != args.policy_kind or args.policy_kind != config.policy_kind:
         raise SystemExit("evaluation plan policy kind does not match the selected Octo mode")
+    bindings = plan.get("bindings", {})
+    runtime_binding = bindings.get("runtime", {}) if isinstance(bindings, Mapping) else {}
+    io_binding = bindings.get("io", {}) if isinstance(bindings, Mapping) else {}
+    dataset_binding = bindings.get("dataset_manifest", {}) if isinstance(bindings, Mapping) else {}
+    _validate_plan_provenance(
+        plan,
+        runtime_sha256=args.runtime_sha256,
+        io_sha256=args.io_sha256,
+        dataset_sha256=args.dataset_manifest_sha256,
+        checkpoint_sha256=observed_checkpoint_sha256,
+        checkpoint_revision=args.checkpoint_revision,
+    )
     adapter = OctoPolicyAdapter.from_pretrained(
         str(Path(args.checkpoint_path).expanduser().resolve()),
         seed=config.seed,
         mode=args.mode,
         checkpoint_revision=args.checkpoint_revision,
         artifact_id="octo_base15_spatial_no_arrow_matched_finetuned",
+        runtime_id=str(runtime_binding.get("id")) if runtime_binding.get("id") else None,
         dataset_manifest_sha256=args.dataset_manifest_sha256,
+        dataset_manifest_id=str(dataset_binding.get("id")) if dataset_binding.get("id") else None,
         runtime_sha256=args.runtime_sha256,
+        io_id=str(io_binding.get("id")) if io_binding.get("id") else None,
         io_sha256=args.io_sha256,
         checkpoint_sha256=observed_checkpoint_sha256,
         checkpoint_root=str(Path(args.checkpoint_root).expanduser().resolve()),
