@@ -95,24 +95,39 @@ def test_panda_probe_does_not_write_mujoco_read_only_data_properties() -> None:
 def test_panda_probe_adapts_mujoco3_named_accessors() -> None:
     env = _fake_panda_env()
     legacy_model = env.sim.model
+    site_names = ["robot0_gripper0_grip_site"]
+    body_names = [
+        "robot0_gripper0_leftfinger",
+        "robot0_gripper0_rightfinger",
+        "robot0_right_hand",
+    ]
+    geom_names = [
+        "robot0_gripper0_finger1_pad_collision",
+        "robot0_gripper0_finger2_pad_collision",
+        "robot0_gripper0_hand_collision",
+    ]
 
     class NamedAccessOnlyModel:
+        nsite = len(site_names)
+        nbody = len(body_names)
+        ngeom = len(geom_names)
+
         def __getattr__(self, name):
             if name.endswith("_name2id") or name.endswith("_id2name"):
                 raise AttributeError(name)
             return getattr(legacy_model, name)
 
         def site(self, name_or_id):
-            index = int(name_or_id) if isinstance(name_or_id, int) else legacy_model.site_name2id(name_or_id)
-            return SimpleNamespace(id=index, name=legacy_model.site_names[index])
+            index = int(name_or_id) if isinstance(name_or_id, int) else site_names.index(name_or_id)
+            return SimpleNamespace(id=index, name=site_names[index])
 
         def body(self, name_or_id):
-            index = int(name_or_id) if isinstance(name_or_id, int) else legacy_model.body_name2id(name_or_id)
-            return SimpleNamespace(id=index, name=legacy_model.body_names[index])
+            index = int(name_or_id) if isinstance(name_or_id, int) else body_names.index(name_or_id)
+            return SimpleNamespace(id=index, name=body_names[index])
 
         def geom(self, name_or_id):
-            index = int(name_or_id) if isinstance(name_or_id, int) else legacy_model.geom_name2id(name_or_id)
-            return SimpleNamespace(id=index, name=legacy_model.geom_names[index])
+            index = int(name_or_id) if isinstance(name_or_id, int) else geom_names.index(name_or_id)
+            return SimpleNamespace(id=index, name=geom_names[index])
 
     env.sim.model = NamedAccessOnlyModel()
     calibration, transform, record = runner.probe_robot_calibration(env)

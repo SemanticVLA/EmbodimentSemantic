@@ -1275,7 +1275,21 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
             accessor = getattr(self._source, kind, None)
             if not callable(accessor):
                 raise KeyError(name)
-            return int(accessor(name).id)
+            try:
+                return int(accessor(name).id)
+            except (KeyError, ValueError, IndexError, TypeError):
+                pass
+            count = int(getattr(self._source, f"n{kind}", 0))
+            suffix = f"_{name}"
+            matches: list[int] = []
+            for index in range(count):
+                item = accessor(index)
+                actual_name = str(getattr(item, "name", "") or "")
+                if actual_name == name or actual_name.endswith(suffix):
+                    matches.append(int(getattr(item, "id", index)))
+            if len(matches) != 1:
+                raise KeyError(name)
+            return matches[0]
 
         def site_name2id(self, name: str) -> int:
             return self._name2id("site", name)
