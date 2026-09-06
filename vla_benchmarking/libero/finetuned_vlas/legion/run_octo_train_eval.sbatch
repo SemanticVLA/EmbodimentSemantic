@@ -67,7 +67,21 @@ export OCTO_EVAL_ENV="$RUN_ROOT/octo_eval_py312"
 "$BASE_PYTHON" -m venv --system-site-packages "$OCTO_EVAL_ENV"
 export OCTO_EVAL_PYTHON="$OCTO_EVAL_ENV/bin/python"
 "$OCTO_EVAL_PYTHON" -m pip install --disable-pip-version-check -e "$OCTO_REPO" --no-deps
-"$OCTO_EVAL_PYTHON" -c 'import octo, lerobot.envs.libero, libero.libero; import sys; assert sys.version_info >= (3,12); print(sys.version)'
+# Python 3.12 has no wheels for the Octo paper's original JAX/TensorFlow
+# pins.  Keep the training environment on those exact pins, and use this
+# separately recorded, API-compatible inference environment for the required
+# LIBERO rollout process.
+"$OCTO_EVAL_PYTHON" -m pip install --disable-pip-version-check \
+  "jax[cuda12]==0.4.38" \
+  "flax==0.10.2" "orbax-checkpoint==0.11.28" \
+  "tensorflow==2.20.0" "tensorflow-probability==0.25.0" \
+  "tensorflow-datasets==4.9.9" "tensorflow-hub==0.16.1" \
+  "tensorflow-text==2.20.0" "tensorflow-graphics==2021.12.3" \
+  "optax==0.2.4" "chex==0.1.89" "distrax==0.1.5" \
+  "ml-collections>=0.1.0" "einops>=0.6.1" "transformers==4.40.1" \
+  "sentencepiece" "scipy>=1.6.0" "imageio>=2.31.1" \
+  "tqdm>=4.60.0" "absl-py>=0.12.0"
+"$OCTO_EVAL_PYTHON" -c 'import jax, flax, tensorflow, octo, lerobot.envs.libero, libero.libero; import sys; assert sys.version_info >= (3,12); print({"python": sys.version, "jax": jax.__version__, "flax": flax.__version__, "tensorflow": tensorflow.__version__})'
 export JAX_PLATFORMS=cuda
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90
@@ -142,11 +156,11 @@ fi
 
 DATASET_DIGEST="$($PYTHON -c 'import json,sys; from vla_benchmarking.libero.finetuned_vlas.octo.manifest import completion_manifest_sha256; print(completion_manifest_sha256(json.load(open(sys.argv[1]))))' "$MANIFEST")"
 CONFIG_DIGEST="$($PYTHON -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONFIG_PATH")"
-OCTO_RUNTIME_SHA="$($PYTHON -c 'from vla_benchmarking.libero.finetuned_vlas.octo.preflight import runtime_closure_paths; from vla_benchmarking.libero.evaluation.policy_adapter import derive_runtime_receipt; print(derive_runtime_receipt(closure_paths=runtime_closure_paths(), require_clean=True)["sha256"])')"
+TRAIN_RUNTIME_SHA="$($PYTHON -c 'from vla_benchmarking.libero.finetuned_vlas.octo.preflight import runtime_closure_paths; from vla_benchmarking.libero.evaluation.policy_adapter import derive_runtime_receipt; print(derive_runtime_receipt(closure_paths=runtime_closure_paths(), require_clean=True)["sha256"])')"
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.write_octo_memory_receipt \
   --output "$RUN_ROOT/a40_memory_receipt.json" --checkpoint-revision "$BASE_REVISION" \
   --dataset-manifest-sha256 "$DATASET_DIGEST" --config-sha256 "$CONFIG_DIGEST" \
-  --runtime-sha256 "$OCTO_RUNTIME_SHA" --octo-commit "$OCTO_COMMIT" \
+  --runtime-sha256 "$TRAIN_RUNTIME_SHA" --octo-commit "$OCTO_COMMIT" \
   --peaks "${PEAK[32]}" "${PEAK[16]}" "${PEAK[8]}" \
   --statuses "${STATUS[32]}" "${STATUS[16]}" "${STATUS[8]}"
 
@@ -156,30 +170,40 @@ TRAIN_ROOT="$RUN_ROOT/training"
   --dataset-root "$DATASET_ROOT" --memory-measurements "$RUN_ROOT/a40_memory_receipt.json" \
   --entrypoint "$HOME/EmbodimentSemantic/vla_benchmarking/libero/finetuned_vlas/octo/native_train.py" --config-path "$CONFIG_PATH" --output-dir "$TRAIN_ROOT"
 
-# Normalize the native trainer's output into the pinned 300000/default/checkpoint
-# layout expected by the strict matched-mode loader, while preserving the
-# original output tree and a receipt that records the source location.
-FINAL_ROOT="$RUN_ROOT/final_octo_base15_finetuned"
+# Preserve the native Octo experiment root.  OctoModel.load_pretrained reads
+# config.json, example_batch.msgpack, and dataset_statistics.json from this
+# root in addition to the selected parameter checkpoint.
 FINAL_RECEIPT="$TRAIN_ROOT/octo_final_checkpoint_receipt.json"
 [[ -f "$FINAL_RECEIPT" ]]
 FOUND="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["checkpoint_path"])' "$FINAL_RECEIPT")"
 [[ -n "$FOUND" && -e "$FOUND" ]]
 FOUND_ROOT="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["experiment_root"])' "$FINAL_RECEIPT")"
 FINAL_STEP="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["step"])' "$FINAL_RECEIPT")"
-FINAL_CKPT="$FINAL_ROOT/$FINAL_STEP/default/checkpoint"
-mkdir -p "$FINAL_CKPT"
-if [[ -d "$FOUND" ]]; then cp -a "$FOUND/." "$FINAL_CKPT/"; else cp -a "$FOUND" "$FINAL_CKPT"; fi
-cp -a "$TRAIN_ROOT/." "$FINAL_ROOT/trainer_output/"
+FINAL_ROOT="$FOUND_ROOT"
+FINAL_CKPT="$FOUND"
+[[ -f "$FINAL_ROOT/config.json" ]]
+[[ -f "$FINAL_ROOT/example_batch.msgpack" ]]
+[[ -f "$FINAL_ROOT/dataset_statistics.json" ]]
+
+# Prove the final parameter tree is loadable before plans are generated.
+"$PYTHON" - "$FINAL_ROOT" "$FINAL_STEP" <<'PY'
+import sys
+from octo.model.octo_model import OctoModel
+model = OctoModel.load_pretrained(sys.argv[1], step=int(sys.argv[2]))
+assert model.example_batch is not None and model.dataset_statistics is not None
+print({"final_root": sys.argv[1], "final_step": int(sys.argv[2]), "reload": "PASS"})
+PY
 
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.octo.preflight \
   --mode matched_train --dataset-manifest "$MANIFEST" --checkpoint-path "$FINAL_ROOT" \
   > "$RUN_ROOT/final_preflight.json"
 CHECKPOINT_SHA="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["checkpoint_sha256"])' "$RUN_ROOT/final_preflight.json")"
-RUNTIME_SHA="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_sha256"])' "$RUN_ROOT/final_preflight.json")"
+TRAIN_RUNTIME_SHA="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_sha256"])' "$RUN_ROOT/final_preflight.json")"
 IO_SHA="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["io_sha256"])' "$RUN_ROOT/final_preflight.json")"
-"$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.prepare_octo_eval_plans \
+"$OCTO_EVAL_PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.prepare_octo_eval_plans \
   --checkpoint-path "$FINAL_CKPT" --checkpoint-revision "$BASE_REVISION" \
   --dataset-manifest "$MANIFEST" --output-dir "$RUN_ROOT/plans"
+EVAL_RUNTIME_SHA="$($OCTO_EVAL_PYTHON -c 'from vla_benchmarking.libero.finetuned_vlas.octo.preflight import runtime_closure_paths; from vla_benchmarking.libero.evaluation.policy_adapter import derive_runtime_receipt; print(derive_runtime_receipt(closure_paths=runtime_closure_paths(), require_clean=True)["sha256"])')"
 
 cat > "$RUN_ROOT/run_provenance.json" <<JSON
 {
@@ -190,7 +214,8 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
   "fine_tuned_checkpoint": {"path": "$FINAL_CKPT", "checkpoint_sha256": "$CHECKPOINT_SHA"},
   "dataset_manifest": "$MANIFEST",
   "schedule": {"tasks": 10, "episodes_per_task": 10, "conditions": ["vanilla", "sealed_randomized"], "episodes": 200},
-  "runtime_sha256": "$RUNTIME_SHA",
+  "runtime_sha256": "$EVAL_RUNTIME_SHA",
+  "training_runtime_sha256": "$TRAIN_RUNTIME_SHA",
   "io_sha256": "$IO_SHA",
   "octo_commit": "$OCTO_COMMIT",
   "eval_python": "$OCTO_EVAL_PYTHON"
@@ -202,7 +227,7 @@ for condition in vanilla sealed; do
     --mode matched_train --dataset-manifest "$MANIFEST" --dataset-manifest-sha256 "$DATASET_DIGEST" \
     --checkpoint-path "$FINAL_ROOT" --checkpoint-root "$FINAL_ROOT" --checkpoint-step "$FINAL_STEP" \
     --policy-kind octo_base15_spatial_no_arrow_matched --checkpoint-revision "$BASE_REVISION" \
-    --checkpoint-sha256 "$CHECKPOINT_SHA" --runtime-sha256 "$RUNTIME_SHA" --io-sha256 "$IO_SHA" \
+    --checkpoint-sha256 "$CHECKPOINT_SHA" --runtime-sha256 "$EVAL_RUNTIME_SHA" --io-sha256 "$IO_SHA" \
     --action-horizon 4 --execute-horizon 4 --plan "$RUN_ROOT/plans/octo_${condition}_100.json" \
     --output-jsonl "$RUN_ROOT/octo_${condition}.jsonl"
 done

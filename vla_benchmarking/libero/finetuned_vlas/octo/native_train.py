@@ -35,6 +35,15 @@ def select_final_checkpoint(save_dir: str | Path, *, expected_step: int) -> Path
     for path in root.rglob("*"):
         if path.is_symlink():
             continue
+        # The upstream callback writes optimizer state under a sibling
+        # ``state/<step>/default/checkpoint`` tree.  It is not a model
+        # checkpoint and must never win a numeric/tie selection.
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            relative_parts = path.parts
+        if "state" in relative_parts:
+            continue
         name = path.name.lower()
         if path.is_dir() and name not in {"checkpoint", "ckpt"}:
             continue

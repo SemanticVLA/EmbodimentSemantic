@@ -232,10 +232,11 @@ def build_command(
         f"--config.batch_size={(batch_candidate.microbatch if batch_candidate else EFFECTIVE_BATCH)}",
         "--config.seed=1000",
         "--config.window_size=1",
-        f"--config.optimizer.learning_rate.warmup_steps={2000 * accumulation}",
-        # The native trainer's num_steps is an optimizer-update count after
-        # accumulation.  Seal cosine decay to that same unit explicitly.
-        f"--config.optimizer.learning_rate.decay_steps={native_steps}",
+        # Optax MultiSteps advances the wrapped schedule only on optimizer
+        # updates, so keep the sealed schedule in optimizer-update units even
+        # though the outer native loop runs one step per microbatch.
+        f"--config.optimizer.learning_rate.warmup_steps={int(MATCHED_TRAIN_CONFIG.warmup_steps)}",
+        f"--config.optimizer.learning_rate.decay_steps={int(updates)}",
         "--config.optimizer.weight_decay=0.01",
         "--config.optimizer.clip_gradient=1.0",
     ]
