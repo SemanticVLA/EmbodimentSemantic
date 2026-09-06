@@ -73,6 +73,12 @@ git -C "$OCTO_REPO" fetch --quiet origin "$OCTO_COMMIT"
 git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 [[ "$(git -C "$OCTO_REPO" rev-parse HEAD)" == "$OCTO_COMMIT" ]]
 "$PYTHON" -m pip install --disable-pip-version-check -r "$OCTO_REPO/requirements.txt"
+# TFDS 4.9.2's unconstrained metadata dependency can otherwise resolve to a
+# modern release that imports protobuf.runtime_version, while Octo's pinned
+# TensorFlow 2.15 environment intentionally uses protobuf 4.x.  Keep the
+# training/materialization environment internally compatible.
+"$PYTHON" -m pip install --disable-pip-version-check \
+  "tensorflow-metadata==1.15.0" "protobuf==4.25.3"
 "$PYTHON" -m pip install --disable-pip-version-check h5py pillow
 "$PYTHON" -m pip install --disable-pip-version-check -e "$OCTO_REPO" --no-deps
 "$PYTHON" -m pip install --disable-pip-version-check \
