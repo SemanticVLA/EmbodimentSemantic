@@ -58,7 +58,16 @@ git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 "$PYTHON" -m pip install --disable-pip-version-check \
   "jax[cuda11_pip]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
+# LeRobot's pinned LIBERO API requires Python >=3.12, while the Octo training
+# environment is intentionally Python 3.10.  Evaluation therefore runs as a
+# separate Python 3.12 process with system-site packages (the policy/env bridge
+# remains one process), and fails closed if both runtimes are not importable.
 export PYTHONPATH="$HOME/EmbodimentSemantic:$OCTO_REPO:${PYTHONPATH:-}"
+export OCTO_EVAL_ENV="$RUN_ROOT/octo_eval_py312"
+"$BASE_PYTHON" -m venv --system-site-packages "$OCTO_EVAL_ENV"
+export OCTO_EVAL_PYTHON="$OCTO_EVAL_ENV/bin/python"
+"$OCTO_EVAL_PYTHON" -m pip install --disable-pip-version-check -e "$OCTO_REPO" --no-deps
+"$OCTO_EVAL_PYTHON" -c 'import octo, lerobot.envs.libero, libero.libero; import sys; assert sys.version_info >= (3,12); print(sys.version)'
 export JAX_PLATFORMS=cuda
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90
@@ -151,13 +160,15 @@ TRAIN_ROOT="$RUN_ROOT/training"
 # layout expected by the strict matched-mode loader, while preserving the
 # original output tree and a receipt that records the source location.
 FINAL_ROOT="$RUN_ROOT/final_octo_base15_finetuned"
-FINAL_CKPT="$FINAL_ROOT/300000/default/checkpoint"
-mkdir -p "$FINAL_CKPT"
 FINAL_RECEIPT="$TRAIN_ROOT/octo_final_checkpoint_receipt.json"
 [[ -f "$FINAL_RECEIPT" ]]
 FOUND="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["checkpoint_path"])' "$FINAL_RECEIPT")"
 [[ -n "$FOUND" && -e "$FOUND" ]]
-cp -a "$FOUND/." "$FINAL_CKPT/"
+FOUND_ROOT="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["experiment_root"])' "$FINAL_RECEIPT")"
+FINAL_STEP="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["step"])' "$FINAL_RECEIPT")"
+FINAL_CKPT="$FINAL_ROOT/$FINAL_STEP/default/checkpoint"
+mkdir -p "$FINAL_CKPT"
+if [[ -d "$FOUND" ]]; then cp -a "$FOUND/." "$FINAL_CKPT/"; else cp -a "$FOUND" "$FINAL_CKPT"; fi
 cp -a "$TRAIN_ROOT/." "$FINAL_ROOT/trainer_output/"
 
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.octo.preflight \
@@ -180,14 +191,16 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
   "dataset_manifest": "$MANIFEST",
   "schedule": {"tasks": 10, "episodes_per_task": 10, "conditions": ["vanilla", "sealed_randomized"], "episodes": 200},
   "runtime_sha256": "$RUNTIME_SHA",
-  "io_sha256": "$IO_SHA"
+  "io_sha256": "$IO_SHA",
+  "octo_commit": "$OCTO_COMMIT",
+  "eval_python": "$OCTO_EVAL_PYTHON"
 }
 JSON
 
 for condition in vanilla sealed; do
-  "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.octo.native_eval \
+  "$OCTO_EVAL_PYTHON" -m vla_benchmarking.libero.finetuned_vlas.octo.native_eval \
     --mode matched_train --dataset-manifest "$MANIFEST" --dataset-manifest-sha256 "$DATASET_DIGEST" \
-    --checkpoint-path "$FINAL_CKPT" --checkpoint-root "$FINAL_ROOT" --checkpoint-step 300000 \
+    --checkpoint-path "$FINAL_ROOT" --checkpoint-root "$FINAL_ROOT" --checkpoint-step "$FINAL_STEP" \
     --policy-kind octo_base15_spatial_no_arrow_matched --checkpoint-revision "$BASE_REVISION" \
     --checkpoint-sha256 "$CHECKPOINT_SHA" --runtime-sha256 "$RUNTIME_SHA" --io-sha256 "$IO_SHA" \
     --action-horizon 4 --execute-horizon 4 --plan "$RUN_ROOT/plans/octo_${condition}_100.json" \

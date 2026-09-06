@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from vla_benchmarking.libero.finetuned_vlas.octo.config import A40_BATCH_LADDER, choose_a40_batch_candidate
+from vla_benchmarking.libero.finetuned_vlas.octo.config import A40_BATCH_LADDER, A40_MEMORY_LIMIT_GB
 
 
 def main() -> int:
@@ -27,7 +27,14 @@ def main() -> int:
     if any(not math.isfinite(value) or value < 0 for value in peaks.values()):
         raise SystemExit("all peak VRAM values must be finite and non-negative")
     successful_peaks = {microbatch: peak for microbatch, peak in peaks.items() if statuses[microbatch] == "PASS"}
-    selected = choose_a40_batch_candidate(successful_peaks) if args.smoke_status == "PASS" and successful_peaks else None
+    selected = next(
+        (
+            candidate for candidate in A40_BATCH_LADDER
+            if statuses[candidate.microbatch] == "PASS"
+            and successful_peaks[candidate.microbatch] <= A40_MEMORY_LIMIT_GB
+        ),
+        None,
+    ) if args.smoke_status == "PASS" else None
     payload = {
         "schema": "octo_a40_memory_receipt.v1",
         "device": {"model": "NVIDIA A40", "memory_gb": 48.0},

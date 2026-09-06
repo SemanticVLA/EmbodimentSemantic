@@ -81,9 +81,16 @@ def write_final_checkpoint_receipt(save_dir: str | Path, checkpoint: Path, *, st
     from vla_benchmarking.libero.evaluation.policy_adapter import derive_runtime_receipt
 
     runtime = derive_runtime_receipt(closure_paths=runtime_closure_paths(), require_clean=True)
+    if checkpoint.name in {"checkpoint", "ckpt"} and checkpoint.parent.name == "default":
+        experiment_root = checkpoint.parent.parent.parent
+    elif checkpoint.is_file() and checkpoint.parent.name in {"checkpoint", "ckpt"}:
+        experiment_root = checkpoint.parent.parent.parent.parent
+    else:
+        experiment_root = checkpoint.parent
     payload = {
         "schema": "octo_final_checkpoint_receipt.v1",
         "checkpoint_path": str(checkpoint),
+        "experiment_root": str(experiment_root),
         "step": int(step),
         "checkpoint_sha256": _checkpoint_tree_sha256(checkpoint),
         "octo_commit": _upstream_commit(entrypoint),

@@ -27,7 +27,7 @@ def config_for_mode(mode: Literal["community_eval", "matched_train"]) -> OctoCon
     raise ValueError(f"unsupported Octo mode: {mode}")
 
 
-def _validate_checkpoint_path(path: str | Path, config: OctoConfig) -> tuple[Path, Path]:
+def _validate_checkpoint_path(path: str | Path, config: OctoConfig) -> tuple[Path, Path, int]:
     """Resolve an Octo experiment root and its ``step/default/checkpoint`` leaf.
 
     Octo's published snapshots are rooted at the experiment directory; the
@@ -43,18 +43,26 @@ def _validate_checkpoint_path(path: str | Path, config: OctoConfig) -> tuple[Pat
     if not target.exists():
         raise ValueError(f"Octo checkpoint/experiment path does not exist: {target}")
     leaf_suffix = Path(str(step)) / "default" / "checkpoint"
-    if target.name == "checkpoint" and target.parent.name == "default" and target.parent.parent.name == str(step):
+    resolved_step = int(step)
+    if target.name == "checkpoint" and target.parent.name == "default" and target.parent.parent.name.isdigit():
         checkpoint = target
         root = target.parent.parent.parent
-    elif target.is_file() and target.parent.name == "checkpoint" and target.parent.parent.name == "default" and target.parent.parent.parent.name == str(step):
+        resolved_step = int(target.parent.parent.name)
+    elif target.is_file() and target.parent.name == "checkpoint" and target.parent.parent.name == "default" and target.parent.parent.parent.name.isdigit():
         # Some Hub snapshots expose a single large checkpoint leaf instead of
         # a directory.  Preserve the file as the hash target while deriving
         # the required experiment root from its published layout.
         checkpoint = target
         root = target.parent.parent.parent.parent
+        resolved_step = int(target.parent.parent.parent.name)
     else:
         root = target
         checkpoint = root / leaf_suffix
+        if not checkpoint.exists() and config.mode == "matched_train":
+            discovered = sorted(root.glob("*/default/checkpoint"))
+            if len(discovered) == 1 and discovered[0].parent.parent.name.isdigit():
+                checkpoint = discovered[0]
+                resolved_step = int(discovered[0].parent.parent.name)
     if not root.is_dir():
         raise ValueError(f"Octo experiment root must be a directory: {root}")
     expected_root = config.checkpoint.root_identifier()
@@ -66,6 +74,8 @@ def _validate_checkpoint_path(path: str | Path, config: OctoConfig) -> tuple[Pat
                 f"Octo experiment root does not match {config.mode} pinned path suffix: "
                 f"expected .../{expected_root}, got {root}"
             )
+    if config.mode == "community_eval" and resolved_step != int(step):
+        raise ValueError(f"community checkpoint step must remain pinned at {step}, got {resolved_step}")
     if not checkpoint.is_file() and not checkpoint.is_dir():
         raise ValueError(f"Octo pinned checkpoint leaf is missing: {checkpoint}")
     # Published community checkpoints must contain files before hashing.  A
@@ -76,7 +86,7 @@ def _validate_checkpoint_path(path: str | Path, config: OctoConfig) -> tuple[Pat
             raise ValueError(f"Octo checkpoint subtree is empty: {checkpoint}")
         if checkpoint.is_dir() and not (checkpoint / "params").is_file():
             raise ValueError(f"published Octo checkpoint lacks required params file: {checkpoint / 'params'}")
-    return root, checkpoint
+    return root, checkpoint, resolved_step
 
 
 def _checkpoint_tree_sha256(checkpoint: Path) -> str:
@@ -204,7 +214,7 @@ def run_preflight(*, mode: Literal["community_eval", "matched_train"], dataset_m
 
     config = config_for_mode(mode)
     config.validate()
-    checkpoint_root, checkpoint = _validate_checkpoint_path(checkpoint_path, config)
+    checkpoint_root, checkpoint, checkpoint_step = _validate_checkpoint_path(checkpoint_path, config)
     if mode == "community_eval":
         if dataset_manifest is not None:
             raise ValueError("community evaluation is bound to checkpoint dataset_statistics, not a caller manifest")
@@ -238,14 +248,14 @@ def run_preflight(*, mode: Literal["community_eval", "matched_train"], dataset_m
         "transitions": transition_count,
         "checkpoint_path": str(checkpoint),
         "checkpoint_root_path": str(checkpoint_root),
-        "checkpoint_step": config.checkpoint.step,
+        "checkpoint_step": checkpoint_step,
         "checkpoint_repository": config.checkpoint.repository,
         "checkpoint_revision": config.checkpoint.revision,
         "checkpoint_sha256": checkpoint_sha256,
         # Backward-compatible spelling for archived receipts.  New plan and
         # adapter contracts consume checkpoint_sha256.
         "checkpoint_tree_sha256": checkpoint_sha256,
-        "checkpoint_subpath": config.checkpoint.checkpoint_subpath,
+        "checkpoint_subpath": f"{checkpoint_step}/default/checkpoint",
         "action_horizon": config.action_horizon,
         "optimizer_updates": optimizer_updates,
         "preflight": "PASS",

@@ -29,7 +29,7 @@ def main() -> int:
 
     artifact = derive_checkpoint_receipt(
         args.checkpoint_path,
-        artifact_id="octo_base15_spatial_no_arrow_matched_finetuned",
+        artifact_id=MATCHED_TRAIN_CONFIG.checkpoint.identifier(),
         checkpoint_revision=args.checkpoint_revision,
     )
     # Octo preflight uses the published checkpoint-tree digest (including
