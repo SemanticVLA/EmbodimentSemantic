@@ -1277,7 +1277,7 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
                 raise KeyError(name)
             try:
                 return int(accessor(name).id)
-            except (KeyError, ValueError, IndexError, TypeError):
+            except (AttributeError, KeyError, ValueError, IndexError, TypeError):
                 pass
             count = int(getattr(self._source, f"n{kind}", 0))
             suffix = f"_{name}"
@@ -1285,6 +1285,14 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
             for index in range(count):
                 item = accessor(index)
                 actual_name = str(getattr(item, "name", "") or "")
+                if not actual_name:
+                    try:
+                        import mujoco
+
+                        object_type = getattr(mujoco.mjtObj, f"mjOBJ_{kind.upper()}")
+                        actual_name = str(mujoco.mj_id2name(self._source, object_type, index) or "")
+                    except (AttributeError, KeyError, TypeError, ValueError):
+                        actual_name = ""
                 if actual_name == name or actual_name.endswith(suffix):
                     matches.append(int(getattr(item, "id", index)))
             if len(matches) != 1:
