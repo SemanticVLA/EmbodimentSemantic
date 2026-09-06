@@ -22,7 +22,7 @@ from lerobot.envs import libero as lerobot_libero
 
 from vla_benchmarking.libero.evaluation.bddl_utils import extract_joint_schema, make_filtered_bddl, project_init_states_by_joint_name
 from vla_benchmarking.libero.shared.config import (
-    ARROW_SOURCE_OBJECT, RANDOMIZE_SCENES, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP,
+    ARROW_SOURCE_OBJECT, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP,
     SCENE_GRAPH_SUBJECT_FILTER,
     LEROBOT_CAMERA_KEYS,
     TASK_GOAL_OBJECT_CONFIG, TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE,
@@ -36,6 +36,7 @@ from vla_benchmarking.libero.evaluation.scene_graph_formats import (
     dedupe_relations,
     normalize_context_format,
 )
+from vla_benchmarking.libero.evaluation.contracts import parse_suite_mode
 from vla_benchmarking.libero.evaluation.visual_scene_graph import (
     DEFAULT_GOAL_OBJECT,
     SUPPORTED_VISUAL_CONDITIONS,
@@ -139,6 +140,7 @@ class TaskContextVecEnv:
         prompt_suffix="",
         prompt_suffix_by_task=None,
         randomization_audit_logger=None,
+        suite_mode="sealed_randomized",
     ):
         self.env = env
         self.live_generator = live_generator
@@ -150,6 +152,7 @@ class TaskContextVecEnv:
         self.prompt_suffix = prompt_suffix.strip()
         self.prompt_suffix_by_task = prompt_suffix_by_task or {}
         self.randomization_audit_logger = randomization_audit_logger
+        self.suite_mode = parse_suite_mode(suite_mode)
         self._debug_printed = False
 
     def __getattr__(self, name):
@@ -228,7 +231,11 @@ class TaskContextVecEnv:
         # Apply per-task prompt override before semantic context suffix
         canonical_result = list(result)
         effective_task_texts = [
-            TASK_PROMPT_OVERRIDE.get(sub_env.task_id, task)
+            (
+                TASK_PROMPT_OVERRIDE.get(sub_env.task_id, task)
+                if self.suite_mode == "sealed_randomized"
+                else task
+            )
             for task, sub_env in zip(result, sub_envs)
         ]
         final_result = []
@@ -362,6 +369,19 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "True"}
 
 
+def _suite_mode() -> str:
+    """Resolve and validate the evaluation suite condition.
+
+    Historical launches default to the sealed randomized condition.  Vanilla
+    is an explicit, mutation-free control: the wrapper uses the native BDDL,
+    canonical task description, and no randomization audit.
+    """
+    try:
+        return parse_suite_mode(os.environ.get("SUITE_MODE", "sealed_randomized"))
+    except ValueError as exc:
+        raise SystemExit(f"ERROR: {exc}") from exc
+
+
 def _append_default_lerobot_args() -> None:
     """Allow this wrapper to be run directly, not only via the matrix shell script."""
     script_dir = Path(__file__).resolve().parent
@@ -437,6 +457,12 @@ def _patch_libero_env_bddl_selection(remove_config: dict[int, list[str]]) -> Non
 
     def patched_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
+
+        # The evaluator can be invoked more than once in one interpreter by
+        # tests or orchestration code.  Do not let a prior sealed invocation's
+        # monkeypatch mutate a later explicit vanilla suite.
+        if _suite_mode() != "sealed_randomized":
+            return
 
         task_id = kwargs.get("task_id")
         if task_id is None and len(args) >= 2:
@@ -640,6 +666,7 @@ def _wrap_task_vec_envs(
     visual_prompt_suffix,
     visual_prompt_suffix_by_task,
     randomization_audit_logger,
+    suite_mode="sealed_randomized",
 ):
     if not isinstance(result, dict):
         return result
@@ -648,10 +675,13 @@ def _wrap_task_vec_envs(
         if not isinstance(suite_map, dict):
             continue
         for task_id, vec_env in list(suite_map.items()):
-            if os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower() == "graph_treatment":
+            if (
+                suite_mode == "sealed_randomized"
+                and os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower() == "graph_treatment"
+            ):
                 _disable_vector_autoreset(vec_env)
             wrapped = vec_env
-            if RANDOMIZE_SCENES:
+            if suite_mode == "sealed_randomized":
                 wrapped = SceneRandomizerVecEnvWrapper(
                     wrapped,
                     task_id,
@@ -686,6 +716,7 @@ def _wrap_task_vec_envs(
                 visual_prompt_suffix,
                 visual_prompt_suffix_by_task,
                 randomization_audit_logger,
+                suite_mode,
             )
             suite_map[task_id] = wrapped
 
@@ -717,6 +748,8 @@ def _patch_max_episodes_rendered() -> None:
 
 def main() -> None:
     _append_default_lerobot_args()
+
+    suite_mode = _suite_mode()
 
     profile = os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower()
     graph_profile = profile in {"graph_treatment", "arrow_graph_treatment"}
@@ -774,7 +807,11 @@ def main() -> None:
         output_dir,
         enabled=visual_condition is not None,
     )
-    randomization_audit_logger = RandomizationAuditLogger(output_dir)
+    randomization_audit_logger = (
+        RandomizationAuditLogger(output_dir)
+        if suite_mode == "sealed_randomized"
+        else None
+    )
 
     live_generator = None
     if use_live_context or visual_condition is not None:
@@ -782,7 +819,7 @@ def main() -> None:
         live_generator.scene_graph_subject_filter = SCENE_GRAPH_SUBJECT_FILTER
     prompt_live_generator = live_generator if use_live_context else None
 
-    if TASK_REMOVE_CONFIG:
+    if suite_mode == "sealed_randomized" and TASK_REMOVE_CONFIG:
         _patch_libero_env_bddl_selection(TASK_REMOVE_CONFIG)
 
     if graph_profile:
@@ -824,6 +861,7 @@ def main() -> None:
             visual_prompt_suffix,
             visual_prompt_suffix_by_task,
             randomization_audit_logger,
+            suite_mode,
         )
 
     lerobot_eval.make_env = make_env_patched
@@ -833,7 +871,8 @@ def main() -> None:
     finally:
         audit_logger.close()
         visual_audit_logger.close()
-        randomization_audit_logger.close()
+        if randomization_audit_logger is not None:
+            randomization_audit_logger.close()
 
 
 if __name__ == "__main__":

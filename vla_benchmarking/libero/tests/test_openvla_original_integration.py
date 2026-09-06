@@ -104,3 +104,34 @@ def test_legion_pi05_repair_skips_openvla_and_records_tokenizer_snapshot() -> No
     provenance = job.index('"pi05_tokenizer": {"repo_id": "$PI05_TOKENIZER_REPO"')
     canary = job.index('if [[ "$PI05_CANARY_ONLY" == "1" ]]; then', provenance)
     assert tokenizer_snapshot < pi05_snapshot < token_clear < provenance < canary
+
+
+def test_legion_combined_pi05_smolvla_matrix_is_sequential_and_pinned() -> None:
+    root = Path(__file__).resolve().parents[3]
+    job = (root / "vla_benchmarking/libero/finetuned_vlas/legion/run_vla_eval_matrix.sbatch").read_text()
+
+    assert "pi05_smolvla_matrix|pi05-smolvla-matrix" in job
+    assert 'SMOLVLA_BASE_PATH="/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/vla_benchmarking/base_models/smolvla_libero-6721902bc4d61e50a3bfdb11dfb4cb626f05d102"' in job
+    assert 'SMOLVLA_ADAPTER_SHA256="80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092"' in job
+    assert 'SMOLVLA_BASE_MANIFEST_SHA256="e4bcf9b4481cae4b523ef6c3af6a6a9fd5e9886215f48f911e7226221761486b"' in job
+    assert 'SMOLVLA_BASE_TREE_SHA256="d086e041f3f6bfb919f335265106fee1db8b8a3c386af357cb42a89735f74bf1"' in job
+    assert 'validate_smolvla_artifacts | tee "$RUN_ROOT/smolvla_artifact_provenance.json"' in job
+    assert 'run_matrix_stage pi05_vanilla run_pi05_matrix_cell vanilla' in job
+    assert 'run_matrix_stage pi05_sealed run_pi05_matrix_cell sealed' in job
+    assert 'run_matrix_stage smolvla_vanilla_base' in job
+    assert 'run_matrix_stage smolvla_sealed_base' in job
+    assert 'run_matrix_stage smolvla_vanilla_finetuned' in job
+    assert '"total_episodes": 500' in job
+    assert 'export SUITE_MODE="vanilla"' in job
+    assert 'export SUITE_MODE="sealed_randomized"' in job
+
+
+def test_legion_combined_canary_runs_three_smolvla_smoke_cells_after_pi05() -> None:
+    root = Path(__file__).resolve().parents[3]
+    job = (root / "vla_benchmarking/libero/finetuned_vlas/legion/run_vla_eval_matrix.sbatch").read_text()
+    canary = job.index('if [[ "$PI05_CANARY_ONLY" == "1" ]]; then')
+    smoke = job.index('run_matrix_stage smolvla_vanilla_base_smoke', canary)
+    sealed = job.index('run_matrix_stage smolvla_sealed_base_smoke', smoke)
+    tuned = job.index('run_matrix_stage smolvla_vanilla_finetuned_smoke', sealed)
+    assert smoke < sealed < tuned
+    assert 'combined SmolVLA canary failed' in job

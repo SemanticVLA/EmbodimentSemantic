@@ -16,7 +16,7 @@ from .contracts import EvaluationCondition
 @dataclass(frozen=True)
 class PolicyCapabilities:
     policy_kind: Literal[
-        "canonical_grasp", "lerobot", "smolvla_no_arrow", "smolvla_target_arrow",
+        "canonical_grasp", "lerobot", "smolvla_base", "smolvla_no_arrow", "smolvla_target_arrow",
         "pi05", "openvla", "openvla_oft", "octo_community_multisuite_190k",
         "octo_base15_spatial_no_arrow_matched",
     ]
@@ -45,6 +45,14 @@ POLICIES: dict[str, PolicyCapabilities] = {
     ),
     "smolvla_no_arrow": PolicyCapabilities(
         "smolvla_no_arrow",
+        LEROBOT,
+        ("none",),
+        ("none",),
+        {"vanilla": "not_applicable", "sealed_randomized": "applied"},
+        "standard_no_extra_text",
+    ),
+    "smolvla_base": PolicyCapabilities(
+        "smolvla_base",
         LEROBOT,
         ("none",),
         ("none",),
