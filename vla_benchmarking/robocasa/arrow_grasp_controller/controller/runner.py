@@ -1246,10 +1246,20 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
     if base_from_world.shape != (4, 4) or not np.isfinite(base_from_world).all():
         raise RuntimeError("Panda calibration probe requires frozen B0 transform")
     R_bw, t_bw = base_from_world[:3, :3], base_from_world[:3, 3]
-    import copy
-    local_data = copy.copy(getattr(sim_world, "data", None))
-    if local_data is None:
+    world_data = getattr(sim_world, "data", None)
+    if world_data is None:
         raise RuntimeError("Panda calibration probe requires MuJoCo data")
+
+    class _B0DataView:
+        """Writable view for B0 arrays over MuJoCo's read-only ``MjData`` properties."""
+
+        def __init__(self, source: Any):
+            self._source = source
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._source, name)
+
+    local_data = _B0DataView(world_data)
     def _local_points(value: Any) -> Any:
         arr = np.asarray(value, dtype=np.float64)
         if arr.ndim >= 2 and arr.shape[-1] == 3:
@@ -1261,11 +1271,11 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
             return np.einsum("ij,...jk->...ik", R_bw, arr)
         return value
     for _name in ("site_xpos", "body_xpos", "xpos", "geom_xpos"):
-        if hasattr(local_data, _name):
-            setattr(local_data, _name, _local_points(getattr(local_data, _name)))
+        if hasattr(world_data, _name):
+            setattr(local_data, _name, _local_points(getattr(world_data, _name)))
     for _name in ("site_xmat", "body_xmat", "geom_xmat"):
-        if hasattr(local_data, _name):
-            setattr(local_data, _name, _local_rotations(getattr(local_data, _name)))
+        if hasattr(world_data, _name):
+            setattr(local_data, _name, _local_rotations(getattr(world_data, _name)))
     local_sim = type("_B0Sim", (), {})()
     local_sim.model = getattr(sim_world, "model", None)
     local_sim.data = local_data

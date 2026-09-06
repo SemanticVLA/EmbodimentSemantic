@@ -74,6 +74,24 @@ def test_panda_probe_uses_contact_geometry_and_returns_nonidentity_inputs() -> N
     assert np.allclose(transform, np.asarray(record["observed_body_to_site_rotation_matrix"]))
 
 
+def test_panda_probe_does_not_write_mujoco_read_only_data_properties() -> None:
+    env = _fake_panda_env()
+    values = vars(env.sim.data).copy()
+
+    class ReadOnlyData:
+        def __getattr__(self, name):
+            return values[name]
+
+        def __setattr__(self, name, value):
+            raise AttributeError(f"property {name!r} has no setter")
+
+    env.sim.data = ReadOnlyData()
+    calibration, transform, record = runner.probe_robot_calibration(env)
+    assert record["passed"] is True
+    assert calibration.grasp_to_grip_site.shape == (3, 3)
+    assert transform.shape == (3, 3)
+
+
 def test_xyzw_base_quaternion_rotates_world_into_b0() -> None:
     s = np.sqrt(0.5)
     world_from_base, base_from_world = adapter.world_base_transform(
