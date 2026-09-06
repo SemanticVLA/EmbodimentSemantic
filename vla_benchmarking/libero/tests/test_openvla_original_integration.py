@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -115,7 +118,7 @@ def test_legion_combined_pi05_smolvla_matrix_is_sequential_and_pinned() -> None:
     assert "pi05_smolvla_matrix|pi05-smolvla-matrix" in job
     assert 'SMOLVLA_BASE_PATH="/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/vla_benchmarking/base_models/smolvla_libero-6721902bc4d61e50a3bfdb11dfb4cb626f05d102"' in job
     assert 'SMOLVLA_ADAPTER_SHA256="80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092"' in job
-    assert 'SMOLVLA_BASE_MANIFEST_SHA256="e4bcf9b4481cae4b523ef6c3af6a6a9fd5e9886215f48f911e7226221761486b"' in job
+    assert 'SMOLVLA_BASE_MANIFEST_SHA256="e4bcf9b4481ca4e523ef6c3af6a6a9fd5e9886215f48f911e7226221761486b"' in job
     assert 'SMOLVLA_BASE_TREE_SHA256="d086e041f3f6bfb919f335265106fee1db8b8a3c386af357cb42a89735f74bf1"' in job
     assert 'validate_smolvla_artifacts | tee "$RUN_ROOT/smolvla_artifact_provenance.json"' in job
     assert 'run_matrix_stage pi05_vanilla run_pi05_matrix_cell vanilla' in job
@@ -130,6 +133,8 @@ def test_legion_combined_pi05_smolvla_matrix_is_sequential_and_pinned() -> None:
     assert 'smolvla_eval_matrix_schedule.json' in job
     assert 'smolvla_eval_matrix_summary.csv' in job
     assert 'matrix_postcondition.json' in job
+    assert 'episodes_per_cell = len(tasks) * episodes_per_task' in job
+    assert '"episodes_per_cell": episodes_per_cell' in job
     assert 'run_smolvla_matrix_cell' not in job
     assert '"total_episodes": 500' in job
     assert '"episodes_total": 500' in job
@@ -158,3 +163,54 @@ def test_legion_launcher_embedded_python_blocks_compile() -> None:
     assert blocks, "launcher must contain quoted Python heredocs"
     for index, block in enumerate(blocks):
         compile(textwrap.dedent(block), f"<run_vla_eval_matrix.sbatch:python:{index}>", "exec")
+
+
+def test_legion_smolvla_postcondition_block_runs_smoke(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    job = (root / "vla_benchmarking/libero/finetuned_vlas/legion/run_vla_eval_matrix.sbatch").read_text()
+    start = job.index("validate_smolvla_matrix_result()")
+    block = textwrap.dedent(re.search(r"<<'PY'\n(.*?)\nPY", job[start:], flags=re.DOTALL).group(1))
+
+    output = tmp_path / "smolvla_matrix_smoke"
+    cells = [
+        ("smolvla_base_vanilla", "vanilla"),
+        ("smolvla_base_sealed_randomized", "sealed_randomized"),
+        ("smolvla_no_arrow_ft_vanilla", "vanilla"),
+    ]
+    manifest_cells = []
+    schedule_cells = []
+    summary_rows = ["row_type,cell_id,status,episodes"]
+    for cell_id, suite_mode in cells:
+        cell_output = output / "seed_1000" / cell_id
+        cell_output.mkdir(parents=True)
+        (cell_output / "eval_info.json").write_text(json.dumps({
+            "overall": {"n_episodes": 2, "pc_success": 50.0},
+            "per_task": [
+                {"task_id": 0, "metrics": {"successes": [True]}},
+                {"task_id": 4, "metrics": {"successes": [False]}},
+            ],
+        }))
+        if suite_mode == "sealed_randomized":
+            (cell_output / "randomization_audit.jsonl").write_text('{"status":"ok"}\n{"status":"ok"}\n')
+        manifest_cells.append({
+            "cell_id": cell_id, "suite_mode": suite_mode,
+            "output_dir": str(cell_output), "checkpoint": str(tmp_path / cell_id),
+        })
+        summary_rows.append(f"cell,{cell_id},complete,2")
+        schedule_cells.extend({"cell_id": cell_id} for _ in range(2))
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "smolvla_eval_matrix_manifest.json").write_text(json.dumps({
+        "protocol": "smoke", "episodes": 1, "tasks": [0, 4],
+        "planned_episodes_per_cell": 2, "planned_episodes_total": 6,
+        "seed": 1000, "cells": manifest_cells,
+    }))
+    (output / "smolvla_eval_matrix_schedule.json").write_text(json.dumps({
+        "protocol": "smoke", "cells": schedule_cells,
+    }))
+    (output / "smolvla_eval_matrix_summary.csv").write_text("\n".join(summary_rows) + "\n")
+
+    subprocess.run([sys.executable, "-c", block, str(output), "smoke", "1"], check=True)
+    postcondition = json.loads((output / "matrix_postcondition.json").read_text())
+    assert postcondition["episodes_per_task"] == 1
+    assert postcondition["episodes_per_cell"] == 2
+    assert postcondition["total_episodes"] == 6
