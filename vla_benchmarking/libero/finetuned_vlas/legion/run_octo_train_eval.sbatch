@@ -56,6 +56,7 @@ init_states: $HOME/.cache/libero/init_files
 datasets: $HOME/.cache/libero/datasets
 assets: $HOME/.cache/libero/assets
 YAML
+export LIBERO_BDDL_TREE_SHA256="$($BASE_PYTHON -c 'from vla_benchmarking.libero.evaluation.plan import libero_source_hashes; print(libero_source_hashes()["libero_bddl_tree_sha256"])')"
 nvidia-smi -L
 "$BASE_PYTHON" -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 
@@ -237,7 +238,7 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
   "schedule": {"tasks": 10, "episodes_per_task": 10, "conditions": ["vanilla", "sealed_randomized"], "episodes": 200},
   "runtime_sha256": "$EVAL_RUNTIME_SHA",
   "training_runtime_sha256": "$TRAIN_RUNTIME_SHA",
-  "libero_source": {"commit": "$LIBERO_SOURCE_COMMIT", "bddl_tree_sha256": "$(LIBERO_SOURCE_ROOT="$LIBERO_SOURCE_ROOT" LIBERO_BDDL_SOURCE="$LIBERO_BDDL_SOURCE" LIBERO_SOURCE_COMMIT="$LIBERO_SOURCE_COMMIT" "$OCTO_EVAL_PYTHON" -c 'from vla_benchmarking.libero.evaluation.plan import libero_source_hashes; print(libero_source_hashes()[\"libero_bddl_tree_sha256\"])')"},
+  "libero_source": {"commit": "$LIBERO_SOURCE_COMMIT", "bddl_tree_sha256": "$LIBERO_BDDL_TREE_SHA256"},
   "io_sha256": "$IO_SHA",
   "octo_commit": "$OCTO_COMMIT",
   "eval_python": "$OCTO_EVAL_PYTHON"
