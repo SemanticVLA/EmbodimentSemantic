@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -118,20 +120,41 @@ def test_legion_combined_pi05_smolvla_matrix_is_sequential_and_pinned() -> None:
     assert 'validate_smolvla_artifacts | tee "$RUN_ROOT/smolvla_artifact_provenance.json"' in job
     assert 'run_matrix_stage pi05_vanilla run_pi05_matrix_cell vanilla' in job
     assert 'run_matrix_stage pi05_sealed run_pi05_matrix_cell sealed' in job
-    assert 'run_matrix_stage smolvla_vanilla_base' in job
-    assert 'run_matrix_stage smolvla_sealed_base' in job
-    assert 'run_matrix_stage smolvla_vanilla_finetuned' in job
+    assert 'run_matrix_stage smolvla_matrix_full run_smolvla_matrix full' in job
+    assert 'run_smolvla_eval_matrix' in job
+    assert '--adapter-checkpoint "$SMOLVLA_ADAPTER_PATH"' in job
+    assert '--training-manifest "$SMOLVLA_TRAINING_MANIFEST"' in job
+    assert '--base-checkpoint "$SMOLVLA_BASE_PATH"' in job
+    assert '--device cuda --no-videos' in job
+    assert 'smolvla_eval_matrix_manifest.json' in job
+    assert 'smolvla_eval_matrix_schedule.json' in job
+    assert 'smolvla_eval_matrix_summary.csv' in job
+    assert 'matrix_postcondition.json' in job
+    assert 'run_smolvla_matrix_cell' not in job
     assert '"total_episodes": 500' in job
-    assert 'export SUITE_MODE="vanilla"' in job
-    assert 'export SUITE_MODE="sealed_randomized"' in job
+    assert '"episodes_total": 500' in job
+    assert '"matrix_row_index"' in job
+    assert '"training_manifest_sha256"' in job
+    assert '"base_tree_sha256"' in job
 
 
-def test_legion_combined_canary_runs_three_smolvla_smoke_cells_after_pi05() -> None:
+def test_legion_combined_canary_runs_validated_smolvla_smoke_after_pi05() -> None:
     root = Path(__file__).resolve().parents[3]
     job = (root / "vla_benchmarking/libero/finetuned_vlas/legion/run_vla_eval_matrix.sbatch").read_text()
     canary = job.index('if [[ "$PI05_CANARY_ONLY" == "1" ]]; then')
-    smoke = job.index('run_matrix_stage smolvla_vanilla_base_smoke', canary)
-    sealed = job.index('run_matrix_stage smolvla_sealed_base_smoke', smoke)
-    tuned = job.index('run_matrix_stage smolvla_vanilla_finetuned_smoke', sealed)
-    assert smoke < sealed < tuned
+    smoke = job.index('run_matrix_stage smolvla_matrix_smoke run_smolvla_matrix smoke', canary)
+    postcondition = job.index('run_matrix_stage smolvla_matrix_smoke_postcondition validate_smolvla_matrix_result smoke 1', smoke)
+    assert smoke < postcondition
+    assert 'smolvla_base_vanilla' in job
+    assert 'smolvla_base_sealed_randomized' in job
+    assert 'smolvla_no_arrow_ft_vanilla' in job
     assert 'combined SmolVLA canary failed' in job
+
+
+def test_legion_launcher_embedded_python_blocks_compile() -> None:
+    root = Path(__file__).resolve().parents[3]
+    job = (root / "vla_benchmarking/libero/finetuned_vlas/legion/run_vla_eval_matrix.sbatch").read_text()
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY", job, flags=re.DOTALL)
+    assert blocks, "launcher must contain quoted Python heredocs"
+    for index, block in enumerate(blocks):
+        compile(textwrap.dedent(block), f"<run_vla_eval_matrix.sbatch:python:{index}>", "exec")

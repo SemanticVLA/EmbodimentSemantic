@@ -182,6 +182,47 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _archive_scratch_relative(path: Path) -> tuple[str, str] | None:
+    """Return a stable relative identity for approved archive/scratch roots.
+
+    Training manifests may preserve the fast scratch path while a later
+    evaluation intentionally reads the immutable archived adapter.  The
+    location substitution is allowed only for the two approved Legion roots;
+    artifact hashes remain the authoritative identity check below.
+    """
+    roots = (
+        ("archive", Path("/home/hjaber/EmbodimentSemantic_archive")),
+        ("scratch", Path("/mnt/beegfs/hjaber/EmbodimentSemantic_runtime")),
+        ("scratch", Path("/scratch_flash/hjaber/EmbodimentSemantic_runtime")),
+    )
+    resolved = path.expanduser().resolve()
+    # Keep the comparison testable on the Windows development host while
+    # retaining the exact POSIX roots used by Legion at runtime.
+    resolved_text = resolved.as_posix()
+    if len(resolved_text) >= 3 and resolved_text[1] == ":" and resolved_text[2] == "/":
+        resolved_text = resolved_text[2:]
+    for kind, root in roots:
+        try:
+            root_text = root.as_posix()
+            if resolved_text == root_text:
+                return kind, ""
+            prefix = root_text.rstrip("/") + "/"
+            if resolved_text.startswith(prefix):
+                return kind, resolved_text[len(prefix):]
+        except ValueError:
+            continue
+    return None
+
+
+def _same_archive_scratch_artifact_path(left: Path, right: Path) -> bool:
+    """Allow only archive↔scratch aliases with the exact same relative path."""
+    left_identity = _archive_scratch_relative(left)
+    right_identity = _archive_scratch_relative(right)
+    if left_identity is None or right_identity is None:
+        return False
+    return left_identity[0] != right_identity[0] and left_identity[1] == right_identity[1]
+
+
 def _adapter_directory(value: str) -> str:
     if not value or not value.strip():
         raise ValueError("adapter checkpoint path must not be empty")
@@ -564,7 +605,7 @@ def validate_training_manifest(
     recorded_adapter = Path(adapter.get("path", "")).expanduser().resolve()
     adapter_path = recorded_adapter.parent if recorded_adapter.name == "adapter_model.safetensors" else recorded_adapter
     expected_adapter = Path(manifest["adapter_checkpoint"]).expanduser().resolve()
-    if adapter_path != expected_adapter:
+    if adapter_path != expected_adapter and not _same_archive_scratch_artifact_path(adapter_path, expected_adapter):
         raise ValueError("evaluation adapter does not match no-arrow training manifest")
     adapter_artifact = adapter_path / "adapter_model.safetensors"
     if not adapter_path.is_dir() or adapter_path.name != "pretrained_model" or not adapter_artifact.is_file() or _sha256_file(adapter_artifact) != adapter.get("sha256"):

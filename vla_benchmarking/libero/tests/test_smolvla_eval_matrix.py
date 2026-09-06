@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from vla_benchmarking.libero.finetuned_vlas.smolvla.workflows import run_smolvla_eval_matrix as matrix
+from vla_benchmarking.libero.finetuned_vlas.smolvla.workflows.run_lora_no_arrow_pair_eval import (
+    _same_archive_scratch_artifact_path,
+)
 
 
 def _sha(path: Path) -> str:
@@ -71,6 +74,14 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8",
     )
     return base, adapter, training
+
+
+def test_training_lineage_allows_only_exact_archive_scratch_adapter_alias() -> None:
+    archive = Path("/home/hjaber/EmbodimentSemantic_archive/runs/example/checkpoints/029190/pretrained_model")
+    scratch = Path("/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/example/checkpoints/029190/pretrained_model")
+    other = Path("/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs/other/checkpoints/029190/pretrained_model")
+    assert _same_archive_scratch_artifact_path(archive, scratch)
+    assert not _same_archive_scratch_artifact_path(archive, other)
 
 
 def test_matrix_smoke_has_fixed_cells_and_two_task_schedule(tmp_path: Path):

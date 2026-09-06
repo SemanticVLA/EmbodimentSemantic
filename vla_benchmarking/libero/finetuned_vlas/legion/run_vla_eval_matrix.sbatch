@@ -362,8 +362,8 @@ data["models"]["smolvla"] = {
     "adapter_checkpoint": "/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197/checkpoints/029190/pretrained_model",
     "adapter_sha256": "80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092",
     "training_manifest": str(training), "training_manifest_sha256": training_sha,
-    "base_manifest_sha256": "e4bcf9b4481ca4e523ef6c3af6a6a9fd5e9886215f48f911e7226221761486b",
-    "base_tree_sha256": "d086e041f3f6bfb919f335265106fee1db8b8a3c386af357cb42a89735f74bf1",
+    "base_manifest_sha256": os.environ["SMOLVLA_BASE_MANIFEST_SHA256"],
+    "base_tree_sha256": os.environ["SMOLVLA_BASE_TREE_SHA256"],
 }
 data["schedule"] = {
     "tasks": 10, "episodes_per_task": 10, "cells": 5,
@@ -419,9 +419,9 @@ run_smolvla_matrix() {
 }
 
 validate_smolvla_matrix_result() {
-  local protocol="$1"; local expected_episodes="$2"
+  local protocol="$1"; local episodes_per_task="$2"
   local output="$RUN_ROOT/smolvla_matrix_${protocol}"
-  "$BASE_PYTHON" - "$output" "$protocol" "$expected_episodes" <<'PY'
+  "$BASE_PYTHON" - "$output" "$protocol" "$episodes_per_task" <<'PY'
 import csv
 import json
 import pathlib
@@ -429,7 +429,7 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 protocol = sys.argv[2]
-expected_episodes = int(sys.argv[3])
+episodes_per_task = int(sys.argv[3])
 expected_cells = [
     "smolvla_base_vanilla",
     "smolvla_base_sealed_randomized",
@@ -442,11 +442,17 @@ if not manifest_path.is_file() or not schedule_path.is_file() or not summary_pat
     raise SystemExit(f"SmolVLA {protocol} matrix artifacts are incomplete")
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
-if manifest.get("protocol") != protocol or manifest.get("episodes") != expected_episodes:
+tasks = manifest.get("tasks")
+if not isinstance(tasks, list) or not tasks:
+    raise SystemExit("SmolVLA matrix task schedule is missing")
+episodes_per_cell = len(tasks) * episodes_per_task
+if manifest.get("protocol") != protocol or manifest.get("episodes") != episodes_per_task:
     raise SystemExit("SmolVLA matrix manifest protocol/episode contract mismatch")
+if manifest.get("planned_episodes_per_cell") != episodes_per_cell or manifest.get("planned_episodes_total") != episodes_per_cell * 3:
+    raise SystemExit("SmolVLA matrix planned episode counts are invalid")
 if [cell.get("cell_id") for cell in manifest.get("cells", [])] != expected_cells:
     raise SystemExit("SmolVLA matrix manifest cell IDs are not exact")
-if schedule.get("protocol") != protocol or len(schedule.get("cells", [])) != expected_episodes * 2 * 3:
+if schedule.get("protocol") != protocol or len(schedule.get("cells", [])) != episodes_per_cell * 3:
     raise SystemExit("SmolVLA matrix schedule is incomplete")
 if {cell.get("cell_id") for cell in schedule["cells"]} != set(expected_cells):
     raise SystemExit("SmolVLA matrix schedule cell IDs are incomplete")
@@ -454,7 +460,7 @@ rows = list(csv.DictReader(summary_path.open(newline="", encoding="utf-8")))
 cell_rows = [row for row in rows if row.get("row_type") == "cell"]
 if [row.get("cell_id") for row in cell_rows] != expected_cells:
     raise SystemExit("SmolVLA matrix summary cell rows are incomplete or out of order")
-if any(row.get("status") != "complete" or int(row.get("episodes", -1)) != expected_episodes for row in cell_rows):
+if any(row.get("status") != "complete" or int(row.get("episodes", -1)) != episodes_per_cell for row in cell_rows):
     raise SystemExit("SmolVLA matrix summary contains incomplete cells")
 cells = []
 for cell in manifest["cells"]:
@@ -463,22 +469,22 @@ for cell in manifest["cells"]:
     if not info_path.is_file():
         raise SystemExit(f"missing SmolVLA eval_info.json: {info_path}")
     info = json.loads(info_path.read_text(encoding="utf-8"))
-    if info.get("overall", {}).get("n_episodes") != expected_episodes:
-        raise SystemExit(f"{cell['cell_id']} does not contain {expected_episodes} episodes")
+    if info.get("overall", {}).get("n_episodes") != episodes_per_cell:
+        raise SystemExit(f"{cell['cell_id']} does not contain {episodes_per_cell} episodes")
     if cell["suite_mode"] == "sealed_randomized":
         audit_path = output_dir / "randomization_audit.jsonl"
         records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()] if audit_path.is_file() else []
-        if len(records) != expected_episodes or any(record.get("status") != "ok" for record in records):
+        if len(records) != episodes_per_cell or any(record.get("status") != "ok" for record in records):
             raise SystemExit(f"{cell['cell_id']} sealed randomization audit is incomplete")
     cells.append({
         "cell_id": cell["cell_id"], "suite_mode": cell["suite_mode"],
-        "episodes": expected_episodes, "output_dir": str(output_dir),
+        "episodes": episodes_per_cell, "output_dir": str(output_dir),
         "eval_info": str(info_path), "successes": sum(sum(item["metrics"]["successes"]) for item in info["per_task"]),
         "pc_success": info.get("overall", {}).get("pc_success"),
     })
 (root / "matrix_postcondition.json").write_text(json.dumps({
-    "protocol": protocol, "cell_ids": expected_cells, "episodes_per_cell": expected_episodes,
-    "total_episodes": expected_episodes * 3, "cells": cells,
+    "protocol": protocol, "cell_ids": expected_cells, "episodes_per_task": expected_episodes,
+    "episodes_per_cell": episodes_per_cell, "total_episodes": episodes_per_cell * 3, "cells": cells,
 }, indent=2, sort_keys=True) + "\n")
 PY
 }
@@ -529,7 +535,7 @@ receipt = {
     "finite": True,
 }
 Path(receipt_path).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-  print(json.dumps(receipt, sort_keys=True))
+print(json.dumps(receipt, sort_keys=True))
 PY
   if [[ "$MATRIX_MODE" == "1" ]]; then
     run_matrix_stage smolvla_matrix_smoke run_smolvla_matrix smoke
