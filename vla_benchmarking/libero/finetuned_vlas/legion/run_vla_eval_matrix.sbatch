@@ -225,7 +225,14 @@ if not isinstance(record, dict):
     raise SystemExit("SmolVLA training manifest lacks no-arrow adapter record")
 recorded = pathlib.Path(record.get("path", "")).resolve()
 recorded = recorded.parent if recorded.name == "adapter_model.safetensors" else recorded
-if recorded != adapter or record.get("sha256") != adapter_sha:
+archive_runs = pathlib.Path("/home/hjaber/EmbodimentSemantic_archive/runs")
+scratch_runs = pathlib.Path("/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/runs")
+try:
+    adapter_rel = adapter.relative_to(archive_runs)
+except ValueError:
+    raise SystemExit("SmolVLA adapter is outside the expected archive runs root")
+allowed_adapter_paths = {adapter, scratch_runs / adapter_rel}
+if recorded not in allowed_adapter_paths or record.get("sha256") != adapter_sha:
     raise SystemExit("SmolVLA training manifest adapter lineage mismatch")
 print(json.dumps({
     "base_path": str(base), "base_revision": revision,
