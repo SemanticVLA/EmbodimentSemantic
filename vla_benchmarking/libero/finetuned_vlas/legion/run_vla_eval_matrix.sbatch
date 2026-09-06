@@ -37,7 +37,9 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
-cd "$HOME/EmbodimentSemantic"
+export REPO_ROOT="${REPO_ROOT:-$HOME/EmbodimentSemantic}"
+test -d "$REPO_ROOT/.git"
+cd "$REPO_ROOT"
 export LIBERO_CONFIG_PATH="$RUN_ROOT/libero_config"
 export MUJOCO_GL=egl
 export HF_HOME="${HF_HOME:-$SCRATCH_FLASH/EmbodimentSemantic_runtime/cache/hf}"
@@ -177,7 +179,7 @@ run_model() {
   done
 }
 
-export PYTHONPATH="$HOME/EmbodimentSemantic:${PYTHONPATH:-}"
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 run_model "$OPENVLA_PYTHON" openvla "$OPENVLA_CHECKPOINT" "$OPENVLA_REVISION"
 run_model "$PYTHON" pi05 "$PI05_CHECKPOINT" "$PI05_REVISION"
 
