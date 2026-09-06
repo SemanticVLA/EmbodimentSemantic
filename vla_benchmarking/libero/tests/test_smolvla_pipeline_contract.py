@@ -63,7 +63,8 @@ def test_target_arrow_legion_training_launcher_is_immutable_and_scoped() -> None
     assert "smoke) STEPS=2; SAVE_FREQ=2" in launcher
     assert "full) STEPS=29190; SAVE_FREQ=1946" in launcher
     assert 'bash "$PREPARE_DATA_SCRIPT" target_arrow_treatment' in launcher
-    assert 'bash "$PIPELINE_SCRIPT" "$SCOPE" --profile target-arrow' in launcher
+    assert "reuse_verified) STEPS=2; SAVE_FREQ=2; PIPELINE_SCOPE=smoke" in launcher
+    assert 'bash "$PIPELINE_SCRIPT" "$PIPELINE_SCOPE" --profile target-arrow' in launcher
     assert "--python \"$PYTHON\"" in launcher
     assert "TARGET_ARROW_BASE_POLICY" in launcher
     assert "TARGET_ARROW_LIBERO_DIR" in launcher
