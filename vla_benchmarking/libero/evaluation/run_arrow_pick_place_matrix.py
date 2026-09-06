@@ -69,6 +69,8 @@ except ImportError:  # pragma: no cover - direct script execution
         load_controller_config,
     )
 
+from vla_benchmarking.libero.shared.config import ARROW_SOURCE_OBJECT
+
 
 DEFAULT_TASK_IDS = tuple(range(10))
 DEFAULT_EPISODES_PER_TASK = 10
@@ -552,10 +554,14 @@ def _init_state_preflight(
 
 
 def _default_arrow_inputs(env: Any, task_id: int, resolution: int) -> dict[str, Any]:
-    """Use the existing hardcoded subject→goal bbox renderer integration."""
+    """Build the configured source→goal arrow from the live scene bboxes."""
     try:
         from vla_benchmarking.libero.evaluation.libero_live_semantic_context import LiveSemanticContextGenerator
-        from vla_benchmarking.libero.shared.config import SCENE_GRAPH_SUBJECT_FILTER, TASK_GOAL_OBJECT_CONFIG
+        from vla_benchmarking.libero.shared.config import (
+            ARROW_SOURCE_OBJECT,
+            SCENE_GRAPH_SUBJECT_FILTER,
+            TASK_GOAL_OBJECT_CONFIG,
+        )
         from types import SimpleNamespace
     except ImportError as exc:  # pragma: no cover - live LIBERO dependency
         raise RuntimeError("LIBERO arrow input generation dependencies are unavailable") from exc
@@ -575,7 +581,7 @@ def _default_arrow_inputs(env: Any, task_id: int, resolution: int) -> dict[str, 
     try:
         setattr(env, "_arrow_input_context", {
             "camera": CAMERA_NAME,
-            "subject": SCENE_GRAPH_SUBJECT_FILTER,
+            "subject": ARROW_SOURCE_OBJECT,
             "goal_object": TASK_GOAL_OBJECT_CONFIG.get(
                 int(task_id), _episode_module.DEFAULT_GOAL_OBJECT
             ),
@@ -595,7 +601,7 @@ def _default_arrow_inputs(env: Any, task_id: int, resolution: int) -> dict[str, 
     return {
         "bboxes": context["bboxes"],
         "goal_object": TASK_GOAL_OBJECT_CONFIG.get(int(task_id), _episode_module.DEFAULT_GOAL_OBJECT),
-        "subject": SCENE_GRAPH_SUBJECT_FILTER,
+        "subject": ARROW_SOURCE_OBJECT,
     }
 
 
@@ -647,7 +653,7 @@ def _protocol(
         },
         "init_state_preflight": dict(init_state_preflight or {}),
         "arrow_relation": {
-            "subject": _episode_module.DEFAULT_SUBJECT,
+            "subject": ARROW_SOURCE_OBJECT,
             "relationship": "goal",
             "object_policy": "existing_task_goal_config",
         },

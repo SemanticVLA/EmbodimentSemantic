@@ -22,7 +22,8 @@ from lerobot.envs import libero as lerobot_libero
 
 from vla_benchmarking.libero.evaluation.bddl_utils import extract_joint_schema, make_filtered_bddl, project_init_states_by_joint_name
 from vla_benchmarking.libero.shared.config import (
-    RANDOMIZE_SCENES, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP, SCENE_GRAPH_SUBJECT_FILTER,
+    ARROW_SOURCE_OBJECT, RANDOMIZE_SCENES, TASK_SWAP_CONFIG, SETTLE_STEPS_SWAP,
+    SCENE_GRAPH_SUBJECT_FILTER,
     LEROBOT_CAMERA_KEYS,
     TASK_GOAL_OBJECT_CONFIG, TASK_REMOVE_CONFIG, TASK_PROMPT_OVERRIDE,
     task_randomization_dimensions,
@@ -665,6 +666,11 @@ def _wrap_task_vec_envs(
                     live_generator,
                     condition=visual_condition,
                     goal_object=visual_goal_objects,
+                    arrow_subject=(
+                        ARROW_SOURCE_OBJECT
+                        if visual_condition == VISUAL_GOAL_ARROW_CONDITION
+                        else None
+                    ),
                     audit_logger=visual_audit_logger,
                     line_width=int(os.environ.get("VISUAL_ARROW_WIDTH", "1")),
                     head_length=int(os.environ.get("VISUAL_ARROW_HEAD_LENGTH", "8")),

@@ -4680,7 +4680,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # contract remains unchanged.  The built-in path uses GT bboxes only
         # to create the one-arrow input, never for control.
         from vla_benchmarking.libero.evaluation.libero_live_semantic_context import LiveSemanticContextGenerator
-        from vla_benchmarking.libero.shared.config import SCENE_GRAPH_SUBJECT_FILTER, TASK_GOAL_OBJECT_CONFIG
+        from vla_benchmarking.libero.shared.config import (
+            ARROW_SOURCE_OBJECT,
+            SCENE_GRAPH_SUBJECT_FILTER,
+            TASK_GOAL_OBJECT_CONFIG,
+        )
         from types import SimpleNamespace
 
         generator = LiveSemanticContextGenerator()
@@ -4708,7 +4712,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dry_run=args.dry_run,
             resolution=args.resolution,
             goal_object=goal,
-            subject=SCENE_GRAPH_SUBJECT_FILTER,
+            subject=ARROW_SOURCE_OBJECT,
             phase_timeout_steps=args.phase_timeout_steps,
             gripper_dwell_steps=args.gripper_dwell_steps,
             recovery_attempts=args.recovery_attempts,

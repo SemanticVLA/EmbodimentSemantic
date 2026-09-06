@@ -232,6 +232,7 @@ class VisualGraphVecEnvWrapper:
         image_key: str = "image",
         condition: str = VISUAL_ARROWS_CONDITION,
         goal_object: str | Mapping[int, str] = DEFAULT_GOAL_OBJECT,
+        arrow_subject: str | None = None,
         audit_logger: VisualRelationAuditLogger | None = None,
         line_width: int = DEFAULT_ARROW_WIDTH,
         head_length: int = DEFAULT_ARROW_HEAD_LENGTH,
@@ -246,6 +247,7 @@ class VisualGraphVecEnvWrapper:
         self.image_key = image_key
         self.condition = condition
         self.goal_object = goal_object
+        self.arrow_subject = arrow_subject
         self.audit_logger = audit_logger
         if line_width <= 0:
             raise ValueError("line_width must be positive")
@@ -326,7 +328,11 @@ class VisualGraphVecEnvWrapper:
                 bboxes,
                 source_relations,
                 condition=self.condition,
-                subject=self.live_generator.scene_graph_subject_filter,
+                subject=(
+                    self.arrow_subject
+                    if self.arrow_subject is not None
+                    else self.live_generator.scene_graph_subject_filter
+                ),
                 goal_object=task_goal_object,
             )
             drawn, skipped = drawable_relations(bboxes, relations)
@@ -352,6 +358,7 @@ class VisualGraphVecEnvWrapper:
                         "line_width": self.line_width,
                         "head_length": self.head_length,
                         "subject_filter": self.live_generator.scene_graph_subject_filter,
+                        "arrow_subject": self.arrow_subject,
                         "goal_object": task_goal_object if self.condition == VISUAL_GOAL_ARROW_CONDITION else None,
                         "visible_bboxes": sorted(bboxes),
                         "relations": [list(item) for item in source_relations],

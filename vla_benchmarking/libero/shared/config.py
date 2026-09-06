@@ -32,7 +32,15 @@ TASK_GOAL_OBJECT_CONFIG: dict[int, str] = {
     9: "plate_1",
 }
 
-SCENE_GRAPH_SUBJECT_FILTER = "akita_black_bowl_1"  # set to None to include all subjects
+# Keep graph generation independent from the object used by the legacy arrow
+# controller.  ``None`` means that the live graph contains every visible
+# object as a possible subject.
+SCENE_GRAPH_SUBJECT_FILTER = None
+
+# The current arrow-controller path still needs an explicit source object after
+# graph generation.  Keep this separate so expanding the graph cannot pass
+# ``None`` into bbox/arrow rendering.
+ARROW_SOURCE_OBJECT = "akita_black_bowl_1"
 
 # Default cameras lerobot passes to every LIBERO env (LiberoEnvConfig.camera_name default).
 # These are the MuJoCo camera names (no _image suffix).

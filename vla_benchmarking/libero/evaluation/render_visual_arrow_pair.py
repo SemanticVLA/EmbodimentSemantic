@@ -24,6 +24,7 @@ from libero.libero import benchmark
 
 from vla_benchmarking.libero.shared.config import (
     BENCHMARK_NAME,
+    ARROW_SOURCE_OBJECT,
     SCENE_GRAPH_SUBJECT_FILTER,
     TASK_GOAL_OBJECT_CONFIG,
     TASK_REMOVE_CONFIG,
@@ -46,7 +47,7 @@ from vla_benchmarking.libero.evaluation.visual_scene_graph import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Render all bowl arrows and bowl-to-target arrow for one LIBERO task."
+        description="Render all scene-graph arrows and bowl-to-target arrow for one LIBERO task."
     )
     parser.add_argument("--task", type=int, default=0)
     parser.add_argument("--seed", type=int, default=1000)
@@ -71,6 +72,8 @@ def main() -> int:
     mapping = _camera_name_mapping(cameras)
     task_suite = benchmark.get_benchmark_dict()[BENCHMARK_NAME]()
     generator = LiveSemanticContextGenerator()
+    # Generate the complete graph.  The goal-arrow selector below chooses the
+    # configured source explicitly after graph generation.
     generator.scene_graph_subject_filter = SCENE_GRAPH_SUBJECT_FILTER
     goal_object = TASK_GOAL_OBJECT_CONFIG.get(args.task, "plate_1")
 
@@ -109,14 +112,13 @@ def main() -> int:
             bboxes,
             source_relations,
             condition=VISUAL_ARROWS_CONDITION,
-            subject=SCENE_GRAPH_SUBJECT_FILTER,
             goal_object=goal_object,
         )
         goal_relations = select_visual_relations(
             bboxes,
             source_relations,
             condition=VISUAL_GOAL_ARROW_CONDITION,
-            subject=SCENE_GRAPH_SUBJECT_FILTER,
+            subject=ARROW_SOURCE_OBJECT,
             goal_object=goal_object,
         )
 
@@ -151,7 +153,9 @@ def main() -> int:
             "seed": args.seed,
             "resolution": args.resolution,
             "camera": camera,
-            "subject": SCENE_GRAPH_SUBJECT_FILTER,
+            "subject_filter": SCENE_GRAPH_SUBJECT_FILTER,
+            "arrow_subject": ARROW_SOURCE_OBJECT,
+            "subject": ARROW_SOURCE_OBJECT,
             "goal_object": goal_object,
             "raw_path": raw_path.as_posix(),
             "all_arrows_path": all_path.as_posix(),
@@ -166,7 +170,7 @@ def main() -> int:
         audit_path = output_dir / f"{stem}_audit.json"
         audit_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
 
-        print(f"All bowl arrows: {all_path}")
+        print(f"All scene-graph arrows: {all_path}")
         print(f"Bowl to target : {goal_path}")
         print(f"Drawn arrows   : all={len(all_drawn)}, target={len(goal_drawn)}")
         print(f"Audit          : {audit_path}")

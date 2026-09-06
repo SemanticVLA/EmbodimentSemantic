@@ -17,7 +17,11 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script smoke
     if str(_repo_root) not in sys.path:
         sys.path.insert(0, str(_repo_root))
 
-from vla_benchmarking.libero.shared.config import SCENE_GRAPH_SUBJECT_FILTER, TASK_GOAL_OBJECT_CONFIG
+from vla_benchmarking.libero.shared.config import (
+    ARROW_SOURCE_OBJECT,
+    SCENE_GRAPH_SUBJECT_FILTER,
+    TASK_GOAL_OBJECT_CONFIG,
+)
 from vla_benchmarking.libero.evaluation.run_scene_graph_format_ablation import (
     DEFAULT_EPISODES,
     DEFAULT_SMOLVLA_MODEL,
@@ -297,6 +301,7 @@ def main() -> int:
             "content": "goal_arrow_only" if args.condition == "visual_goal_arrow" else "arrows_only",
             "direction": "subject_to_object",
             "subject_filter": SCENE_GRAPH_SUBJECT_FILTER,
+            "arrow_subject": ARROW_SOURCE_OBJECT,
             "goal_objects_by_task": (
                 {str(task_id): goal_object for task_id, goal_object in goal_objects_by_task.items()}
                 if args.condition == "visual_goal_arrow"

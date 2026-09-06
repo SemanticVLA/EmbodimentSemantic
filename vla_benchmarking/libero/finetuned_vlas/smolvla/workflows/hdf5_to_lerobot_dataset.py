@@ -3,7 +3,7 @@
 Two variants of the same 500 demonstrations:
     control   - frames as recorded, unmodified.
     treatment - the main (agentview) camera frame has ground-truth scene-graph
-                arrows baked in, subject-filtered to SCENE_GRAPH_SUBJECT_FILTER.
+                arrows baked in, subject-filtered to ARROW_SOURCE_OBJECT.
     target_arrow_treatment - the same frame pair, but with exactly one synthetic
                              subject-to-goal arrow (the bowl to the task goal).
                  The wrist (eye_in_hand) frame is never modified.
@@ -47,7 +47,7 @@ import h5py
 import numpy as np
 
 from vla_benchmarking.libero.shared.config import (
-    SCENE_GRAPH_SUBJECT_FILTER,
+    ARROW_SOURCE_OBJECT,
     TASK_GOAL_OBJECT_CONFIG,
     TASK_NAMES,
     TASK_PROMPT_OVERRIDE,
@@ -80,7 +80,7 @@ TARGET_ARROW_VISUAL_CONTRACT = {
     **SEALED_LORA_VISUAL_CONTRACT,
     "name": "sealed_lora_target_arrow_v2",
     "relation_selection": "single_subject_to_task_goal",
-    "subject": SCENE_GRAPH_SUBJECT_FILTER,
+    "subject": ARROW_SOURCE_OBJECT,
     "goal_object_default": DEFAULT_GOAL_OBJECT,
 }
 SEALED_BBOX_SOURCE_SIZE = 128
@@ -235,7 +235,7 @@ def _relations_for_variant(
     goal_object: str = DEFAULT_GOAL_OBJECT,
 ) -> list[tuple[str, str, str]]:
     """Select the exact relation set rendered for a training variant."""
-    filtered = filter_by_subject(relations, SCENE_GRAPH_SUBJECT_FILTER)
+    filtered = filter_by_subject(relations, ARROW_SOURCE_OBJECT)
     if variant == TARGET_ARROW_VARIANT:
         # This intentionally synthesizes the task goal edge instead of relying on
         # the geometric relation ontology to contain a bowl→plate edge.  It is the
@@ -244,7 +244,7 @@ def _relations_for_variant(
             bboxes,
             filtered,
             condition=VISUAL_GOAL_ARROW_CONDITION,
-            subject=SCENE_GRAPH_SUBJECT_FILTER,
+            subject=ARROW_SOURCE_OBJECT,
             goal_object=goal_object,
         )
     return filtered
