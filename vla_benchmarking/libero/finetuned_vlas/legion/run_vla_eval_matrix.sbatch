@@ -332,7 +332,48 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
 }
 JSON
 
-SMOLVLA_EVAL_SCRIPT="$REPO_ROOT/vla_benchmarking/libero/evaluation/run_lerobot_eval_with_context.py"
+if [[ "$MATRIX_MODE" == "1" ]]; then
+  "$BASE_PYTHON" - "$RUN_ROOT/run_provenance.json" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+training = pathlib.Path("/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197/training_manifest.json")
+training_sha = hashlib.sha256(training.read_bytes()).hexdigest()
+data["repair_mode"] = True
+data["vla_repair_mode"] = "pi05_smolvla_matrix"
+data["matrix"] = {
+    "cells": [
+        {"cell_id": "pi05_vanilla", "model": "pi05", "suite_mode": "vanilla", "episodes": 100},
+        {"cell_id": "pi05_sealed", "model": "pi05", "suite_mode": "sealed_randomized", "episodes": 100},
+        {"cell_id": "smolvla_base_vanilla", "model": "smolvla", "suite_mode": "vanilla", "episodes": 100},
+        {"cell_id": "smolvla_base_sealed_randomized", "model": "smolvla", "suite_mode": "sealed_randomized", "episodes": 100},
+        {"cell_id": "smolvla_no_arrow_ft_vanilla", "model": "smolvla", "suite_mode": "vanilla", "fine_tuned": True, "episodes": 100},
+    ],
+    "total_episodes": 500,
+    "execution": "sequential_same_allocation",
+}
+data["models"]["smolvla"] = {
+    "base_checkpoint": "/mnt/beegfs/hjaber/EmbodimentSemantic_runtime/vla_benchmarking/base_models/smolvla_libero-6721902bc4d61e50a3bfdb11dfb4cb626f05d102",
+    "base_revision": "6721902bc4d61e50a3bfdb11dfb4cb626f05d102",
+    "adapter_checkpoint": "/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197/checkpoints/029190/pretrained_model",
+    "adapter_sha256": "80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092",
+    "training_manifest": str(training), "training_manifest_sha256": training_sha,
+    "base_manifest_sha256": "e4bcf9b4481ca4e523ef6c3af6a6a9fd5e9886215f48f911e7226221761486b",
+    "base_tree_sha256": "d086e041f3f6bfb919f335265106fee1db8b8a3c386af357cb42a89735f74bf1",
+}
+data["schedule"] = {
+    "tasks": 10, "episodes_per_task": 10, "cells": 5,
+    "conditions": ["vanilla", "sealed_randomized", "vanilla", "sealed_randomized", "vanilla"],
+    "episodes_total": 500, "execution": "sequential_same_allocation",
+}
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+fi
+
 MATRIX_STAGE_RESULTS="$RUN_ROOT/matrix_stage_results.jsonl"
 MATRIX_FAILURES="0"
 
@@ -366,86 +407,78 @@ run_pi05_matrix_cell() {
   }
 }
 
-run_smolvla_matrix_cell() {
-  local label="$1"; local policy="$2"; local condition="$3"; local episodes="$4"; local tasks="$5"
-  local output="$RUN_ROOT/smolvla/$label"
+run_smolvla_matrix() {
+  local protocol="$1"
+  local output="$RUN_ROOT/smolvla_matrix_${protocol}"
   mkdir -p "$output"
-  export MODELS="$policy" TASK_IDS="$tasks" N_EPISODES="$episodes" BATCH_SIZE="1" DEVICE="cuda" SEED="1000"
-  export CONTEXT_MODE="standard" CONTEXT_FORMAT="standard" N_ACTION_STEPS="checkpoint"
-  export TRAINING_PROFILE="standard" PROFILE="standard" MAX_EPISODES_RENDERED="0" RENDER_MODE="none"
-  if [[ "$condition" == "vanilla" ]]; then
-    export SUITE_MODE="vanilla"
-    # The checked-in wrapper owns the LeRobot/LIBERO integration.  Disable the
-    # sealed randomizer before importing it so vanilla and sealed are distinct
-    # conditions without editing the ML runner.
-    "$PYTHON" - "$SMOLVLA_EVAL_SCRIPT" "$output" "$policy" "$tasks" "$episodes" <<'PY'
-import runpy
-import sys
-from vla_benchmarking.libero.shared import config
+  "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.smolvla.workflows.run_smolvla_eval_matrix \
+    --adapter-checkpoint "$SMOLVLA_ADAPTER_PATH" \
+    --training-manifest "$SMOLVLA_TRAINING_MANIFEST" \
+    --base-checkpoint "$SMOLVLA_BASE_PATH" \
+    --output-root "$output" --protocol "$protocol" --device cuda --no-videos
+}
 
-script, output, policy, tasks, episodes = sys.argv[1:]
-config.RANDOMIZE_SCENES = False
-config.TASK_REMOVE_CONFIG.clear()
-config.TASK_SWAP_CONFIG.clear()
-config.TASK_PROMPT_OVERRIDE.clear()
-sys.argv = [script,
-    f"--policy.path={policy}",
-    "--policy.device=cuda",
-    "--env.type=libero",
-    "--env.task=libero_spatial",
-    f"--env.task_ids={tasks}",
-    "--env.camera_name=agentview_image,robot0_eye_in_hand_image",
-    "--env.max_parallel_tasks=1",
-    f"--eval.n_episodes={episodes}",
-    "--eval.batch_size=1",
-    f"--output_dir={output}",
-    "--seed=1000",
-    "--eval.use_async_envs=false",
-]
-runpy.run_path(script, run_name="__main__")
-PY
-  else
-    export SUITE_MODE="sealed_randomized"
-    "$PYTHON" "$SMOLVLA_EVAL_SCRIPT" \
-      --policy.path="$policy" --policy.device=cuda \
-      --env.type=libero --env.task=libero_spatial --env.task_ids="$tasks" \
-      --env.camera_name=agentview_image,robot0_eye_in_hand_image --env.max_parallel_tasks=1 \
-      --eval.n_episodes="$episodes" --eval.batch_size=1 --output_dir="$output" \
-      --seed=1000 --eval.use_async_envs=false
-  fi
-  "$BASE_PYTHON" - "$output" "$label" "$condition" "$episodes" "$tasks" <<'PY'
+validate_smolvla_matrix_result() {
+  local protocol="$1"; local expected_episodes="$2"
+  local output="$RUN_ROOT/smolvla_matrix_${protocol}"
+  "$BASE_PYTHON" - "$output" "$protocol" "$expected_episodes" <<'PY'
+import csv
 import json
 import pathlib
 import sys
 
-output, label, condition, episodes, tasks = sys.argv[1:]
-root = pathlib.Path(output)
-info_path = root / "eval_info.json"
-if not info_path.is_file():
-    raise SystemExit(f"missing SmolVLA eval_info.json: {info_path}")
-info = json.loads(info_path.read_text(encoding="utf-8"))
-task_ids = [int(x) for x in json.loads(tasks)]
-per_task = info.get("per_task")
-if not isinstance(per_task, list) or {int(item.get("task_id", -1)) for item in per_task} != set(task_ids):
-    raise SystemExit(f"SmolVLA {label} task records are incomplete")
-expected = len(task_ids) * int(episodes)
-for item in per_task:
-    metrics = item.get("metrics", {})
-    if len(metrics.get("successes", [])) != int(episodes):
-        raise SystemExit(f"SmolVLA {label} task episode count is incomplete")
-overall = info.get("overall", {})
-if overall.get("n_episodes") != expected:
-    raise SystemExit(f"SmolVLA {label} expected {expected} episodes, got {overall.get('n_episodes')}")
-if condition == "sealed":
-    audit = root / "randomization_audit.jsonl"
-    records = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines() if line.strip()] if audit.is_file() else []
-    if len(records) != expected or any(record.get("status") != "ok" for record in records):
-        raise SystemExit(f"SmolVLA {label} randomization audit is incomplete")
-(root / "cell_result.json").write_text(json.dumps({
-    "cell": label, "condition": condition, "episodes": expected,
-    "successes": sum(sum(item["metrics"]["successes"]) for item in per_task),
-    "pc_success": overall.get("pc_success"),
-    "eval_info": str(info_path),
+root = pathlib.Path(sys.argv[1])
+protocol = sys.argv[2]
+expected_episodes = int(sys.argv[3])
+expected_cells = [
+    "smolvla_base_vanilla",
+    "smolvla_base_sealed_randomized",
+    "smolvla_no_arrow_ft_vanilla",
+]
+manifest_path = root / "smolvla_eval_matrix_manifest.json"
+schedule_path = root / "smolvla_eval_matrix_schedule.json"
+summary_path = root / "smolvla_eval_matrix_summary.csv"
+if not manifest_path.is_file() or not schedule_path.is_file() or not summary_path.is_file():
+    raise SystemExit(f"SmolVLA {protocol} matrix artifacts are incomplete")
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+if manifest.get("protocol") != protocol or manifest.get("episodes") != expected_episodes:
+    raise SystemExit("SmolVLA matrix manifest protocol/episode contract mismatch")
+if [cell.get("cell_id") for cell in manifest.get("cells", [])] != expected_cells:
+    raise SystemExit("SmolVLA matrix manifest cell IDs are not exact")
+if schedule.get("protocol") != protocol or len(schedule.get("cells", [])) != expected_episodes * 2 * 3:
+    raise SystemExit("SmolVLA matrix schedule is incomplete")
+if {cell.get("cell_id") for cell in schedule["cells"]} != set(expected_cells):
+    raise SystemExit("SmolVLA matrix schedule cell IDs are incomplete")
+rows = list(csv.DictReader(summary_path.open(newline="", encoding="utf-8")))
+cell_rows = [row for row in rows if row.get("row_type") == "cell"]
+if [row.get("cell_id") for row in cell_rows] != expected_cells:
+    raise SystemExit("SmolVLA matrix summary cell rows are incomplete or out of order")
+if any(row.get("status") != "complete" or int(row.get("episodes", -1)) != expected_episodes for row in cell_rows):
+    raise SystemExit("SmolVLA matrix summary contains incomplete cells")
+cells = []
+for cell in manifest["cells"]:
+    output_dir = pathlib.Path(cell["output_dir"])
+    info_path = output_dir / "eval_info.json"
+    if not info_path.is_file():
+        raise SystemExit(f"missing SmolVLA eval_info.json: {info_path}")
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    if info.get("overall", {}).get("n_episodes") != expected_episodes:
+        raise SystemExit(f"{cell['cell_id']} does not contain {expected_episodes} episodes")
+    if cell["suite_mode"] == "sealed_randomized":
+        audit_path = output_dir / "randomization_audit.jsonl"
+        records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()] if audit_path.is_file() else []
+        if len(records) != expected_episodes or any(record.get("status") != "ok" for record in records):
+            raise SystemExit(f"{cell['cell_id']} sealed randomization audit is incomplete")
+    cells.append({
+        "cell_id": cell["cell_id"], "suite_mode": cell["suite_mode"],
+        "episodes": expected_episodes, "output_dir": str(output_dir),
+        "eval_info": str(info_path), "successes": sum(sum(item["metrics"]["successes"]) for item in info["per_task"]),
+        "pc_success": info.get("overall", {}).get("pc_success"),
+    })
+(root / "matrix_postcondition.json").write_text(json.dumps({
+    "protocol": protocol, "cell_ids": expected_cells, "episodes_per_cell": expected_episodes,
+    "total_episodes": expected_episodes * 3, "cells": cells,
 }, indent=2, sort_keys=True) + "\n")
 PY
 }
@@ -496,26 +529,25 @@ receipt = {
     "finite": True,
 }
 Path(receipt_path).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-print(json.dumps(receipt, sort_keys=True))
+  print(json.dumps(receipt, sort_keys=True))
 PY
   if [[ "$MATRIX_MODE" == "1" ]]; then
-    run_matrix_stage smolvla_vanilla_base_smoke \
-      run_smolvla_matrix_cell smolvla_vanilla_base_smoke "$SMOLVLA_BASE_PATH" vanilla 1 '[0,4]'
-    run_matrix_stage smolvla_sealed_base_smoke \
-      run_smolvla_matrix_cell smolvla_sealed_base_smoke "$SMOLVLA_BASE_PATH" sealed 1 '[0,4]'
-    run_matrix_stage smolvla_vanilla_finetuned_smoke \
-      run_smolvla_matrix_cell smolvla_vanilla_finetuned_smoke "$SMOLVLA_ADAPTER_PATH" vanilla 1 '[0,4]'
+    run_matrix_stage smolvla_matrix_smoke run_smolvla_matrix smoke
+    run_matrix_stage smolvla_matrix_smoke_postcondition validate_smolvla_matrix_result smoke 1
     "$BASE_PYTHON" - "$RUN_ROOT" "$MATRIX_STAGE_RESULTS" <<'PY'
 import json
 import pathlib
 import sys
 root, stages = map(pathlib.Path, sys.argv[1:])
 rows = [json.loads(line) for line in stages.read_text().splitlines() if line.strip()]
-if len(rows) != 3 or any(row["return_code"] != 0 for row in rows):
+if len(rows) != 2 or any(row["return_code"] != 0 for row in rows):
     raise SystemExit("combined SmolVLA canary failed")
+postcondition = root / "smolvla_matrix_smoke" / "matrix_postcondition.json"
+if not postcondition.is_file() or json.loads(postcondition.read_text()).get("total_episodes") != 6:
+    raise SystemExit("combined SmolVLA canary postcondition is incomplete")
 (root / "matrix_canary_summary.json").write_text(json.dumps({
     "status": "passed", "pi05_canary": str(root / "pi05_canary.json"),
-    "smolvla_smoke_cells": [row["label"] for row in rows],
+    "smolvla_matrix": str(postcondition),
 }, indent=2, sort_keys=True) + "\n")
 PY
   fi
@@ -547,13 +579,10 @@ if [[ "$MATRIX_MODE" == "1" ]]; then
   # Preserve the user-requested sequential order within one GPU allocation.
   run_matrix_stage pi05_vanilla run_pi05_matrix_cell vanilla
   run_matrix_stage pi05_sealed run_pi05_matrix_cell sealed
-  run_matrix_stage smolvla_vanilla_base \
-    run_smolvla_matrix_cell smolvla_vanilla_base "$SMOLVLA_BASE_PATH" vanilla 10 '[0,1,2,3,4,5,6,7,8,9]'
-  run_matrix_stage smolvla_sealed_base \
-    run_smolvla_matrix_cell smolvla_sealed_base "$SMOLVLA_BASE_PATH" sealed 10 '[0,1,2,3,4,5,6,7,8,9]'
-  run_matrix_stage smolvla_vanilla_finetuned \
-    run_smolvla_matrix_cell smolvla_vanilla_finetuned "$SMOLVLA_ADAPTER_PATH" vanilla 10 '[0,1,2,3,4,5,6,7,8,9]'
+  run_matrix_stage smolvla_matrix_full run_smolvla_matrix full
+  run_matrix_stage smolvla_matrix_full_postcondition validate_smolvla_matrix_result full 10
   "$BASE_PYTHON" - "$RUN_ROOT" "$MATRIX_STAGE_RESULTS" <<'PY'
+import hashlib
 import os
 import json
 import pathlib
@@ -561,8 +590,8 @@ import sys
 
 root, stages = map(pathlib.Path, sys.argv[1:])
 expected = [
-    "pi05_vanilla", "pi05_sealed", "smolvla_vanilla_base",
-    "smolvla_sealed_base", "smolvla_vanilla_finetuned",
+    "pi05_vanilla", "pi05_sealed", "smolvla_matrix_full",
+    "smolvla_matrix_full_postcondition",
 ]
 stage_rows = [json.loads(line) for line in stages.read_text(encoding="utf-8").splitlines() if line.strip()]
 if [row.get("label") for row in stage_rows] != expected:
@@ -580,25 +609,33 @@ for label in expected[:2]:
     for index, record in enumerate(records):
         if not isinstance(record, dict):
             raise SystemExit(f"{label} contains a non-object row")
-        combined_rows.append({**record, "cell": label, "episode_index": index})
+        combined_rows.append({**record, "cell": label, "matrix_row_index": len(combined_rows)})
     cells[label] = {"episodes": count, "output": str(path)}
-for label in expected[2:]:
-    path = root / "smolvla" / label / "cell_result.json"
-    data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    if data.get("episodes") != 100:
-        raise SystemExit(f"{label} must contain exactly 100 episodes, got {data.get('episodes')}")
-    info = json.loads((root / "smolvla" / label / "eval_info.json").read_text(encoding="utf-8"))
+matrix_root = root / "smolvla_matrix_full"
+postcondition = json.loads((matrix_root / "matrix_postcondition.json").read_text(encoding="utf-8"))
+if postcondition.get("protocol") != "full" or postcondition.get("total_episodes") != 300:
+    raise SystemExit("SmolVLA full matrix postcondition is incomplete")
+manifest = json.loads((matrix_root / "smolvla_eval_matrix_manifest.json").read_text(encoding="utf-8"))
+manifest_cells = {cell["cell_id"]: cell for cell in manifest["cells"]}
+for cell in postcondition["cells"]:
+    label = cell["cell_id"]
+    if cell.get("episodes") != 100:
+        raise SystemExit(f"{label} must contain exactly 100 episodes")
+    info = json.loads(pathlib.Path(cell["eval_info"]).read_text(encoding="utf-8"))
     episode_index = 0
+    metadata = manifest_cells[label]
     for task in info["per_task"]:
-        for success in task["metrics"]["successes"]:
+        for task_episode_index, success in enumerate(task["metrics"]["successes"]):
             combined_rows.append({
-                "cell": label, "task_id": task["task_id"],
-                "episode_index": episode_index, "success": bool(success),
+                "cell": label, "cell_id": label, "suite_mode": metadata["suite_mode"],
+                "checkpoint": metadata["checkpoint"], "seed": 1000 + task_episode_index,
+                "task_id": task["task_id"], "episode_index": task_episode_index,
+                "matrix_row_index": len(combined_rows), "success": bool(success),
             })
             episode_index += 1
     if episode_index != 100:
         raise SystemExit(f"{label} could not be flattened to 100 rows")
-    cells[label] = data
+    cells[label] = cell
 if len(combined_rows) != 500 or sum(int(cell["episodes"]) for cell in cells.values()) != 500:
     raise SystemExit("combined matrix must contain exactly 500 episodes")
 (root / "combined_episodes.jsonl").write_text(
@@ -608,11 +645,16 @@ if len(combined_rows) != 500 or sum(int(cell["episodes"]) for cell in cells.valu
     "schema": "pi05_smolvla_matrix.v1", "status": "passed",
     "cells": cells, "total_episodes": 500, "total_rows": len(combined_rows),
     "combined_episodes": str(root / "combined_episodes.jsonl"), "stage_results": str(stages),
+    "smolvla_matrix": str(matrix_root),
     "smolvla": {
         "base_path": os.environ.get("SMOLVLA_BASE_PATH", ""),
         "base_revision": os.environ.get("SMOLVLA_BASE_REVISION", ""),
+        "base_manifest_sha256": os.environ.get("SMOLVLA_BASE_MANIFEST_SHA256", ""),
+        "base_tree_sha256": os.environ.get("SMOLVLA_BASE_TREE_SHA256", ""),
         "adapter_path": os.environ.get("SMOLVLA_ADAPTER_PATH", ""),
+        "adapter_sha256": os.environ.get("SMOLVLA_ADAPTER_SHA256", ""),
         "training_manifest": os.environ.get("SMOLVLA_TRAINING_MANIFEST", ""),
+        "training_manifest_sha256": hashlib.sha256(pathlib.Path(os.environ["SMOLVLA_TRAINING_MANIFEST"]).read_bytes()).hexdigest(),
     },
 }, indent=2, sort_keys=True) + "\n")
 PY
