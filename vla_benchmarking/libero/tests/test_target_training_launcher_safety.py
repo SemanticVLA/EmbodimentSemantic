@@ -30,7 +30,7 @@ def test_target_training_canonicalizes_and_isolates_data_roots() -> None:
 
 def test_target_training_serializes_shared_dataset_preparation() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
-    assert 'DATA_LOCK="$DATA_CACHE/.sealed-target-arrow-${BASE_POLICY_REVISION}-target_arrow_treatment.lock"' in source
+    assert 'DATA_LOCK="$DATA_CACHE/.sealed-libero-source-${LIBERO_DATASET_COMMIT}.lock"' in source
     assert 'exec 8>>"$DATA_LOCK"' in source
     assert "flock -x 8" in source
     assert "flock -u 8" in source
@@ -73,3 +73,24 @@ def test_target_training_uses_short_job_unique_tmp_and_cleans_it() -> None:
     assert 'export TMPDIR="$TMP_ROOT"' in source
     assert 'rm -rf -- "$TMP_ROOT"' in source
     assert 'TMP_ROOT" == "/tmp/ta-${SLURM_JOB_ID}"' in source
+
+
+def test_both_training_profiles_share_the_source_dataset_lock() -> None:
+    no_arrow = (
+        ROOT
+        / "finetuned_vlas"
+        / "smolvla"
+        / "no_arrows"
+        / "legion"
+        / "run_training.sbatch"
+    ).read_text(encoding="utf-8")
+    target = LAUNCHER.read_text(encoding="utf-8")
+    lock_line = 'DATA_LOCK="$DATA_CACHE/.sealed-libero-source-${LIBERO_DATASET_COMMIT}.lock"'
+    assert lock_line in no_arrow
+    assert lock_line in target
+    for source in (no_arrow, target):
+        lock_start = source.index("flock -x 8")
+        lock_end = source.index("flock -u 8", lock_start)
+        locked_prepare = source[lock_start:lock_end]
+        assert "prepare_lambda_data.sh" in locked_prepare or "verify-target-arrow" in locked_prepare or "--mode verify" in locked_prepare
+        assert "preflight" in locked_prepare

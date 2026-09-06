@@ -54,7 +54,7 @@ def test_no_arrow_training_launcher_reuses_only_an_explicit_verified_pair() -> N
     assert "sealed_lora_pair_verified.json" in source
     assert '--mode verify --data-dir "$HDF5_ROOT" --output-root "$DATA_ROOT"' in source
     assert '--mode preflight --data-dir "$HDF5_ROOT" --output-root "$DATA_ROOT"' in source
-    assert 'DATA_LOCK="$DATA_CACHE/.sealed-no-arrow-${BASE_POLICY_REVISION}-no_arrow_treatment.lock"' in source
+    assert 'DATA_LOCK="$DATA_CACHE/.sealed-libero-source-${LIBERO_DATASET_COMMIT}.lock"' in source
     assert 'exec 8>>"$DATA_LOCK"' in source
     assert "flock -x 8" in source
     assert "flock -u 8" in source

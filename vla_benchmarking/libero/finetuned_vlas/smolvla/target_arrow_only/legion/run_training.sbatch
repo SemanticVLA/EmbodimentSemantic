@@ -74,6 +74,7 @@ actual_commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" ||
 
 BASE_POLICY_REVISION="${TARGET_ARROW_BASE_POLICY_REVISION:-6721902bc4d61e50a3bfdb11dfb4cb626f05d102}"
 LIBERO_COMMIT="${TARGET_ARROW_LIBERO_COMMIT:-8f1084e3132a39270c3a13ebe37270a43ece2a01}"
+LIBERO_DATASET_COMMIT="${LIBERO_DATASET_COMMIT:-a0dded49581dcbf5a109f8350305411d345c5d99}"
 PYTHON="${TARGET_ARROW_PYTHON:-/home/hjaber/.conda/envs/embodiment-smolvla-py312/bin/python}"
 RUNTIME_ROOT="${TARGET_ARROW_RUNTIME_ROOT:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/smolvla}"
 LIBERO_DIR="${TARGET_ARROW_LIBERO_DIR:-$RUNTIME_ROOT/LIBERO}"
@@ -169,7 +170,7 @@ TMP_ROOT="${TARGET_ARROW_TMP_ROOT:-/tmp/ta-${SLURM_JOB_ID}}"
 mkdir -p "$RUN_ROOT" "$HDF5_ROOT" "$DATA_ROOT" "$DATA_CACHE"
 export REPO_ROOT VLA_ROOT="$REPO_ROOT/vla_benchmarking/libero"
 export PYTHON LIBERO_DIR LIBERO_CONFIG LIBERO_DATA_DIR="$HDF5_ROOT" DATA_ROOT
-export BASE_POLICY BASE_POLICY_REVISION LIBERO_COMMIT
+export BASE_POLICY BASE_POLICY_REVISION LIBERO_COMMIT LIBERO_DATASET_COMMIT
 export LIBERO_DATASET_CACHE="$DATA_CACHE"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
@@ -250,7 +251,7 @@ archive_on_exit() {
 trap archive_on_exit EXIT
 
 printf '[%s] preparing verified target-arrow dataset\n' "$(date +'%F %T')"
-DATA_LOCK="$DATA_CACHE/.sealed-target-arrow-${BASE_POLICY_REVISION}-target_arrow_treatment.lock"
+DATA_LOCK="$DATA_CACHE/.sealed-libero-source-${LIBERO_DATASET_COMMIT}.lock"
 [[ ! -L "$DATA_LOCK" ]] || die "dataset lock must not be a symlink: $DATA_LOCK"
 exec 8>>"$DATA_LOCK"
 flock -x 8
