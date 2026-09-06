@@ -88,7 +88,8 @@ git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 "$PYTHON" -m pip install --disable-pip-version-check h5py pillow
 "$PYTHON" -m pip install --disable-pip-version-check -e "$OCTO_REPO" --no-deps
 "$PYTHON" -m pip install --disable-pip-version-check \
-  "jax[cuda11_pip]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+  "jax[cuda11_pip]==0.4.20" "scipy==1.11.4" \
+  -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 # LeRobot's pinned LIBERO API requires Python >=3.12, while the Octo training
 # environment is intentionally Python 3.10.  Evaluation therefore runs as a
