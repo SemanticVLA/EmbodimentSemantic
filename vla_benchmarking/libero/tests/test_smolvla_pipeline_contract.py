@@ -93,6 +93,8 @@ def test_target_arrow_pair_eval_launcher_passes_explicit_scope_contract() -> Non
     assert 'full) EPISODES=10; TASK_IDS="0,1,2,3,4,5,6,7,8,9"' in launcher
     assert '--evaluation-scope "$EVAL_SCOPE"' in launcher
     assert '--task-ids "$TASK_IDS"' in launcher
+    assert 'export LIBERO_CONFIG_PATH=' in launcher
+    assert 'export LIBERO_CONFIG="$LIBERO_CONFIG_PATH/config.yaml"' in launcher
 
 
 def test_target_arrow_pair_eval_launcher_isolated_and_provenance_locked() -> None:

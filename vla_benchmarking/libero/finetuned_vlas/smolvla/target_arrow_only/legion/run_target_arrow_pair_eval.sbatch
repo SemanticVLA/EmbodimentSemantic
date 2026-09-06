@@ -189,6 +189,9 @@ EOF
 export REPO_ROOT VLA_ROOT="$REPO_ROOT/vla_benchmarking/libero"
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
+export LIBERO_CONFIG_PATH="${TARGET_ARROW_LIBERO_CONFIG_PATH:-$HOME/EmbodimentSemantic_runtime/config}"
+export LIBERO_CONFIG="$LIBERO_CONFIG_PATH/config.yaml"
+[[ -f "$LIBERO_CONFIG" ]] || die "LIBERO configuration is missing: $LIBERO_CONFIG"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 
 "$PYTHON" - "$RUN_ROOT/runtime_versions.json" <<'PY'
