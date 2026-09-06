@@ -88,13 +88,15 @@ export OCTO_EVAL_PYTHON="$OCTO_EVAL_ENV/bin/python"
 # Python 3.12 has no wheels for the Octo paper's original JAX/TensorFlow
 # pins.  Keep the training environment on those exact pins, and use this
 # separately recorded, API-compatible inference environment for the required
-# LIBERO rollout process.
+# LIBERO rollout process.  Do not install the upstream OXE-only
+# tensorflow-graphics extra here: its tensorflow-addons dependency has no
+# Python 3.12 wheel, and the LIBERO dataset/rollout path does not import OXE.
 "$OCTO_EVAL_PYTHON" -m pip install --disable-pip-version-check \
   "jax[cuda12]==0.4.38" \
   "flax==0.10.2" "orbax-checkpoint==0.11.5" \
   "tensorflow==2.20.0" "tensorflow-probability==0.25.0" \
   "tensorflow-datasets==4.9.9" "tensorflow-hub==0.16.1" \
-  "tensorflow-text==2.20.0" "tensorflow-graphics==2021.12.3" \
+  "tensorflow-text==2.20.0" \
   "optax==0.2.4" "chex==0.1.89" "distrax==0.1.5" \
   "ml-collections>=0.1.0" "einops>=0.6.1" "transformers==4.40.1" \
   "sentencepiece" "scipy>=1.6.0" "imageio>=2.31.1" \
