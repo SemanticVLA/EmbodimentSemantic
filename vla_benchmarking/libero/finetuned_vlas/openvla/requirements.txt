@@ -2,3 +2,6 @@
 # Install this file only in the isolated original-OpenVLA runtime environment;
 # the shared LeRobot/Pi05 environment remains on its own pinned transformers.
 transformers==4.40.1
+timm==0.9.10
+ml-collections>=0.1.0
+sentencepiece>=0.1.99
