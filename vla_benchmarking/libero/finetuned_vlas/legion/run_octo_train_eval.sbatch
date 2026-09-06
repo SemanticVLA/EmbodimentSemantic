@@ -93,8 +93,11 @@ git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 # The Octo release imports W&B at module import time.  Keep its generated
 # protobuf bindings compatible with the training environment's protobuf 3.20.3
 # pin, and disable network logging for this reproducibility run.
-"$PYTHON" -m pip install --disable-pip-version-check --no-deps "wandb==0.15.12"
+# Resolve legacy W&B dependencies too (appdirs, docker-pycreds, pathtools,
+# setproctitle); the newer upstream W&B install does not provide them all.
+"$PYTHON" -m pip install --disable-pip-version-check "wandb==0.15.12" "protobuf==3.20.3"
 export WANDB_MODE=disabled
+"$PYTHON" -c 'import wandb; from google.protobuf import __version__ as protobuf_version; assert wandb.__version__ == "0.15.12"; assert protobuf_version == "3.20.3"; print({"wandb": wandb.__version__, "protobuf": protobuf_version})'
 
 # LeRobot's pinned LIBERO API requires Python >=3.12, while the Octo training
 # environment is intentionally Python 3.10.  Evaluation therefore runs as a
