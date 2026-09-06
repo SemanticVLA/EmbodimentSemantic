@@ -16,6 +16,8 @@ module load miniforge/24.3.0-0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 export BASE_PYTHON="$HOME/.conda/envs/embodiment-smolvla-py312/bin/python"
 test -x "$BASE_PYTHON"
+export REPO_ROOT="${REPO_ROOT:-$HOME/EmbodimentSemantic}"
+test -d "$REPO_ROOT/.git"
 
 export RUN_ROOT="$SCRATCH_FLASH/EmbodimentSemantic_runtime/runs/octo_train_eval_${SLURM_JOB_ID}"
 export ARCHIVE_ROOT="$HOME/EmbodimentSemantic_archive/runs/octo_train_eval_${SLURM_JOB_ID}"
@@ -31,7 +33,7 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
-cd "$HOME/EmbodimentSemantic"
+cd "$REPO_ROOT"
 export LIBERO_CONFIG_PATH="$RUN_ROOT/libero_config"
 export MUJOCO_GL=egl
 export HF_HOME="${HF_HOME:-$SCRATCH_FLASH/EmbodimentSemantic_runtime/cache/hf}"
@@ -40,7 +42,7 @@ export PYTHONNOUSERSITE=1
 
 # Each concurrent job gets its own LIBERO config and BDDL tree.  Never mutate
 # the shared ~/.libero/config.yaml while another SLURM job may be rolling out.
-export LIBERO_SOURCE_ROOT="$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO"
+export LIBERO_SOURCE_ROOT="${LIBERO_SOURCE_ROOT:-$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO}"
 export LIBERO_SOURCE_COMMIT="8f1084e3132a39270c3a13ebe37270a43ece2a01"
 export LIBERO_BDDL_SOURCE="$LIBERO_SOURCE_ROOT/libero/libero/bddl_files"
 export LIBERO_BDDL_TARGET="$RUN_ROOT/libero_cache/bddl_files"
@@ -88,7 +90,7 @@ git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 # environment is intentionally Python 3.10.  Evaluation therefore runs as a
 # separate Python 3.12 process with system-site packages (the policy/env bridge
 # remains one process), and fails closed if both runtimes are not importable.
-export PYTHONPATH="$HOME/EmbodimentSemantic:$OCTO_REPO:${PYTHONPATH:-}"
+export PYTHONPATH="$REPO_ROOT:$OCTO_REPO:${PYTHONPATH:-}"
 export OCTO_EVAL_ENV="$RUN_ROOT/octo_eval_py312"
 "$BASE_PYTHON" -m venv --system-site-packages "$OCTO_EVAL_ENV"
 export OCTO_EVAL_PYTHON="$OCTO_EVAL_ENV/bin/python"
@@ -135,7 +137,7 @@ DATASET_ROOT="$RUN_ROOT/octo_tfds"
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.legion.prepare_octo_dataset \
   --data-root "$DATA_ROOT" --run-root "$RUN_ROOT/dataset" --dataset-root "$DATASET_ROOT"
 MANIFEST="$RUN_ROOT/dataset/octo_completion_manifest.json"
-CONFIG_PATH="$HOME/EmbodimentSemantic/vla_benchmarking/libero/finetuned_vlas/octo/native_finetune_config.py"
+CONFIG_PATH="$REPO_ROOT/vla_benchmarking/libero/finetuned_vlas/octo/native_finetune_config.py"
 
 # Measure every declared A40 candidate in a fresh two-update process.  OOM or
 # unsupported recipes are recorded as non-fitting; the smallest successful
@@ -196,7 +198,7 @@ TRAIN_ROOT="$RUN_ROOT/training"
 "$PYTHON" -m vla_benchmarking.libero.finetuned_vlas.octo.train \
   --execute --dataset-manifest "$MANIFEST" --checkpoint-path "$BASE_ROOT" \
   --dataset-root "$DATASET_ROOT" --memory-measurements "$RUN_ROOT/a40_memory_receipt.json" \
-  --entrypoint "$HOME/EmbodimentSemantic/vla_benchmarking/libero/finetuned_vlas/octo/native_train.py" --config-path "$CONFIG_PATH" --output-dir "$TRAIN_ROOT"
+  --entrypoint "$REPO_ROOT/vla_benchmarking/libero/finetuned_vlas/octo/native_train.py" --config-path "$CONFIG_PATH" --output-dir "$TRAIN_ROOT"
 
 # Preserve the native Octo experiment root.  OctoModel.load_pretrained reads
 # config.json, example_batch.msgpack, and dataset_statistics.json from this
