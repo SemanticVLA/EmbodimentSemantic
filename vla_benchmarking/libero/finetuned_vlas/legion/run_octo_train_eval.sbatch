@@ -53,6 +53,7 @@ git -C "$OCTO_REPO" fetch --quiet origin "$OCTO_COMMIT"
 git -C "$OCTO_REPO" checkout --detach "$OCTO_COMMIT"
 [[ "$(git -C "$OCTO_REPO" rev-parse HEAD)" == "$OCTO_COMMIT" ]]
 "$PYTHON" -m pip install --disable-pip-version-check -r "$OCTO_REPO/requirements.txt"
+"$PYTHON" -m pip install --disable-pip-version-check h5py pillow
 "$PYTHON" -m pip install --disable-pip-version-check -e "$OCTO_REPO" --no-deps
 "$PYTHON" -m pip install --disable-pip-version-check \
   "jax[cuda11_pip]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
