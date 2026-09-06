@@ -1259,6 +1259,42 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
         def __getattr__(self, name: str) -> Any:
             return getattr(self._source, name)
 
+    class _MujocoModelView:
+        """Expose mujoco-py name resolvers over MuJoCo 3 named accessors."""
+
+        def __init__(self, source: Any):
+            self._source = source
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._source, name)
+
+        def _name2id(self, kind: str, name: str) -> int:
+            legacy = getattr(self._source, f"{kind}_name2id", None)
+            if callable(legacy):
+                return int(legacy(name))
+            accessor = getattr(self._source, kind, None)
+            if not callable(accessor):
+                raise KeyError(name)
+            return int(accessor(name).id)
+
+        def site_name2id(self, name: str) -> int:
+            return self._name2id("site", name)
+
+        def body_name2id(self, name: str) -> int:
+            return self._name2id("body", name)
+
+        def geom_name2id(self, name: str) -> int:
+            return self._name2id("geom", name)
+
+        def geom_id2name(self, index: int) -> str | None:
+            legacy = getattr(self._source, "geom_id2name", None)
+            if callable(legacy):
+                return legacy(index)
+            accessor = getattr(self._source, "geom", None)
+            if not callable(accessor):
+                return None
+            return getattr(accessor(int(index)), "name", None)
+
     local_data = _B0DataView(world_data)
     def _local_points(value: Any) -> Any:
         arr = np.asarray(value, dtype=np.float64)
@@ -1277,7 +1313,7 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
         if hasattr(world_data, _name):
             setattr(local_data, _name, _local_rotations(getattr(world_data, _name)))
     local_sim = type("_B0Sim", (), {})()
-    local_sim.model = getattr(sim_world, "model", None)
+    local_sim.model = _MujocoModelView(getattr(sim_world, "model", None))
     local_sim.data = local_data
     record = probe_grip_site_frame(local_sim)
     if not bool(record.get("passed")):

@@ -92,6 +92,36 @@ def test_panda_probe_does_not_write_mujoco_read_only_data_properties() -> None:
     assert transform.shape == (3, 3)
 
 
+def test_panda_probe_adapts_mujoco3_named_accessors() -> None:
+    env = _fake_panda_env()
+    legacy_model = env.sim.model
+
+    class NamedAccessOnlyModel:
+        def __getattr__(self, name):
+            if name.endswith("_name2id") or name.endswith("_id2name"):
+                raise AttributeError(name)
+            return getattr(legacy_model, name)
+
+        def site(self, name_or_id):
+            index = int(name_or_id) if isinstance(name_or_id, int) else legacy_model.site_name2id(name_or_id)
+            return SimpleNamespace(id=index, name=legacy_model.site_names[index])
+
+        def body(self, name_or_id):
+            index = int(name_or_id) if isinstance(name_or_id, int) else legacy_model.body_name2id(name_or_id)
+            return SimpleNamespace(id=index, name=legacy_model.body_names[index])
+
+        def geom(self, name_or_id):
+            index = int(name_or_id) if isinstance(name_or_id, int) else legacy_model.geom_name2id(name_or_id)
+            return SimpleNamespace(id=index, name=legacy_model.geom_names[index])
+
+    env.sim.model = NamedAccessOnlyModel()
+    calibration, transform, record = runner.probe_robot_calibration(env)
+    assert record["resolved_site_name"] == "grip_site"
+    assert record["resolved_body_name"] == "right_hand"
+    assert calibration.grasp_to_grip_site.shape == (3, 3)
+    assert transform.shape == (3, 3)
+
+
 def test_xyzw_base_quaternion_rotates_world_into_b0() -> None:
     s = np.sqrt(0.5)
     world_from_base, base_from_world = adapter.world_base_transform(
