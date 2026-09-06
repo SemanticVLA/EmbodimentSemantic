@@ -61,3 +61,6 @@ def test_legion_job_isolates_original_openvla_transformers_pin() -> None:
     assert 'local python_bin="$1"' in job
     assert 'run_model "$OPENVLA_PYTHON" openvla' in job
     assert 'run_model "$PYTHON" pi05' in job
+    assert 'init_states: $LIBERO_INIT_TARGET' in job
+    assert 'conditions=(sealed)' in job
+    assert 'PRESERVED_OPENVLA_VANILLA' in job

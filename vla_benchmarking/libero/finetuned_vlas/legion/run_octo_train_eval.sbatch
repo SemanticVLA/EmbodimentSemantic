@@ -46,15 +46,19 @@ export LIBERO_SOURCE_ROOT="${LIBERO_SOURCE_ROOT:-$HOME/EmbodimentSemantic/vla_be
 export LIBERO_SOURCE_COMMIT="8f1084e3132a39270c3a13ebe37270a43ece2a01"
 export LIBERO_BDDL_SOURCE="$LIBERO_SOURCE_ROOT/libero/libero/bddl_files"
 export LIBERO_BDDL_TARGET="$RUN_ROOT/libero_cache/bddl_files"
+export LIBERO_INIT_SOURCE="$LIBERO_SOURCE_ROOT/libero/libero/init_files"
+export LIBERO_INIT_TARGET="$RUN_ROOT/libero_cache/init_files"
 test -d "$LIBERO_BDDL_SOURCE"
+test -d "$LIBERO_INIT_SOURCE"
 [[ "$(git -C "$LIBERO_SOURCE_ROOT" rev-parse HEAD)" == "$LIBERO_SOURCE_COMMIT" ]]
 [[ -z "$(git -C "$LIBERO_SOURCE_ROOT" status --porcelain --untracked-files=all)" ]]
-mkdir -p "$LIBERO_CONFIG_PATH" "$LIBERO_BDDL_TARGET"
+mkdir -p "$LIBERO_CONFIG_PATH" "$LIBERO_BDDL_TARGET" "$LIBERO_INIT_TARGET"
 rsync -a "$LIBERO_BDDL_SOURCE/" "$LIBERO_BDDL_TARGET/"
+rsync -a "$LIBERO_INIT_SOURCE/" "$LIBERO_INIT_TARGET/"
 cat > "$LIBERO_CONFIG_PATH/config.yaml" <<YAML
 benchmark_root: $HOME/.cache/libero/benchmark
 bddl_files: $LIBERO_BDDL_TARGET
-init_states: $HOME/.cache/libero/init_files
+init_states: $LIBERO_INIT_TARGET
 datasets: $HOME/.cache/libero/datasets
 assets: $HOME/.cache/libero/assets
 YAML

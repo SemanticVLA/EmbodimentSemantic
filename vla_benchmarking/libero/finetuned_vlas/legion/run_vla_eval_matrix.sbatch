@@ -50,15 +50,19 @@ export LIBERO_SOURCE_ROOT="$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO"
 export LIBERO_SOURCE_COMMIT="8f1084e3132a39270c3a13ebe37270a43ece2a01"
 export LIBERO_BDDL_SOURCE="$LIBERO_SOURCE_ROOT/libero/libero/bddl_files"
 export LIBERO_BDDL_TARGET="$RUN_ROOT/libero_cache/bddl_files"
+export LIBERO_INIT_SOURCE="$LIBERO_SOURCE_ROOT/libero/libero/init_files"
+export LIBERO_INIT_TARGET="$RUN_ROOT/libero_cache/init_files"
 test -d "$LIBERO_BDDL_SOURCE"
+test -d "$LIBERO_INIT_SOURCE"
 [[ "$(git -C "$LIBERO_SOURCE_ROOT" rev-parse HEAD)" == "$LIBERO_SOURCE_COMMIT" ]]
 [[ -z "$(git -C "$LIBERO_SOURCE_ROOT" status --porcelain --untracked-files=all)" ]]
-mkdir -p "$LIBERO_CONFIG_PATH" "$LIBERO_BDDL_TARGET"
+mkdir -p "$LIBERO_CONFIG_PATH" "$LIBERO_BDDL_TARGET" "$LIBERO_INIT_TARGET"
 rsync -a "$LIBERO_BDDL_SOURCE/" "$LIBERO_BDDL_TARGET/"
+rsync -a "$LIBERO_INIT_SOURCE/" "$LIBERO_INIT_TARGET/"
 cat > "$LIBERO_CONFIG_PATH/config.yaml" <<YAML
 benchmark_root: $HOME/.cache/libero/benchmark
 bddl_files: $LIBERO_BDDL_TARGET
-init_states: $HOME/.cache/libero/init_files
+init_states: $LIBERO_INIT_TARGET
 datasets: $HOME/.cache/libero/datasets
 assets: $HOME/.cache/libero/assets
 YAML
@@ -108,6 +112,12 @@ PI05_REPO="lerobot/pi05_libero_finetuned_v044"
 OPENVLA_REPO_ID="openvla/openvla-7b-finetuned-libero-spatial"
 PI05_REVISION="8e174154ef5f6c60a8da12ae99c303d8963138c1"
 OPENVLA_REVISION="962318cec55ac10993ff0f5f43eda9a270b4c873"
+VLA_REPAIR="${VLA_REPAIR:-0}"
+PRESERVED_OPENVLA_VANILLA="${PRESERVED_OPENVLA_VANILLA:-}"
+if [[ "$VLA_REPAIR" == "1" ]]; then
+  test -s "$PRESERVED_OPENVLA_VANILLA"
+  [[ "$(awk 'NF{n++} END{print n+0}' "$PRESERVED_OPENVLA_VANILLA")" -eq 100 ]]
+fi
 resolve_snapshot "$PI05_REPO" pi05 "$PI05_REVISION" >/dev/null
 resolve_snapshot "$OPENVLA_REPO_ID" openvla "$OPENVLA_REVISION" >/dev/null
 PI05_CHECKPOINT="$RUN_ROOT/checkpoints/pi05"
@@ -136,6 +146,8 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
   "schema": "vla_eval_matrix_run.v1",
   "job_id": "${SLURM_JOB_ID}",
   "source_commit": "$(git rev-parse HEAD)",
+  "repair_mode": $([[ "$VLA_REPAIR" == "1" ]] && echo true || echo false),
+  "preserved_openvla_vanilla": "${PRESERVED_OPENVLA_VANILLA}",
   "models": {
     "openvla": {"repo_id": "$OPENVLA_REPO_ID", "revision": "$OPENVLA_REVISION", "path": "$OPENVLA_CHECKPOINT", "fine_tuned_again": false},
     "pi05": {"repo_id": "$PI05_REPO", "revision": "$PI05_REVISION", "path": "$PI05_CHECKPOINT", "fine_tuned_again": false}
@@ -150,7 +162,11 @@ run_model() {
   local python_bin="$1"; local model="$2"; local ckpt="$3"; local revision="$4"; local factory="${5:-}"
   local extra=()
   if [[ -n "$factory" ]]; then extra+=(--policy-config-factory "$factory"); fi
-  for condition in vanilla sealed; do
+  local conditions=(vanilla sealed)
+  if [[ "$VLA_REPAIR" == "1" && "$model" == "openvla" ]]; then
+    conditions=(sealed)
+  fi
+  for condition in "${conditions[@]}"; do
     echo "START model=$model condition=$condition job=$SLURM_JOB_ID"
     "$python_bin" -m vla_benchmarking.libero.evaluation.native_vla_eval \
       --model "$model" --plan "$PLAN_DIR/${model}_${condition}_100.json" \
@@ -166,14 +182,23 @@ run_model "$OPENVLA_PYTHON" openvla "$OPENVLA_CHECKPOINT" "$OPENVLA_REVISION"
 run_model "$PYTHON" pi05 "$PI05_CHECKPOINT" "$PI05_REVISION"
 
 "$PYTHON" - "$RUN_ROOT" <<'PY'
-import json, pathlib, sys
+import json, os, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 summary = {"episodes": {}}
 for path in sorted(root.glob("*_*.jsonl")):
     summary["episodes"][path.stem] = sum(1 for line in path.read_text().splitlines() if line.strip())
-expected = {"openvla_vanilla": 100, "openvla_sealed": 100, "pi05_vanilla": 100, "pi05_sealed": 100}
+repair = os.environ.get("VLA_REPAIR") == "1"
+expected = ({"openvla_sealed": 100, "pi05_vanilla": 100, "pi05_sealed": 100}
+            if repair else
+            {"openvla_vanilla": 100, "openvla_sealed": 100, "pi05_vanilla": 100, "pi05_sealed": 100})
 if summary["episodes"] != expected:
     raise SystemExit(f"evaluation completeness failure: expected {expected}, got {summary['episodes']}")
+if repair:
+    preserved = pathlib.Path(os.environ["PRESERVED_OPENVLA_VANILLA"])
+    preserved_count = sum(1 for line in preserved.read_text().splitlines() if line.strip())
+    if preserved_count != 100:
+        raise SystemExit(f"preserved OpenVLA vanilla artifact must contain 100 records, got {preserved_count}")
+    summary["preserved_episodes"] = {"openvla_vanilla": preserved_count}
 summary["total_episodes"] = sum(summary["episodes"].values())
 (root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 PY
