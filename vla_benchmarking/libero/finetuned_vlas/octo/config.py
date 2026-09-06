@@ -174,6 +174,16 @@ A40_BATCH_LADDER = (
     BatchCandidate(microbatch=8, gradient_accumulation_steps=4),
 )
 
+
+def matched_finetuned_artifact_id(checkpoint_revision: str, checkpoint_sha256: str) -> str:
+    """Canonical identity for a locally produced matched-training artifact."""
+
+    revision = str(checkpoint_revision).strip().lower()
+    digest = str(checkpoint_sha256).strip().lower()
+    if len(revision) < 40 or len(digest) != 64:
+        raise ValueError("fine-tuned Octo artifact identity requires an immutable revision and SHA-256")
+    return f"octo_finetuned:{revision}:{digest}"
+
 COMMUNITY_EVAL_CONFIG = OctoConfig(
     name="community_eval",
     checkpoint=COMMUNITY_CHECKPOINT,

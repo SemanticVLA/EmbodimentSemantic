@@ -26,6 +26,9 @@ archive_on_exit() {
   rc=$?
   trap - EXIT
   set +e
+  if [[ -f "${LIBERO_CONFIG_BACKUP:-}" ]]; then
+    cp -a "$LIBERO_CONFIG_BACKUP" "$HOME/.libero/config.yaml"
+  fi
   mkdir -p "$ARCHIVE_ROOT"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a "$RUN_ROOT/" "$ARCHIVE_ROOT/"
@@ -37,12 +40,27 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
+LIBERO_CONFIG_BACKUP="$RUN_ROOT/libero_config.yaml.backup"
+if [[ -f "$HOME/.libero/config.yaml" ]]; then
+  cp -a "$HOME/.libero/config.yaml" "$LIBERO_CONFIG_BACKUP"
+  sed "s|~/.cache/libero|$HOME/.cache/libero|g" "$LIBERO_CONFIG_BACKUP" > "$HOME/.libero/config.yaml"
+fi
+
 cd "$HOME/EmbodimentSemantic"
 export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$HOME/.libero}"
 export MUJOCO_GL=egl
 export HF_HOME="${HF_HOME:-$SCRATCH_FLASH/EmbodimentSemantic_runtime/cache/hf}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export PYTHONNOUSERSITE=1
+
+# The pip LIBERO package resolves BDDL files from the user cache, while the
+# pinned source checkout carries the canonical task definitions.  Materialize
+# that exact source tree before constructing any simulator environment.
+LIBERO_BDDL_SOURCE="$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO/libero/libero/bddl_files"
+LIBERO_BDDL_TARGET="$HOME/.cache/libero/bddl_files"
+test -d "$LIBERO_BDDL_SOURCE"
+mkdir -p "$LIBERO_BDDL_TARGET"
+rsync -a "$LIBERO_BDDL_SOURCE/" "$LIBERO_BDDL_TARGET/"
 
 nvidia-smi -L
 "$BASE_PYTHON" -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'

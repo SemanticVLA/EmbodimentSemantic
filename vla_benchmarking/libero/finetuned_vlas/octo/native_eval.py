@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .adapter import OctoPolicyAdapter
-from .config import COMMUNITY_EVAL_CONFIG, MATCHED_TRAIN_CONFIG
+from .config import COMMUNITY_EVAL_CONFIG, MATCHED_TRAIN_CONFIG, matched_finetuned_artifact_id
 from .contracts import FRAME_ORIENTATION_LIBERO_CANONICAL, FRAME_ORIENTATION_STORED_RAW, rotate_stored_frame_180
 
 
@@ -380,7 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=config.seed,
         mode=args.mode,
         checkpoint_revision=args.checkpoint_revision,
-        artifact_id="octo_base15_spatial_no_arrow_matched_finetuned",
+        artifact_id=matched_finetuned_artifact_id(args.checkpoint_revision, observed_checkpoint_sha256),
         runtime_id=str(runtime_binding.get("id")) if runtime_binding.get("id") else None,
         dataset_manifest_sha256=args.dataset_manifest_sha256,
         dataset_manifest_id=str(dataset_binding.get("id")) if dataset_binding.get("id") else None,

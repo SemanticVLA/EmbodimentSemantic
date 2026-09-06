@@ -24,6 +24,9 @@ archive_on_exit() {
   rc=$?
   trap - EXIT
   set +e
+  if [[ -f "${LIBERO_CONFIG_BACKUP:-}" ]]; then
+    cp -a "$LIBERO_CONFIG_BACKUP" "$HOME/.libero/config.yaml"
+  fi
   mkdir -p "$ARCHIVE_ROOT"
   if command -v rsync >/dev/null 2>&1; then rsync -a "$RUN_ROOT/" "$ARCHIVE_ROOT/"; else cp -a "$RUN_ROOT/." "$ARCHIVE_ROOT/"; fi
   printf '{"job_id":"%s","return_code":%s,"archive_root":"%s"}\n' "$SLURM_JOB_ID" "$rc" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/terminal.json"
@@ -31,12 +34,27 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
+LIBERO_CONFIG_BACKUP="$RUN_ROOT/libero_config.yaml.backup"
+if [[ -f "$HOME/.libero/config.yaml" ]]; then
+  cp -a "$HOME/.libero/config.yaml" "$LIBERO_CONFIG_BACKUP"
+  sed "s|~/.cache/libero|$HOME/.cache/libero|g" "$LIBERO_CONFIG_BACKUP" > "$HOME/.libero/config.yaml"
+fi
+
 cd "$HOME/EmbodimentSemantic"
 export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$HOME/.libero}"
 export MUJOCO_GL=egl
 export HF_HOME="${HF_HOME:-$SCRATCH_FLASH/EmbodimentSemantic_runtime/cache/hf}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export PYTHONNOUSERSITE=1
+
+# The installed LIBERO wrapper resolves BDDL files from the user cache.  Use
+# the canonical definitions from the pinned source checkout for both the
+# training smoke and the later native rollout.
+LIBERO_BDDL_SOURCE="$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO/libero/libero/bddl_files"
+LIBERO_BDDL_TARGET="$HOME/.cache/libero/bddl_files"
+test -d "$LIBERO_BDDL_SOURCE"
+mkdir -p "$LIBERO_BDDL_TARGET"
+rsync -a "$LIBERO_BDDL_SOURCE/" "$LIBERO_BDDL_TARGET/"
 nvidia-smi -L
 "$BASE_PYTHON" -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 
@@ -73,7 +91,7 @@ export OCTO_EVAL_PYTHON="$OCTO_EVAL_ENV/bin/python"
 # LIBERO rollout process.
 "$OCTO_EVAL_PYTHON" -m pip install --disable-pip-version-check \
   "jax[cuda12]==0.4.38" \
-  "flax==0.10.2" "orbax-checkpoint==0.11.28" \
+  "flax==0.10.2" "orbax-checkpoint==0.11.5" \
   "tensorflow==2.20.0" "tensorflow-probability==0.25.0" \
   "tensorflow-datasets==4.9.9" "tensorflow-hub==0.16.1" \
   "tensorflow-text==2.20.0" "tensorflow-graphics==2021.12.3" \
@@ -211,7 +229,7 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
   "job_id": "${SLURM_JOB_ID}",
   "source_commit": "$(git rev-parse HEAD)",
   "base": {"repo_id": "$BASE_REPO", "revision": "$BASE_REVISION", "path": "$BASE_ROOT"},
-  "fine_tuned_checkpoint": {"path": "$FINAL_CKPT", "checkpoint_sha256": "$CHECKPOINT_SHA"},
+  "fine_tuned_checkpoint": {"artifact_id": "octo_finetuned:${BASE_REVISION}:${CHECKPOINT_SHA}", "path": "$FINAL_CKPT", "checkpoint_sha256": "$CHECKPOINT_SHA"},
   "dataset_manifest": "$MANIFEST",
   "schedule": {"tasks": 10, "episodes_per_task": 10, "conditions": ["vanilla", "sealed_randomized"], "episodes": 200},
   "runtime_sha256": "$EVAL_RUNTIME_SHA",
