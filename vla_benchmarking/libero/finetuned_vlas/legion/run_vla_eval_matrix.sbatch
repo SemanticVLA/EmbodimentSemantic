@@ -570,6 +570,10 @@ run_model() {
   local extra=()
   if [[ -n "$factory" ]]; then extra+=(--policy-config-factory "$factory"); fi
   local conditions=(vanilla sealed)
+  if [[ "$model" == "pi05" && "$VLA_REPAIR" == "pi05_only" ]]; then
+    # The standalone Pi0.5 repair is intentionally sealed first, then vanilla.
+    conditions=(sealed vanilla)
+  fi
   if [[ "$VLA_REPAIR" == "1" && "$model" == "openvla" ]]; then
     conditions=(sealed)
   fi
