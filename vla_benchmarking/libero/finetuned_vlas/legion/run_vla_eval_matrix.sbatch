@@ -162,7 +162,7 @@ SMOLVLA_ADAPTER_PATH="/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arr
 SMOLVLA_TRAINING_ROOT="/home/hjaber/EmbodimentSemantic_archive/runs/legion_no_arrow_lora_full_s1000_v1_no_arrow_treatment_1910197"
 SMOLVLA_TRAINING_MANIFEST="$SMOLVLA_TRAINING_ROOT/training_manifest.json"
 SMOLVLA_ADAPTER_SHA256="80b3c23fc3987530d57766ab45ed33db918f08983739139c1ff0397184cc7092"
-SMOLVLA_BASE_MANIFEST_SHA256="e4bcf9b4481ca4e523ef6c3af6a6a9fd5e9886215f48f911e7226221761486b"
+SMOLVLA_BASE_MANIFEST_SHA256="e4bcf9b4481cae4b523ef6c3af6a6a9fd5e9886215f48f911e7226221761486b"
 SMOLVLA_BASE_TREE_SHA256="d086e041f3f6bfb919f335265106fee1db8b8a3c386af357cb42a89735f74bf1"
 export SMOLVLA_BASE_PATH SMOLVLA_BASE_REVISION SMOLVLA_ADAPTER_PATH
 export SMOLVLA_TRAINING_MANIFEST SMOLVLA_ADAPTER_SHA256
@@ -334,9 +334,10 @@ cat > "$RUN_ROOT/run_provenance.json" <<JSON
 JSON
 
 if [[ "$MATRIX_MODE" == "1" ]]; then
-  "$BASE_PYTHON" - "$RUN_ROOT/run_provenance.json" <<'PY'
+"$BASE_PYTHON" - "$RUN_ROOT/run_provenance.json" <<'PY'
 import hashlib
 import json
+import os
 import pathlib
 import sys
 
