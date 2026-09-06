@@ -249,7 +249,10 @@ PY
 # importing unrelated secrets into the evaluation environment.
 PI05_TOKENIZER_REPO="google/paligemma-3b-pt-224"
 PI05_TOKENIZER_PATH=""
-PI05_TOKENIZER_REVISION="${PI05_TOKENIZER_REVISION:-}"
+# Pin the gated tokenizer to the immutable Hub commit used by the verified
+# Pi0.5 checkpoint.  Callers may override this only with another exact commit
+# hash; leaving it unset must not make a run fail after allocation.
+PI05_TOKENIZER_REVISION="${PI05_TOKENIZER_REVISION:-35e4f46485b4d07967e7e9935bc3786aad50687c}"
 if [[ "$PI05_ONLY" == "1" ]]; then
   OMNIS_SECRETS_ENV="$HOME/.config/omnis/secrets.env"
   test -f "$OMNIS_SECRETS_ENV" || { echo "missing protected secrets file: $OMNIS_SECRETS_ENV" >&2; exit 2; }
