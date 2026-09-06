@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import numpy as np
@@ -18,6 +20,34 @@ except ImportError:  # pragma: no cover - supports isolated package copying
     PolicyMetadata = None  # type: ignore[assignment,misc]
     validate_arrow_free_observation = None  # type: ignore[assignment]
     validate_policy_action = None  # type: ignore[assignment]
+
+
+def _resolve_preprocessor_overrides(
+    overrides: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build processor overrides, including the optional local Pi05 tokenizer.
+
+    The Pi0.5 checkpoint's saved ``tokenizer_processor`` points at the gated
+    ``google/paligemma-3b-pt-224`` Hub repository.  A repair job may resolve an
+    immutable local snapshot first and expose it as ``PI05_TOKENIZER_PATH``.
+    Passing it through LeRobot's processor override mechanism keeps the model
+    checkpoint unchanged while making the dependency explicit and auditable.
+    """
+
+    resolved: dict[str, Any] = {
+        str(key): value for key, value in (overrides or {}).items()
+    }
+    tokenizer_path = os.environ.get("PI05_TOKENIZER_PATH")
+    if tokenizer_path:
+        path = Path(tokenizer_path).expanduser().resolve()
+        if not path.is_dir():
+            raise FileNotFoundError(
+                f"PI05_TOKENIZER_PATH must be an existing local directory: {path}"
+            )
+        tokenizer_override = dict(resolved.get("tokenizer_processor", {}))
+        tokenizer_override["tokenizer_name"] = str(path)
+        resolved["tokenizer_processor"] = tokenizer_override
+    return resolved
 
 
 class Pi05Adapter:
@@ -83,6 +113,7 @@ class Pi05Adapter:
         env_cfg: Any | None = None,
         preprocessor: Any | None = None,
         postprocessor: Any | None = None,
+        preprocessor_overrides: Mapping[str, Any] | None = None,
         provenance: Mapping[str, Any] | Any | None = None,
     ) -> "Pi05Adapter":
         """Load using LeRobot's current ``make_policy(cfg, ds_meta, env_cfg)``.
@@ -104,6 +135,7 @@ class Pi05Adapter:
             raise ValueError("pass only one of env_config or env_cfg")
         dataset_meta = ds_meta if ds_meta is not None else dataset_meta
         env_config = env_cfg if env_cfg is not None else env_config
+        preprocessor_overrides = _resolve_preprocessor_overrides(preprocessor_overrides)
         if policy_config is None and factory is None:
             try:
                 from lerobot.policies import make_pre_post_processors
@@ -119,6 +151,7 @@ class Pi05Adapter:
                 preprocessor, postprocessor = make_pre_post_processors(
                     policy_cfg=policy.config,
                     pretrained_path=checkpoint,
+                    preprocessor_overrides=preprocessor_overrides,
                 )
             except Exception as exc:  # pragma: no cover - requires model files
                 raise RuntimeError(
@@ -163,6 +196,7 @@ class Pi05Adapter:
                     policy_cfg=policy_config,
                     pretrained_path=pretrained_path,
                     dataset_stats=stats,
+                    preprocessor_overrides=preprocessor_overrides,
                 )
             except Exception as exc:  # pragma: no cover - depends on model files
                 raise RuntimeError(

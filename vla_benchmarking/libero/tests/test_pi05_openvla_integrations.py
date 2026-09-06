@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -137,6 +138,49 @@ def test_pi05_loader_passes_current_factory_contract() -> None:
     )
     assert adapter.policy is not None
     assert seen == {"cfg": "cfg", "ds_meta": "meta", "env_cfg": "env"}
+
+
+def test_pi05_loader_passes_local_tokenizer_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    tokenizer_path = tmp_path / "paligemma"
+    tokenizer_path.mkdir()
+    seen: dict[str, object] = {}
+
+    class FakePolicy:
+        config = object()
+
+        @classmethod
+        def from_pretrained(cls, checkpoint, revision=None):
+            seen["checkpoint"] = checkpoint
+            seen["revision"] = revision
+            return cls()
+
+    def make_pre_post_processors(**kwargs):
+        seen.update(kwargs)
+        return object(), object()
+
+    lerobot = types.ModuleType("lerobot")
+    policies = types.ModuleType("lerobot.policies")
+    pi05 = types.ModuleType("lerobot.policies.pi05")
+    policies.make_pre_post_processors = make_pre_post_processors
+    pi05.PI05Policy = FakePolicy
+    lerobot.policies = policies
+    monkeypatch.setitem(sys.modules, "lerobot", lerobot)
+    monkeypatch.setitem(sys.modules, "lerobot.policies", policies)
+    monkeypatch.setitem(sys.modules, "lerobot.policies.pi05", pi05)
+    monkeypatch.setenv("PI05_TOKENIZER_PATH", str(tokenizer_path))
+
+    adapter = Pi05Adapter.load()
+
+    assert adapter.policy is not None
+    assert seen["preprocessor_overrides"] == {
+        "tokenizer_processor": {"tokenizer_name": str(tokenizer_path.resolve())}
+    }
+
+
+def test_pi05_loader_rejects_missing_local_tokenizer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PI05_TOKENIZER_PATH", str(tmp_path / "missing"))
+    with pytest.raises(FileNotFoundError, match="PI05_TOKENIZER_PATH"):
+        Pi05Adapter.load()
 
 
 def test_openvla_native_hooks_and_gripper_inversion() -> None:
