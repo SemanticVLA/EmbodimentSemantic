@@ -104,8 +104,9 @@ mkdir -p "$XDG_CACHE_HOME"
 DATA_ROOT="$RUN_ROOT/dataset"
 BASELINE_EVAL_ROOT="$RUN_ROOT/eval_baseline"
 TRAIN_ROOT="$RUN_ROOT/training"
+TRAIN_META_ROOT="$RUN_ROOT/training_metadata"
 ADAPTED_EVAL_ROOT="$RUN_ROOT/eval_adapted"
-mkdir -p "$DATA_ROOT" "$BASELINE_EVAL_ROOT" "$TRAIN_ROOT" "$ADAPTED_EVAL_ROOT"
+mkdir -p "$DATA_ROOT" "$BASELINE_EVAL_ROOT" "$TRAIN_META_ROOT" "$ADAPTED_EVAL_ROOT"
 export REPO_ROOT VLA_ROOT="$REPO_ROOT/vla_benchmarking/libero" LIBERO_DIR LIBERO_CONFIG LIBERO_DATA_DIR
 export PYTHONPATH="$REPO_ROOT:$LIBERO_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl HF_HUB_DISABLE_TELEMETRY=1
@@ -182,12 +183,12 @@ UPDATES_PER_EPOCH=$(( (TOTAL_FRAMES + PEFT_BATCH_SIZE - 1) / PEFT_BATCH_SIZE ))
 STEPS="${PEFT_STEPS:-$((UPDATES_PER_EPOCH * PEFT_EPOCHS))}"
 SAVE_FREQ="${PEFT_SAVE_FREQ:-$UPDATES_PER_EPOCH}"
 [[ "$STEPS" =~ ^[1-9][0-9]*$ && "$SAVE_FREQ" =~ ^[1-9][0-9]*$ ]] || die 'PEFT_STEPS/PEFT_SAVE_FREQ must be positive integers'
-export DATA_ROOT TRAIN_ROOT BASELINE_EVAL_ROOT ADAPTED_EVAL_ROOT STEPS SAVE_FREQ UPDATES_PER_EPOCH
+export DATA_ROOT TRAIN_ROOT TRAIN_META_ROOT BASELINE_EVAL_ROOT ADAPTED_EVAL_ROOT STEPS SAVE_FREQ UPDATES_PER_EPOCH
 
-"$PYTHON" "$AUDITOR" --generate-expected --base-policy "$BASE_POLICY" --output "$TRAIN_ROOT/expected_adapter_inventory.json"
-"$PYTHON" - "$TRAIN_ROOT/training_plan.json" <<'PY'
+"$PYTHON" "$AUDITOR" --generate-expected --base-policy "$BASE_POLICY" --output "$TRAIN_META_ROOT/expected_adapter_inventory.json"
+"$PYTHON" - "$TRAIN_META_ROOT/training_plan.json" <<'PY'
 import json, os, pathlib
-out = pathlib.Path(os.environ['TRAIN_ROOT']) / 'training_plan.json'
+out = pathlib.Path(os.environ['TRAIN_META_ROOT']) / 'training_plan.json'
 payload = {
     'schema': 'smolvla_peft_arrow_task_training.v1',
     'method': 'peft_lora',
@@ -213,6 +214,11 @@ out.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='u
 PY
 
 printf '[%s] native SmolVLA PEFT training (%s steps)\n' "$(date +'%F %T')" "$STEPS"
+# LeRobot refuses to train into an existing output directory when resume=false.
+# Keep provenance metadata in a sibling directory, then create the trainer output
+# directory immediately before invoking the native trainer.
+[[ ! -e "$TRAIN_ROOT" ]] || die 'trainer output directory unexpectedly exists'
+mkdir "$TRAIN_ROOT"
 "$PYTHON" "$TRAINER" \
   --policy.push_to_hub=false --peft.r=16 \
   --dataset.repo_id=local/libero_spatial_treatment \
@@ -233,6 +239,8 @@ if not candidates: raise SystemExit('no adapter checkpoint produced')
 print(max(candidates, key=lambda item: item[0])[1].resolve())
 PY
 )"
+cp -p "$TRAIN_META_ROOT/expected_adapter_inventory.json" "$TRAIN_ROOT/expected_adapter_inventory.json"
+cp -p "$TRAIN_META_ROOT/training_plan.json" "$TRAIN_ROOT/training_plan.json"
 "$PYTHON" "$AUDITOR" --checkpoint "$CHECKPOINT_DIR" --expected-inventory "$TRAIN_ROOT/expected_adapter_inventory.json"
 printf 'adapter_checkpoint=%s\n' "$CHECKPOINT_DIR" >> "$RUN_ROOT/run_context.env"
 
