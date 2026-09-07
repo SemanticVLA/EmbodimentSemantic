@@ -67,6 +67,20 @@ for path in "$BASE_POLICY" "$LIBERO_DIR" "$LIBERO_DATA_DIR" "$LIBERO_CONFIG" "$C
 [[ "$(git -C "$LIBERO_DIR" rev-parse HEAD 2>/dev/null || true)" == "$LIBERO_COMMIT" ]] || die "LIBERO is not pinned to $LIBERO_COMMIT"
 [[ -z "$(git -C "$LIBERO_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)" ]] || die 'LIBERO checkout is dirty'
 [[ -f "$BASE_POLICY/config.json" && -f "$BASE_POLICY/base_snapshot_manifest.json" ]] || die 'base snapshot is incomplete'
+"$PYTHON" - "$BASE_POLICY/base_snapshot_manifest.json" "$BASE_POLICY" "$BASE_POLICY_REVISION" <<'PY'
+import hashlib, json, pathlib, sys
+manifest_path, root, revision = map(pathlib.Path, sys.argv[1:])
+data = json.loads(manifest_path.read_text(encoding='utf-8'))
+if data.get('revision') != str(revision):
+    raise SystemExit(f"base revision mismatch: {data.get('revision')}")
+for name, expected in data.get('files', {}).items():
+    path = root / name
+    if not path.is_file():
+        raise SystemExit(f"base manifest file missing: {name}")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected:
+        raise SystemExit(f"base manifest hash mismatch: {name}")
+PY
 
 LABEL="${PEFT_LABEL:-smolvla_task0_arrow_peft}"
 [[ "$LABEL" =~ ^[A-Za-z0-9_.-]{1,96}$ ]] || die 'PEFT_LABEL is not safe'
