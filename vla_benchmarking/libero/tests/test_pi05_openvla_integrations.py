@@ -107,6 +107,18 @@ def test_adapters_accept_injected_policies_without_optional_dependencies() -> No
     assert oft.metadata.native_action_horizon == 8
 
 
+def test_pi05_act_clamps_finite_postprocessed_action_overshoot() -> None:
+    class OvershootingPi:
+        def predict_action_chunk(self, payload):
+            return np.full((50, 7), 1.25, dtype=np.float32)
+
+    adapter = Pi05Adapter(OvershootingPi())
+    adapter.reset("pick up the bowl", 1000)
+    action = adapter.act(_frame())
+    assert action.shape == (50, 7)
+    assert np.all(action == 1.0)
+
+
 def test_action_validators_reject_wrong_native_horizon() -> None:
     with pytest.raises(ValueError, match="shape"):
         validate_pi05_action(np.zeros((8, 7), dtype=np.float32))

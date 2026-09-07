@@ -230,7 +230,18 @@ class Pi05Adapter:
         raw = self.predict(observation, task=getattr(self, "_task_description", None))
         if validate_policy_action is None:  # pragma: no cover
             return raw
-        return validate_policy_action(raw, self.metadata, observation=observation)
+        # Pi0.5's checkpoint postprocessor unnormalizes actions back into the
+        # LIBERO control space.  As with the simulator's own normalized action
+        # boundary, clamp finite numerical overshoot to [-1, 1] before the
+        # shared validator rejects it.  Shape, finiteness, and native horizon
+        # are still fail-closed in ``predict`` and ``validate_policy_action``.
+        metadata = self.metadata
+        bounded = np.clip(
+            np.asarray(raw, dtype=np.float32),
+            np.asarray(metadata.action_low, dtype=np.float32)[None, :],
+            np.asarray(metadata.action_high, dtype=np.float32)[None, :],
+        )
+        return validate_policy_action(bounded, metadata, observation=observation)
 
     def predict(self, observation: Mapping[str, Any], *, task: str | None = None) -> np.ndarray:
         self.validate_observation(observation)
