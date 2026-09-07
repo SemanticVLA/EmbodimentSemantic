@@ -215,10 +215,9 @@ PY
 
 printf '[%s] native SmolVLA PEFT training (%s steps)\n' "$(date +'%F %T')" "$STEPS"
 # LeRobot refuses to train into an existing output directory when resume=false.
-# Keep provenance metadata in a sibling directory, then create the trainer output
-# directory immediately before invoking the native trainer.
+# Keep provenance metadata in a sibling directory and let the native trainer
+# create its output directory itself.
 [[ ! -e "$TRAIN_ROOT" ]] || die 'trainer output directory unexpectedly exists'
-mkdir "$TRAIN_ROOT"
 "$PYTHON" "$TRAINER" \
   --policy.push_to_hub=false --peft.r=16 \
   --dataset.repo_id=local/libero_spatial_treatment \
