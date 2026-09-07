@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-job exploratory PEFT experiment for SmolVLA on one LIBERO task.
+# One-job exploratory PEFT experiment for SmolVLA on one or all LIBERO tasks.
 #
 # This reuses the existing LeRobot/PEFT trainer and source-grounded HDF5
 # converter. It is deliberately labelled PEFT, not RoboTTT TTT: the treatment
@@ -38,9 +38,24 @@ ACTUAL_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" || die 'cannot
 [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] || die 'REPO_ROOT is dirty'
 
 VLA_NAME="${PEFT_VLA:-smolvla}"
-TASK_ID="${PEFT_TASK_ID:-0}"
+TASK_IDS_RAW="${PEFT_TASK_IDS:-${PEFT_TASK_ID:-0}}"
+[[ "$TASK_IDS_RAW" =~ ^[0-9]+([[:space:]]+[0-9]+)*$ ]] || die 'PEFT_TASK_IDS must be space-separated integers in 0..9'
+read -r -a TASK_IDS <<< "$TASK_IDS_RAW"
+(( ${#TASK_IDS[@]} > 0 )) || die 'PEFT_TASK_IDS must not be empty'
+declare -A _seen_task_ids=()
+for task_id in "${TASK_IDS[@]}"; do
+  (( task_id >= 0 && task_id <= 9 )) || die 'PEFT_TASK_IDS values must be in 0..9'
+  [[ -z "${_seen_task_ids[$task_id]+x}" ]] || die 'PEFT_TASK_IDS must not contain duplicates'
+  _seen_task_ids[$task_id]=1
+done
+TASK_IDS_JSON="[$(IFS=,; echo "${TASK_IDS[*]}")]"
+TASK_IDS_SORTED="$(printf '%s\n' "${TASK_IDS[@]}" | sort -n | paste -sd, -)"
+if [[ "$TASK_IDS_SORTED" == "0,1,2,3,4,5,6,7,8,9" ]]; then
+  TASK_SCOPE='all_tasks'
+else
+  TASK_SCOPE="tasks_${TASK_IDS_SORTED}"
+fi
 [[ "$VLA_NAME" == smolvla ]] || die 'this launcher supports PEFT_VLA=smolvla only'
-[[ "$TASK_ID" == 0 ]] || die 'this launcher is sealed to LIBERO task 0'
 ARROW_DEMOS="${PEFT_ARROW_DEMOS:-50}"
 EVAL_EPISODES="${PEFT_EVAL_EPISODES:-10}"
 EVAL_SEED="${PEFT_EVAL_SEED:-1000}"
@@ -86,7 +101,7 @@ LABEL="${PEFT_LABEL:-smolvla_task0_arrow_peft}"
 [[ "$LABEL" =~ ^[A-Za-z0-9_.-]{1,96}$ ]] || die 'PEFT_LABEL is not safe'
 SCRATCH_ROOT="${PEFT_SCRATCH_ROOT:-${SCRATCH_FLASH:?SCRATCH_FLASH is required}/EmbodimentSemantic_runtime/peft_arrow}"
 RUN_ROOT="${PEFT_RUN_ROOT:-$SCRATCH_ROOT/${LABEL}_${SLURM_JOB_ID}}"
-ARCHIVE_ROOT="${PEFT_ARCHIVE_ROOT:-$HOME/EmbodimentSemantic_archive/peft_arrow/$VLA_NAME/task_${TASK_ID}/${LABEL}_${SLURM_JOB_ID}}"
+ARCHIVE_ROOT="${PEFT_ARCHIVE_ROOT:-$HOME/EmbodimentSemantic_archive/peft_arrow/$VLA_NAME/$TASK_SCOPE/${LABEL}_${SLURM_JOB_ID}}"
 for path in "$RUN_ROOT" "$ARCHIVE_ROOT"; do [[ "$path" = /* && "$path" != / && ! -L "$path" ]] || die "unsafe output path: $path"; done
 RUN_ROOT="$(realpath -m -- "$RUN_ROOT")"; ARCHIVE_ROOT="$(realpath -m -- "$ARCHIVE_ROOT")"
 case "$RUN_ROOT" in "$REPO_ROOT"|"$REPO_ROOT"/*) die 'RUN_ROOT overlaps REPO_ROOT' ;; esac
@@ -120,7 +135,7 @@ archive_on_exit() {
   log_root="${SLURM_LOG_ROOT:-$HOME/EmbodimentSemantic_runtime/operator/logs}"; mkdir -p "$ARCHIVE_ROOT/slurm_logs" || archive_rc=$?
   for suffix in out err; do log_path="$log_root/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.${suffix}"; [[ -f "$log_path" ]] && cp -p -- "$log_path" "$ARCHIVE_ROOT/slurm_logs/" || true; done
   if [[ -d "$ARCHIVE_ROOT" ]]; then
-    printf 'schema=smolvla_peft_arrow_task_job.v1\njob_id=%s\nstatus=%s\nworkload_exit_code=%s\nrepo_commit=%s\nvla=%s\ntask_id=%s\narrow_demos=%s\nrun_root=%s\narchive_root=%s\n' "$SLURM_JOB_ID" "$([[ "$workload_rc" -eq 0 && "$archive_rc" -eq 0 ]] && echo VERIFIED || echo PRESERVED_FAILURE)" "$workload_rc" "$ACTUAL_COMMIT" "$VLA_NAME" "$TASK_ID" "$ARROW_DEMOS" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
+    printf 'schema=smolvla_peft_arrow_task_job.v2\njob_id=%s\nstatus=%s\nworkload_exit_code=%s\nrepo_commit=%s\nvla=%s\ntask_scope=%s\ntask_ids=%s\narrow_demos_per_task=%s\nepochs=%s\nrun_root=%s\narchive_root=%s\n' "$SLURM_JOB_ID" "$([[ "$workload_rc" -eq 0 && "$archive_rc" -eq 0 ]] && echo VERIFIED || echo PRESERVED_FAILURE)" "$workload_rc" "$ACTUAL_COMMIT" "$VLA_NAME" "$TASK_SCOPE" "$TASK_IDS_SORTED" "$ARROW_DEMOS" "$PEFT_EPOCHS" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
     find "$ARCHIVE_ROOT" -type f ! -name inventory.sha256 ! -name tree_sha256 -print0 | sort -z | xargs -0 -r sha256sum > "$ARCHIVE_ROOT/inventory.sha256" || archive_rc=$?
     sha256sum "$ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$ARCHIVE_ROOT/tree_sha256" || archive_rc=$?
   fi
@@ -129,7 +144,7 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
-export RUN_ROOT VLA_NAME TASK_ID ARROW_DEMOS EVAL_EPISODES EVAL_SEED BASE_POLICY BASE_POLICY_REVISION ACTUAL_COMMIT LIBERO_COMMIT PEFT_EPOCHS PEFT_BATCH_SIZE
+export RUN_ROOT VLA_NAME TASK_IDS_JSON TASK_SCOPE ARROW_DEMOS EVAL_EPISODES EVAL_SEED BASE_POLICY BASE_POLICY_REVISION ACTUAL_COMMIT LIBERO_COMMIT PEFT_EPOCHS PEFT_BATCH_SIZE
 "$PYTHON" - "$RUN_ROOT/run_context.json" <<'PY'
 import json, os, pathlib, platform
 from importlib.metadata import PackageNotFoundError, version
@@ -137,8 +152,9 @@ def pkg(name):
     try: return version(name)
     except PackageNotFoundError: return None
 payload = {
-    "schema": "smolvla_peft_arrow_task.v1", "method": "peft_lora_exploratory_control",
-    "vla": os.environ["VLA_NAME"], "task_id": int(os.environ["TASK_ID"]), "arrow_demos": int(os.environ["ARROW_DEMOS"]),
+    "schema": "smolvla_peft_arrow_task.v2", "method": "peft_lora_exploratory_control",
+    "vla": os.environ["VLA_NAME"], "task_ids": json.loads(os.environ["TASK_IDS_JSON"]),
+    "task_scope": os.environ["TASK_SCOPE"], "arrow_demos_per_task": int(os.environ["ARROW_DEMOS"]),
     "eval_episodes": int(os.environ["EVAL_EPISODES"]), "eval_seed": int(os.environ["EVAL_SEED"]),
     "base_policy": os.environ["BASE_POLICY"], "base_policy_revision": os.environ["BASE_POLICY_REVISION"],
     "repo_commit": os.environ["ACTUAL_COMMIT"], "libero_commit": os.environ["LIBERO_COMMIT"],
@@ -153,22 +169,28 @@ printf '[%s] runtime import preflight\n' "$(date +'%F %T')"
 "$PYTHON" -c 'import torch, lerobot, peft, accelerate, h5py, cv2, PIL, numpy, robosuite; print("imports OK", torch.__version__, lerobot.__version__, peft.__version__, accelerate.__version__)'
 "$PYTHON" -c 'import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)' || die 'CUDA is unavailable on the allocated node'
 
-printf '[%s] baseline evaluation (task 0, 10 sealed episodes)\n' "$(date +'%F %T')"
-MODELS="$BASE_POLICY" CONTEXT_MODE=standard TASK_IDS='[0]' N_EPISODES="$EVAL_EPISODES" BATCH_SIZE=1 DEVICE=cuda SEED="$EVAL_SEED" SUITE_MODE=sealed_randomized OUTPUT_DIR="$BASELINE_EVAL_ROOT" \
+printf '[%s] baseline evaluation (%s, %s episodes per task)\n' "$(date +'%F %T')" "$TASK_SCOPE" "$EVAL_EPISODES"
+MODELS="$BASE_POLICY" CONTEXT_MODE=standard TASK_IDS="$TASK_IDS_JSON" N_EPISODES="$EVAL_EPISODES" BATCH_SIZE=1 DEVICE=cuda SEED="$EVAL_SEED" SUITE_MODE=sealed_randomized OUTPUT_DIR="$BASELINE_EVAL_ROOT" \
   "$PYTHON" "$EVALUATOR" --eval.use_async_envs=false
 
-printf '[%s] converting and verifying %s arrow demonstrations\n' "$(date +'%F %T')" "$ARROW_DEMOS"
-"$PYTHON" "$CONVERTER" --mode convert-pair --tasks "$TASK_ID" --demos-per-task "$ARROW_DEMOS" --allow-subset --data-dir "$LIBERO_DATA_DIR" --output-root "$DATA_ROOT"
+printf '[%s] converting and verifying %s arrow demonstrations per task\n' "$(date +'%F %T')" "$ARROW_DEMOS"
+CONVERT_ARGS=(--mode convert-pair --tasks "${TASK_IDS[@]}" --demos-per-task "$ARROW_DEMOS" --data-dir "$LIBERO_DATA_DIR" --output-root "$DATA_ROOT")
+[[ "$TASK_SCOPE" == all_tasks ]] || CONVERT_ARGS+=(--allow-subset)
+"$PYTHON" "$CONVERTER" "${CONVERT_ARGS[@]}"
 "$PYTHON" "$CONVERTER" --mode verify --data-dir "$LIBERO_DATA_DIR" --output-root "$DATA_ROOT"
-"$PYTHON" - "$DATA_ROOT/sealed_lora_pair_manifest.json" "$DATA_ROOT/sealed_lora_pair_verified.json" "$ARROW_DEMOS" <<'PY'
+"$PYTHON" - "$DATA_ROOT/sealed_lora_pair_manifest.json" "$DATA_ROOT/sealed_lora_pair_verified.json" "$ARROW_DEMOS" "$TASK_IDS_JSON" <<'PY'
 import json, pathlib, sys
 manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
 sentinel = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding='utf-8'))
 expected = int(sys.argv[3])
+expected_tasks = json.loads(sys.argv[4])
 if manifest.get('pair_kind') != 'sealed_lora_control_treatment': raise SystemExit('wrong pair kind')
-if manifest.get('task_ids') != [0] or manifest.get('total_episodes') != expected: raise SystemExit('arrow dataset task/count mismatch')
-if manifest.get('launch_eligibility') != 'subset_smoke_not_launchable': raise SystemExit('subset unexpectedly marked full launchable')
-if sentinel.get('total_episodes') != expected or sentinel.get('task_ids') != [0]: raise SystemExit('verification sentinel mismatch')
+expected_episodes = expected * len(expected_tasks)
+if manifest.get('task_ids') != expected_tasks or manifest.get('total_episodes') != expected_episodes: raise SystemExit('arrow dataset task/count mismatch')
+full = expected_tasks == list(range(10)) and expected == 50
+if full and manifest.get('launch_eligibility') != 'full_experiment_ready': raise SystemExit('full dataset unexpectedly marked unlaunchable')
+if not full and manifest.get('launch_eligibility') != 'subset_smoke_not_launchable': raise SystemExit('subset unexpectedly marked full launchable')
+if sentinel.get('total_episodes') != expected_episodes or sentinel.get('task_ids') != expected_tasks: raise SystemExit('verification sentinel mismatch')
 if not sentinel.get('dataset_fingerprints', {}).get('treatment', {}).get('sha256'): raise SystemExit('treatment fingerprint missing')
 PY
 
@@ -190,16 +212,17 @@ export DATA_ROOT TRAIN_ROOT TRAIN_META_ROOT BASELINE_EVAL_ROOT ADAPTED_EVAL_ROOT
 import json, os, pathlib
 out = pathlib.Path(os.environ['TRAIN_META_ROOT']) / 'training_plan.json'
 payload = {
-    'schema': 'smolvla_peft_arrow_task_training.v1',
+    'schema': 'smolvla_peft_arrow_task_training.v2',
     'method': 'peft_lora',
     'vla': os.environ['VLA_NAME'],
-    'task_id': int(os.environ['TASK_ID']),
+    'task_ids': json.loads(os.environ['TASK_IDS_JSON']),
+    'task_scope': os.environ['TASK_SCOPE'],
     'base_policy': os.environ['BASE_POLICY'],
     'base_policy_revision': os.environ['BASE_POLICY_REVISION'],
     'dataset_root': str((pathlib.Path(os.environ['DATA_ROOT']) / 'treatment').resolve()),
     'dataset_manifest': str((pathlib.Path(os.environ['DATA_ROOT']) / 'sealed_lora_pair_manifest.json').resolve()),
     'dataset_variant': 'treatment',
-    'arrow_demos': int(os.environ['ARROW_DEMOS']),
+    'arrow_demos_per_task': int(os.environ['ARROW_DEMOS']),
     'steps': int(os.environ['STEPS']),
     'save_freq': int(os.environ['SAVE_FREQ']),
     'epochs': int(os.environ['PEFT_EPOCHS']),
@@ -243,8 +266,8 @@ cp -p "$TRAIN_META_ROOT/training_plan.json" "$TRAIN_ROOT/training_plan.json"
 "$PYTHON" "$AUDITOR" --checkpoint "$CHECKPOINT_DIR" --expected-inventory "$TRAIN_ROOT/expected_adapter_inventory.json"
 printf 'adapter_checkpoint=%s\n' "$CHECKPOINT_DIR" >> "$RUN_ROOT/run_context.env"
 
-printf '[%s] adapted evaluation (task 0, same 10 sealed episodes)\n' "$(date +'%F %T')"
-MODELS="$CHECKPOINT_DIR" CONTEXT_MODE=standard TASK_IDS='[0]' N_EPISODES="$EVAL_EPISODES" BATCH_SIZE=1 DEVICE=cuda SEED="$EVAL_SEED" SUITE_MODE=sealed_randomized OUTPUT_DIR="$ADAPTED_EVAL_ROOT" \
+printf '[%s] adapted evaluation (%s, same %s episodes per task)\n' "$(date +'%F %T')" "$TASK_SCOPE" "$EVAL_EPISODES"
+MODELS="$CHECKPOINT_DIR" CONTEXT_MODE=standard TASK_IDS="$TASK_IDS_JSON" N_EPISODES="$EVAL_EPISODES" BATCH_SIZE=1 DEVICE=cuda SEED="$EVAL_SEED" SUITE_MODE=sealed_randomized OUTPUT_DIR="$ADAPTED_EVAL_ROOT" \
   "$PYTHON" "$EVALUATOR" --eval.use_async_envs=false
 
 BASELINE_EVAL_FILE="$($PYTHON - "$BASELINE_EVAL_ROOT" <<'PY'
@@ -278,34 +301,75 @@ def stats(path):
     overall = data.get('overall', data)
     successes = overall.get('n_successes', overall.get('successes'))
     episodes = overall.get('n_episodes', overall.get('episodes'))
+    if successes is None:
+        successes = sum(
+            bool(success)
+            for task in data.get('per_task', [])
+            for success in task.get('metrics', {}).get('successes', [])
+        )
+    if episodes is None:
+        episodes = sum(
+            len(task.get('metrics', {}).get('successes', []))
+            for task in data.get('per_task', [])
+        )
     rate = float(successes) / float(episodes) if episodes else None
-    return {'successes': successes, 'episodes': episodes, 'success_rate': rate, 'path': str(pathlib.Path(path).resolve())}
+    per_task = {}
+    for task in data.get('per_task', []):
+        task_id = str(task.get('task_id'))
+        values = task.get('metrics', {}).get('successes', [])
+        per_task[task_id] = {
+            'successes': int(sum(bool(value) for value in values)),
+            'episodes': int(len(values)),
+            'success_rate': (float(sum(bool(value) for value in values)) / float(len(values))) if values else None,
+        }
+    return {
+        'successes': int(successes) if successes is not None else None,
+        'episodes': int(episodes) if episodes is not None else None,
+        'success_rate': rate,
+        'per_task': per_task,
+        'path': str(pathlib.Path(path).resolve()),
+    }
 
 baseline = stats(os.environ['BASELINE_EVAL_FILE'])
 adapted = stats(os.environ['ADAPTED_EVAL_FILE'])
-run_id = f"{os.environ['VLA_NAME']}_task{os.environ['TASK_ID']}_arrow{os.environ['ARROW_DEMOS']}_job{os.environ.get('SLURM_JOB_ID','unknown')}"
-manifest = save_peft_adapter(
-    os.environ['CHECKPOINT_DIR'], os.environ['ARCHIVE_ROOT'],
-    vla=os.environ['VLA_NAME'], task_id=int(os.environ['TASK_ID']), run_id=run_id,
-    base_checkpoint=os.environ['BASE_POLICY'],
-    dataset_manifest=pathlib.Path(os.environ['DATA_ROOT']) / 'sealed_lora_pair_manifest.json',
-    seed=int(os.environ['EVAL_SEED']),
-    train_counts={'arrow_demos': int(os.environ['ARROW_DEMOS']), 'steps': int(os.environ['STEPS']), 'save_freq': int(os.environ['SAVE_FREQ']), 'batch_size': int(os.environ['PEFT_BATCH_SIZE'])},
-    eval_counts={'baseline': baseline, 'adapted': adapted},
-    git_commit=os.environ['ACTUAL_COMMIT'],
-    runtime_versions={name: pkg(name) for name in ('python','torch','lerobot','peft','accelerate')},
-)
+task_ids = json.loads(os.environ['TASK_IDS_JSON'])
+run_id_base = f"{os.environ['VLA_NAME']}_{os.environ['TASK_SCOPE']}_arrow{os.environ['ARROW_DEMOS']}_epochs{os.environ['PEFT_EPOCHS']}_job{os.environ.get('SLURM_JOB_ID','unknown')}"
+artifacts = []
+for task_id in task_ids:
+    manifest = save_peft_adapter(
+        os.environ['CHECKPOINT_DIR'], os.environ['ARCHIVE_ROOT'],
+        vla=os.environ['VLA_NAME'], task_id=int(task_id), run_id=f"{run_id_base}_task{int(task_id)}",
+        base_checkpoint=os.environ['BASE_POLICY'],
+        dataset_manifest=pathlib.Path(os.environ['DATA_ROOT']) / 'sealed_lora_pair_manifest.json',
+        seed=int(os.environ['EVAL_SEED']),
+        train_counts={
+            'arrow_demos_per_task': int(os.environ['ARROW_DEMOS']),
+            'task_ids': task_ids,
+            'epochs': int(os.environ['PEFT_EPOCHS']),
+            'steps': int(os.environ['STEPS']),
+            'save_freq': int(os.environ['SAVE_FREQ']),
+            'batch_size': int(os.environ['PEFT_BATCH_SIZE']),
+        },
+        eval_counts={'baseline': baseline, 'adapted': adapted},
+        git_commit=os.environ['ACTUAL_COMMIT'],
+        runtime_versions={name: pkg(name) for name in ('python','torch','lerobot','peft','accelerate')},
+    )
+    artifacts.append(asdict(manifest))
 summary = {
-    'schema': 'smolvla_peft_arrow_task_summary.v1', 'method': 'peft_lora_exploratory_control',
-    'vla': os.environ['VLA_NAME'], 'task_id': int(os.environ['TASK_ID']), 'arrow_demos': int(os.environ['ARROW_DEMOS']),
+    'schema': 'smolvla_peft_arrow_task_summary.v2', 'method': 'peft_lora_exploratory_control',
+    'vla': os.environ['VLA_NAME'], 'task_ids': task_ids, 'task_scope': os.environ['TASK_SCOPE'],
+    'arrow_demos_per_task': int(os.environ['ARROW_DEMOS']), 'epochs': int(os.environ['PEFT_EPOCHS']),
     'baseline': baseline, 'adapted': adapted,
     'success_delta': (adapted['success_rate'] - baseline['success_rate']) if baseline['success_rate'] is not None and adapted['success_rate'] is not None else None,
-    'adapter_artifact': asdict(manifest),
+    'adapter_artifacts': artifacts,
+    'shared_checkpoint_replicated_per_task': True,
 }
 root = pathlib.Path(os.environ['RUN_ROOT'])
 (root / 'experiment_summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-(root / 'ADAPTER_ARTIFACT_PATH').write_text(manifest.artifact_path + '\n', encoding='utf-8')
+(root / 'ADAPTER_ARTIFACT_PATHS.json').write_text(
+    json.dumps([item['artifact_path'] for item in artifacts], indent=2) + '\n', encoding='utf-8'
+)
 PY
 
 touch "$RUN_ROOT/COMPLETED"
-printf '[%s] PEFT task-0 experiment completed; archive is written on exit\n' "$(date +'%F %T')"
+printf '[%s] PEFT %s experiment completed; archive is written on exit\n' "$(date +'%F %T')" "$TASK_SCOPE"

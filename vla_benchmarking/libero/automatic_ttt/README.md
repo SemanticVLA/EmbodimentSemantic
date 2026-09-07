@@ -114,6 +114,14 @@ versions.  Existing artifacts are never overwritten.  The same writer is
 intended for future VLA/task launchers, so adapters cannot be confused across
 tasks or models.
 
+For a joint all-task run, set `PEFT_TASK_IDS="0 1 2 3 4 5 6 7 8 9"` and
+`PEFT_EPOCHS=50`.  The converter then requires the full 10-task × 50-demo
+sealed pair (500 episodes), evaluation runs ten episodes per task, and the
+single jointly trained checkpoint is copied into one immutable artifact
+directory under each `task_0` … `task_9` path with the shared `task_ids` scope
+recorded in every manifest.  The default remains task 0 for backwards
+compatibility.
+
 ## Four VLA conditions
 
 The template includes all requested policy names and evaluates each with the
