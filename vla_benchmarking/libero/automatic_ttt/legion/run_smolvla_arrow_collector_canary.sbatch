@@ -102,6 +102,13 @@ module load miniforge/24.3.0-0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 export PYTHONPATH="$REPO_ROOT:$LIBERO_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export LIBERO_CONFIG_PATH="$(dirname "$LIBERO_CONFIG")"
+# Reuse the verified cache populated by the canonical Arrow controller job.
+# The pinned MolmoPoint snapshot is already present on Legion; pointing both
+# Hugging Face and Transformers at this tree avoids falling back to an empty
+# per-job/default cache while offline mode is enabled.
+ARROW_HF_CACHE="${ARROW_HF_CACHE:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/cache/huggingface}"
+[[ -d "$ARROW_HF_CACHE/transformers/models--allenai--MolmoPoint-8B" ]] || die "pinned MolmoPoint cache is missing: $ARROW_HF_CACHE"
+export HF_HOME="$ARROW_HF_CACHE" HF_HUB_CACHE="$ARROW_HF_CACHE/hub" TRANSFORMERS_CACHE="$ARROW_HF_CACHE/transformers" HF_MODULES_CACHE="$ARROW_HF_CACHE/modules"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 export SMOLVLA_BASE_POLICY="$BASE_POLICY" ARROW_CONTROLLER_CONFIG="$CONTROLLER_CONFIG"
 export TMPDIR="$RUN_ROOT/tmp" XDG_CACHE_HOME="$RUN_ROOT/xdg"

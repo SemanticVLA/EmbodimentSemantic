@@ -131,6 +131,9 @@ PY
 )"
 export REPO_ROOT VLA_ROOT="$REPO_ROOT/vla_benchmarking/libero" LIBERO_DIR LIBERO_CONFIG_PATH LIBERO_CONFIG ARROW_CONTROLLER_CONFIG CONTROLLER_CONFIG_HASH TASK_DESCRIPTION PYTHONPATH="$REPO_ROOT:$LIBERO_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export SMOLVLA_BASE_POLICY="$BASE_POLICY"
+ARROW_HF_CACHE="${ARROW_HF_CACHE:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/cache/huggingface}"
+[[ -d "$ARROW_HF_CACHE/transformers/models--allenai--MolmoPoint-8B" ]] || die "pinned MolmoPoint cache is missing: $ARROW_HF_CACHE"
+export HF_HOME="$ARROW_HF_CACHE" HF_HUB_CACHE="$ARROW_HF_CACHE/hub" TRANSFORMERS_CACHE="$ARROW_HF_CACHE/transformers" HF_MODULES_CACHE="$ARROW_HF_CACHE/modules"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl HF_HUB_DISABLE_TELEMETRY=1 TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=1000 CUBLAS_WORKSPACE_CONFIG=:4096:8 CUDNN_DETERMINISTIC=1 ACCELERATE_MIXED_PRECISION=no
 copy_tree() { local source="$1" destination="$2"; [[ -e "$source" ]] || return 0; mkdir -p "$destination"; if command -v rsync >/dev/null 2>&1; then rsync -a -- "$source/" "$destination/"; else cp -a -- "$source/." "$destination/"; fi; }
 archive_on_exit() {
