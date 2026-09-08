@@ -278,6 +278,13 @@ export TRAIN_EXPECTED_UPDATES="$STEPS" TRAIN_EXPECTED_BASE_LR="$PEAK_LR" TRAIN_E
 COLLECTION_SUCCESS_COUNT=50
 export DATASET_ROOT DATASET_FRAMES EPOCH_EQUIVALENT COLLECTION_SUCCESS_COUNT REQUESTED_EPOCHS
 
+# Arrow collection needs the isolated Molmo cache; SmolVLA audit, training,
+# and evaluation need the separately populated SmolVLM2 cache.  Switch only
+# after collection so every process resolves its pinned local model offline.
+SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"
+[[ -d "$SMOLVLA_HF_CACHE/hub/models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" ]] || die "pinned SmolVLM2 cache is missing: $SMOLVLA_HF_CACHE"
+export HF_HOME="$SMOLVLA_HF_CACHE" HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub" TRANSFORMERS_CACHE="$SMOLVLA_HF_CACHE/hub" HF_MODULES_CACHE="$SMOLVLA_HF_CACHE/modules"
+
 "$PYTHON" - "$RUN_ROOT/run_context.json" <<'PY'
 import json, os, pathlib, platform
 from importlib.metadata import PackageNotFoundError, version

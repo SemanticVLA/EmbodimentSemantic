@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 LAUNCHER = Path(__file__).parent / "legion" / "run_smolvla_peft_arrow_task.sbatch"
+CANARY = Path(__file__).parent / "legion" / "run_smolvla_arrow_collector_canary.sbatch"
 EVALUATOR = Path(__file__).parents[1] / "evaluation" / "run_lerobot_eval_with_context.py"
 
 
@@ -71,3 +72,13 @@ def test_live_run_order_is_baseline_then_collection_then_training_then_eval():
     training = text.index("training task")
     adapted = text.index("adapted evaluation task")
     assert baseline < collection < training < adapted
+
+
+def test_launchers_switch_from_arrow_cache_to_pinned_smolvlm_cache_before_training():
+    for path in (LAUNCHER, CANARY):
+        text = path.read_text(encoding="utf-8")
+        switch = text.index('SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"')
+        audit = text.index('"$PYTHON" "$AUDITOR" --generate-expected')
+        assert switch < audit
+        assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" in text
+        assert 'HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub"' in text

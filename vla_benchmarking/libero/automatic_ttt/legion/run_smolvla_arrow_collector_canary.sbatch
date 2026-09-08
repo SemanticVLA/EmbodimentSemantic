@@ -228,6 +228,12 @@ PY
 TRAIN_ROOT="$RUN_ROOT/training_smoke"
 TRAIN_META="$RUN_ROOT/training_smoke_metadata"
 mkdir -p "$TRAIN_META"
+# Molmo and SmolVLA use separate verified Hugging Face caches on Legion.
+# Collection is finished, so point subsequent audit/training/evaluation
+# processes at the cache containing SmolVLM2 instead of the Arrow-only cache.
+SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"
+[[ -d "$SMOLVLA_HF_CACHE/hub/models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" ]] || die "pinned SmolVLM2 cache is missing: $SMOLVLA_HF_CACHE"
+export HF_HOME="$SMOLVLA_HF_CACHE" HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub" TRANSFORMERS_CACHE="$SMOLVLA_HF_CACHE/hub" HF_MODULES_CACHE="$SMOLVLA_HF_CACHE/modules"
 "$PYTHON" "$AUDITOR" --generate-expected --base-policy "$BASE_POLICY" --output "$TRAIN_META/expected_adapter_inventory.json"
 TRAINING_RUNTIME_EVIDENCE="$TRAIN_META/runtime_evidence.json" "$PYTHON" "$TRAINER" \
   --policy.push_to_hub=false --peft.r=16 --peft.lora_alpha=8 --peft.lora_dropout=0.0 --peft.bias=none \
