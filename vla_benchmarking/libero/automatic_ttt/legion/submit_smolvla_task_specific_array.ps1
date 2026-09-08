@@ -26,7 +26,7 @@ $runRoot = if ($RemoteRunRoot) { $RemoteRunRoot } else { "/mnt/beegfs/hjaber/Emb
 $archiveRoot = if ($RemoteArchiveRoot) { $RemoteArchiveRoot } else { "/home/hjaber/EmbodimentSemantic_archive/peft_arrow/$Label" }
 $canaryRunRoot = if ($CanaryRunRoot) { $CanaryRunRoot } else { "${runRoot}_canary" }
 $canaryArchiveRoot = if ($CanaryArchiveRoot) { $CanaryArchiveRoot } else { "${archiveRoot}_canary" }
-$runnerRelative = 'vla_benchmarking/libero/automatic_ttt/legion/run_smolvla_peft_arrow_task.sbatch'
+$runnerRelative = 'vla_benchmarking/libero/automatic_ttt/legion/run_smolvla_peft_arrow_all_tasks.sbatch'
 $canaryRelative = 'vla_benchmarking/libero/automatic_ttt/legion/run_smolvla_arrow_collector_canary.sbatch'
 $invokeLegion = Join-Path $PSScriptRoot '../../../../.codex/legion-local/Invoke-Legion.ps1'
 
@@ -59,7 +59,7 @@ if (-not (Test-Path -LiteralPath $invokeLegion -PathType Leaf)) {
     throw "Legion SSH wrapper is missing: $invokeLegion"
 }
 if ($Mode -eq 'submit' -and -not $ConfirmExpensiveRun) {
-    throw 'submit launches one canary plus ten GPU jobs; use -ConfirmExpensiveRun.'
+    throw 'submit launches one canary plus one sequential ten-task GPU job; use -ConfirmExpensiveRun.'
 }
 
 function Quote-Bash([string]$Value) { return "'" + ($Value -replace "'", "'\'''") + "'" }
@@ -73,9 +73,8 @@ $expectedQ = Quote-Bash $ExpectedCommit
 $runnerQ = Quote-Bash $runnerRelative
 $canaryQ = Quote-Bash $canaryRelative
 
-# The canary is submitted first and the training array is chained with
-# afterok. Every array element performs its own fresh-reset 50-success Arrow
-# collection; no pre-existing collection manifest is required.
+# The canary is submitted first. One dependent job then runs all ten tasks
+# sequentially on a single GPU allocation and saves one adapter per task.
 $remoteScript = @'
 set -Eeuo pipefail
 repo=__REPO__
@@ -93,7 +92,7 @@ test -z "$(git -C "$repo" status --porcelain --untracked-files=all)"
 test -f "$repo/$runner_rel"
 test -f "$repo/$canary_rel"
 test -f "$repo/vla_benchmarking/libero/arrow_grasp_controller/configs/canonical_molmo_rgbd_grasp.json"
-printf 'preflight=PASS\narray=0-9\nexpected_commit=%s\ncontroller_config_hash=%s\ncollection_mode=fresh_arrow\narrow_demos=50\nrequested_epochs=5\noptimizer_steps=derived_from_dataset\ncanary_run_root=%s\ncanary_archive_root=%s\n' "$expected_commit" "$controller_hash" "$canary_run_root" "$canary_archive_root"
+printf 'preflight=PASS\nexecution=single_sequential_job\ntasks=0-9\nexpected_commit=%s\ncontroller_config_hash=%s\ncollection_mode=fresh_arrow\narrow_demos=50\nrequested_epochs=5\noptimizer_steps=derived_from_dataset\ncanary_run_root=%s\ncanary_archive_root=%s\n' "$expected_commit" "$controller_hash" "$canary_run_root" "$canary_archive_root"
 for task_id in 0 1 2 3 4 5 6 7 8 9; do
   printf 'task=%s run_root=%s/task_%s/run dataset_root=%s/task_%s/run/dataset training_root=%s/task_%s/run/training archive_root=%s/task_%s\n' \
     "$task_id" "$run_root" "$task_id" "$run_root" "$task_id" "$run_root" "$task_id" "$archive_root" "$task_id"
@@ -104,21 +103,11 @@ if [[ '__MODE__' == 'submit' ]]; then
   export PEFT_CANARY_CONTROLLER_HASH="$controller_hash"
   canary_id="$(sbatch --parsable --export=ALL --job-name=__JOB_NAME___canary --partition=gpu_a40 --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=0-04:00:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.err" "$repo/$canary_rel")"
   [[ "$canary_id" =~ ^[0-9]+$ ]] || { printf 'invalid canary job id: %s\n' "$canary_id" >&2; exit 2; }
-  export ARRAY_REPO_ROOT="$repo" ARRAY_RUN_ROOT="$run_root" ARRAY_ARCHIVE_ROOT="$archive_root" ARRAY_LABEL=__LABEL__ ARRAY_RUNNER_REL="$runner_rel" ARRAY_CONTROLLER_HASH="$controller_hash"
-  wrap_script='set -Eeuo pipefail
-tid="$SLURM_ARRAY_TASK_ID"
-[[ "$tid" =~ ^[0-9]+$ && "$tid" -ge 0 && "$tid" -le 9 ]]
-export PEFT_TASK_ID="$tid"
-export PEFT_EXPECTED_CONTROLLER_HASH="$ARRAY_CONTROLLER_HASH"
-unset PEFT_TASK_IDS PEFT_ARROW_COLLECTION_MANIFEST
-export PEFT_LABEL="$ARRAY_LABEL"_task_"$tid"
-export PEFT_RUN_ROOT="$ARRAY_RUN_ROOT"/task_"$tid"/run
-export PEFT_ARCHIVE_ROOT="$ARRAY_ARCHIVE_ROOT"/task_"$tid"
-export PEFT_SCRATCH_ROOT="$ARRAY_RUN_ROOT"/task_"$tid"
-exec bash "$ARRAY_REPO_ROOT/$ARRAY_RUNNER_REL"'
-  array_id="$(sbatch --parsable --dependency=afterok:"$canary_id" --array=0-9%10 --job-name=__JOB_NAME__ --partition=gpu_a40 --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=0-23:59:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%A_%a.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%A_%a.err" --export=ALL --wrap="$wrap_script")"
-  [[ "$array_id" =~ ^[0-9]+(_[0-9-]+)?$ ]] || { printf 'invalid array job id: %s\n' "$array_id" >&2; exit 2; }
-  printf 'collector_canary_job=%s\ntraining_array_job=%s\ndependency=afterok:%s\n' "$canary_id" "$array_id" "$canary_id"
+  export REPO_ROOT="$repo" PEFT_EXPECTED_CONTROLLER_HASH="$controller_hash"
+  export PEFT_ALL_TASK_RUN_ROOT="$run_root" PEFT_ALL_TASK_ARCHIVE_ROOT="$archive_root" PEFT_ALL_TASK_LABEL=__LABEL__
+  all_task_id="$(sbatch --parsable --dependency=afterok:"$canary_id" --job-name=__JOB_NAME__ --partition=gpu_a40_ext --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=5-00:00:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.err" --export=ALL "$repo/$runner_rel")"
+  [[ "$all_task_id" =~ ^[0-9]+$ ]] || { printf 'invalid all-task job id: %s\n' "$all_task_id" >&2; exit 2; }
+  printf 'collector_canary_job=%s\nall_task_job=%s\ndependency=afterok:%s\n' "$canary_id" "$all_task_id" "$canary_id"
 fi
 '@
 $remoteScript = $remoteScript.Replace('__REPO__', $repoQ)

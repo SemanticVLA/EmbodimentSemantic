@@ -164,7 +164,7 @@ tmp = output.with_name("." + output.name + ".partial")
 tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 tmp.replace(output)
 PY
-"$PYTHON" "$COLLECTOR" \
+"$PYTHON" -m vla_benchmarking.libero.automatic_ttt.collect_smolvla_arrow_corrections \
   --task-id 0 --task-description "$TASK_DESCRIPTION" --output-root "$COLLECTION_ROOT" \
   --accepted-target 1 --adaptation-seed-start 3000 --max-attempts 10 --vla-step-budget 280 --arrow-step-budget 1200 --resolution 256 \
   --controller-config-hash "$PEFT_CANARY_CONTROLLER_HASH" --collection-mode fresh_arrow \

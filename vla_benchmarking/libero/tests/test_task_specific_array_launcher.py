@@ -1,4 +1,4 @@
-"""Static contract tests for the Legion live-canary PEFT array front door."""
+"""Static contracts for the Legion canary plus one sequential all-task job."""
 
 from pathlib import Path
 import subprocess
@@ -7,21 +7,25 @@ import subprocess
 LEGION = Path(__file__).parents[1] / "automatic_ttt" / "legion"
 LAUNCHER = LEGION / "submit_smolvla_task_specific_array.ps1"
 CANARY = LEGION / "run_smolvla_arrow_collector_canary.sbatch"
+ALL_TASKS = LEGION / "run_smolvla_peft_arrow_all_tasks.sbatch"
 
 
 def test_array_launcher_is_task_specific_and_five_epoch_budget() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
-    assert "--array=0-9%10" in source
-    assert "export PEFT_TASK_ID=" in source
-    assert "SLURM_ARRAY_TASK_ID" in source
-    assert "unset PEFT_TASK_IDS PEFT_ARROW_COLLECTION_MANIFEST" in source
+    assert "--array=" not in source
+    assert "single_sequential_job" in source
+    all_tasks = ALL_TASKS.read_text(encoding="utf-8")
+    assert "for task_id in 0 1 2 3 4 5 6 7 8 9" in all_tasks
+    assert 'export PEFT_TASK_ID="$task_id"' in all_tasks
+    assert "unset PEFT_TASK_IDS PEFT_ARROW_COLLECTION_MANIFEST" in all_tasks
     assert "arrow_demos=50" in source
     assert "collection_mode=fresh_arrow" in source
     assert "requested_epochs=5" in source
     assert "optimizer_steps=derived_from_dataset" in source
     assert "PEFT_STEPS=20000" not in source
     assert "PEFT_EPOCHS" not in source
-    assert "run_smolvla_peft_arrow_task.sbatch" in source
+    assert "run_smolvla_peft_arrow_all_tasks.sbatch" in source
+    assert "run_smolvla_peft_arrow_task.sbatch" in all_tasks
     assert "run_smolvla_arrow_collector_canary.sbatch" in source
 
 
@@ -33,7 +37,7 @@ def test_array_launcher_has_immutable_canary_gate_and_separate_roots() -> None:
     assert "sbatch --parsable" in source
     assert "PEFT_CANARY_CONTROLLER_HASH" in source
     assert "PEFT_EXPECTED_CONTROLLER_HASH" in source
-    assert "ARRAY_CONTROLLER_HASH" in source
+    assert "PEFT_EXPECTED_CONTROLLER_HASH" in source
     assert "canary_run_root" in source
     assert "canary_archive_root" in source
     assert "RemoteCollectionRoot" not in source
@@ -70,7 +74,7 @@ def test_canary_validates_collection_training_reload_and_paired_eval() -> None:
 
 
 def test_shell_scripts_parse() -> None:
-    for script in (CANARY, LEGION / "run_smolvla_peft_arrow_task.sbatch"):
+    for script in (CANARY, ALL_TASKS, LEGION / "run_smolvla_peft_arrow_task.sbatch"):
         relative_script = script.relative_to(Path.cwd()).as_posix()
         result = subprocess.run(
             ["bash", "-n", relative_script],
