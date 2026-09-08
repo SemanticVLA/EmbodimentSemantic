@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import json
 import hashlib
+import sys
+import types
 
 import pytest
 
 np = pytest.importorskip("numpy")
 
 from .contracts import SourceState
-from .live_collection import canonical_student_observation, collect_fresh_arrow_demonstrations, collect_task_corrections
+from .live_collection import (
+    canonical_student_observation,
+    collect_fresh_arrow_demonstrations,
+    collect_task_corrections,
+    export_correction_only_lerobot_dataset,
+)
 from .teacher import ArrowGraspControllerTeacher
 from .peft_artifacts import load_arrow_collection_manifest
 
@@ -44,6 +51,57 @@ def test_native_projection_is_exactly_four_student_fields():
     assert projected["agentview"].shape == (256, 256, 3)
     assert projected["wrist"].shape == (256, 256, 3)
     assert projected["state"].shape == (8,)
+
+
+def test_native_lerobot_export_treats_task_as_required_frame_metadata_not_a_feature(monkeypatch, tmp_path):
+    captured = {"features": None, "frames": []}
+
+    class FakeDataset:
+        @classmethod
+        def create(cls, *, features, root, **_kwargs):
+            captured["features"] = features
+            instance = cls()
+            instance.root = root
+            (root / "meta").mkdir(parents=True)
+            return instance
+
+        def add_frame(self, frame):
+            assert "task" in frame
+            assert "task" not in captured["features"]
+            captured["frames"].append(frame)
+
+        def save_episode(self):
+            pass
+
+        def finalize(self):
+            (self.root / "meta" / "info.json").write_text("{}\n", encoding="utf-8")
+
+    lerobot = types.ModuleType("lerobot")
+    datasets = types.ModuleType("lerobot.datasets")
+    module = types.ModuleType("lerobot.datasets.lerobot_dataset")
+    module.LeRobotDataset = FakeDataset
+    monkeypatch.setitem(sys.modules, "lerobot", lerobot)
+    monkeypatch.setitem(sys.modules, "lerobot.datasets", datasets)
+    monkeypatch.setitem(sys.modules, "lerobot.datasets.lerobot_dataset", module)
+
+    accepted = tmp_path / "accepted.jsonl"
+    observation = {
+        "agentview": np.zeros((256, 256, 3), dtype=np.uint8).tolist(),
+        "wrist": np.zeros((256, 256, 3), dtype=np.uint8).tolist(),
+        "state": [0.0] * 8,
+        "instruction": "pick up the bowl",
+    }
+    accepted.write_text(json.dumps({
+        "episode_id": "episode-0",
+        "transitions": [{
+            "actor": "arrow_grasp_controller", "observation": observation,
+            "action": [0.0] * 7,
+        }],
+    }) + "\n", encoding="utf-8")
+
+    export_correction_only_lerobot_dataset(accepted, tmp_path / "dataset")
+
+    assert captured["frames"][0]["task"] == "pick up the bowl"
 
 
 def test_collection_uses_one_live_episode_for_vla_prefix_and_arrow_suffix(tmp_path):

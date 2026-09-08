@@ -313,7 +313,6 @@ def export_correction_only_lerobot_dataset(
         "observation.images.image2": {"dtype": "image", "shape": (256, 256, 3), "names": ["height", "width", "channels"]},
         "observation.state": {"dtype": "float32", "shape": (8,), "names": ["state"]},
         "action": {"dtype": "float32", "shape": (7,), "names": ["action"]},
-        "task": {"dtype": "string", "shape": (1,), "names": ["task"]},
     }
     try:
         dataset = LeRobotDataset.create(
