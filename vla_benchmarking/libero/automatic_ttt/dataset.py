@@ -20,6 +20,7 @@ from .contracts import validate_action
 
 _TYPE_TAG = "__automatic_ttt_type__"
 CANONICAL_OBSERVATION_SCHEMA = "libero_rgb_state8_instruction_v1"
+PEFT_EXPORT_METHOD = "standard_dagger_peft_not_robottt_distillation"
 
 
 class ObservationSchemaError(ValueError):
@@ -355,6 +356,38 @@ class TTTDataset:
             if row.source != "rejected" and row.action_loss_mask > 0 and row.teacher_action is not None
         ]
 
+    def arrow_correction_records(self, *, allowed_splits: Sequence[str] = ("train", "support")) -> list[TransitionRecord]:
+        """Return only executed Arrow rows eligible for PEFT supervision.
+
+        VLA-prefix rows remain useful context for the RoboTTT implementation,
+        but native LeRobot PEFT has no history/mask contract.  Its export must
+        therefore never include VLA actions as labels and must identify the
+        approximation explicitly.
+        """
+
+        return [
+            row for episode in self.episodes if episode.source_split in allowed_splits
+            for row in episode.transitions
+            if row.source == "teacher_correction"
+            and row.action_loss_mask == 1.0
+            and row.teacher_action is not None
+        ]
+
+    def peft_export_manifest(self, *, allowed_splits: Sequence[str] = ("train", "support")) -> dict[str, Any]:
+        """Describe a correction-only PEFT export without claiming RoboTTT fidelity."""
+
+        rows = self.arrow_correction_records(allowed_splits=allowed_splits)
+        return {
+            "method": PEFT_EXPORT_METHOD,
+            "source_kind": "arrow_grasp_controller_trajectory",
+            "allowed_splits": list(allowed_splits),
+            "transition_count": len(rows),
+            "episode_ids": sorted({row.episode_id for row in rows}),
+            "label_source": "executed_arrow_action_only",
+            "vla_prefix_context_exported": False,
+            "robottt_distillation_claim": False,
+        }
+
     def context_records(self, *, allowed_splits: Sequence[str] = ("train", "support")) -> list[TransitionRecord]:
         return [
             row for episode in self.episodes if episode.source_split in allowed_splits
@@ -498,5 +531,6 @@ def episode_from_executed_records(
 
 
 __all__ = [
-    "EpisodeRecord", "TTTDataset", "TransitionRecord", "episode_from_executed_records",
+    "CANONICAL_OBSERVATION_SCHEMA", "PEFT_EXPORT_METHOD", "EpisodeRecord", "TTTDataset",
+    "TransitionRecord", "episode_from_executed_records",
 ]

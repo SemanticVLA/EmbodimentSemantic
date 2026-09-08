@@ -285,6 +285,28 @@ class ArrowGraspControllerTeacher:
         self.requires_privileged_environment = bool(requires_privileged_environment)
 
     def recover(self, environment: TakeoverEnvironmentView, request: TeacherRecoveryRequest) -> TeacherRecoveryResult:
+        return self._recover(environment, request, collection_mode="same_episode_takeover")
+
+    def recover_from_reset(self, environment: TakeoverEnvironmentView, request: TeacherRecoveryRequest) -> TeacherRecoveryResult:
+        """Execute Arrow immediately from a freshly reset environment.
+
+        This is deliberately a separate entry point from ``recover``.  It
+        keeps the original same-episode takeover contract intact while
+        allowing the pilot to collect ordinary successful Arrow rollouts.
+        ``request.vla_history`` must be empty and the view must start at
+        timestep zero, so no VLA action can be silently mixed into the data.
+        """
+        if request.vla_history:
+            raise ContractError("fresh Arrow demonstration cannot include VLA history")
+        return self._recover(environment, request, collection_mode="fresh_arrow")
+
+    def _recover(
+        self,
+        environment: TakeoverEnvironmentView,
+        request: TeacherRecoveryRequest,
+        *,
+        collection_mode: str,
+    ) -> TeacherRecoveryResult:
         if not isinstance(environment, TakeoverEnvironmentView):
             raise TypeError("Arrow teacher requires TakeoverEnvironmentView")
         environment.assert_usable()
@@ -311,6 +333,7 @@ class ArrowGraspControllerTeacher:
                 evaluator_success=evaluator_success,
                 source_controller=self.teacher_id,
                 provenance=dict(teacher_metadata),
+                collection_mode=collection_mode,
             )
             result = replace(
                 result,

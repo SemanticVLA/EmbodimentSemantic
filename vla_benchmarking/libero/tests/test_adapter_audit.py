@@ -73,6 +73,8 @@ def _fixture(tmp_path: Path, *, missing_b=False, target=None, nonzero=True):
     (adapter / "adapter_config.json").write_text(
         json.dumps({
             "peft_type": "LORA", "r": 16, "modules_to_save": [],
+            "lora_alpha": 8, "lora_dropout": 0.0, "bias": "none",
+            "init_lora_weights": True, "use_rslora": False, "fan_in_fan_out": False,
             "target_modules": target if target is not None else adapter_audit.ACTION_SIDE_TARGET_REGEX,
         }), encoding="utf-8"
     )
@@ -204,6 +206,12 @@ def test_load_and_wrap_binds_exact_local_base_to_policy_config(tmp_path, monkeyp
     class _PeftConfig:
         peft_type = "LORA"
         r = 16
+        lora_alpha = 8
+        lora_dropout = 0.0
+        bias = "none"
+        init_lora_weights = True
+        use_rslora = False
+        fan_in_fan_out = False
         target_modules = adapter_audit.ACTION_SIDE_TARGET_REGEX
         modules_to_save = []
 
@@ -245,8 +253,7 @@ def test_live_expected_inventory_round_trip_is_sealed(tmp_path):
     value = adapter_audit._build_expected_inventory_from_model(_WrappedPolicy(modules), base_policy="/sealed/base")
     value["base_policy_revision"] = adapter_audit.PINNED_BASE_POLICY_REVISION
     value["effective_peft_config"] = {
-        "peft_type": "LORA", "r": 16,
-        "target_modules": adapter_audit.ACTION_SIDE_TARGET_REGEX, "modules_to_save": [],
+        **adapter_audit.EFFECTIVE_LORA_CONFIG,
     }
     value["inventory_sha256"] = adapter_audit.inventory_sha256(value)
     path = tmp_path / "expected_adapter_inventory.json"
@@ -273,8 +280,7 @@ def test_checkpoint_audit_rejects_strict_lm_expert_subset(tmp_path, monkeypatch)
         "target_regex": adapter_audit.ACTION_SIDE_TARGET_REGEX,
         "peft_type": "LORA", "rank": 16, "modules_to_save": [],
         "effective_peft_config": {
-            "peft_type": "LORA", "r": 16,
-            "target_modules": adapter_audit.ACTION_SIDE_TARGET_REGEX, "modules_to_save": [],
+            **adapter_audit.EFFECTIVE_LORA_CONFIG,
         },
         "matched_module_names": modules,
         "trainable_parameter_names": sorted(

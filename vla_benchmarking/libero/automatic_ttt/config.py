@@ -62,11 +62,16 @@ STUDY_PROTOCOL_DEFAULTS: dict[str, Any] = {
 # a detail that cannot be reconstructed from the paper alone and therefore must
 # come from the authors' released artifact before an ``exact`` run is allowed.
 PAPER_KNOWN_SETTINGS: dict[str, Any] = {
-    "paper": "RoboTTT: Test-Time Training for Generalizable Robot Manipulation",
+    "paper": "RoboTTT: Context Scaling for Robot Policies",
     "paper_identifier": "arXiv:2607.15275v1",
     "ttt_layer_placement": "after_self_and_cross_attention_each_dit_layer",
     "num_dit_layers": 16,
     "register_tokens_per_timestep": 16,
+    "fast_model": "two_layer_mlp",
+    "fast_weight_optimizer_at_inference": "standard_gradient_descent",
+    "inner_base_learning_rate": 0.1,
+    "positional_encoding": "RoPE",
+    "rope_theta": 10000,
     "gate": "tanh(alpha) * ttt_output + attention_output",
     "gate_alpha_initialization": 0.001,
     "fast_loss": "mean_squared_error(f_W(K_t), V_t)",
@@ -81,11 +86,29 @@ PAPER_KNOWN_SETTINGS: dict[str, Any] = {
     "posttrain_global_batch_size": 8,
     "posttrain_context_length": 1000,
     "posttrain_num_gpus": 8,
+    "posttrain_per_device_batch_size": 1,
+    "posttrain_effective_batch_size_derivation": "8_GPUs_x_1_sample_per_device=8",
+    "posttrain_trainable_scope": "all_parameters",
+    "posttrain_scheduler": "cosine",
+    "posttrain_scheduler_warmup_steps": None,
+    "posttrain_scheduler_minimum_learning_rate": None,
+    "pretrain_num_gpus": 16,
+    "pretrain_per_device_batch_size_context_le_4k": 4,
+    "pretrain_global_batch_size_context_le_4k": 64,
+    "pretrain_per_device_batch_size_context_gt_4k": 1,
+    "pretrain_global_batch_size_context_gt_4k": 16,
+    "pretrain_trainable_scope": "new_sequence_modeling_layers_only",
+    "pretrain_scheduler": "Warmup-Stable-Decay",
     "pretrain_weight_decay": 1e-5,
     "posttrain_weight_decay": 1e-5,
     "pretrain_peak_learning_rate": 2e-5,
     "posttrain_peak_learning_rate": 5e-5,
     "optimizer": "AdamW",
+    "dagger_trajectories_robottt_base": 50,
+    "dagger_trajectories_groot_base": 50,
+    "dagger_pooled_trajectories": 100,
+    "dagger_context": "full_interleaved_robot_and_teacher_trajectory",
+    "dagger_loss_mask": "teacher_correction_chunks_only",
     "fast_mlp_activation": "GELU",
     "fast_mlp_width": None,
     "ttt_projection_dim": None,
@@ -226,7 +249,10 @@ class ExperimentConfig:
     task_ids: list[int] = field(default_factory=lambda: list(range(10)))
     seeds: list[int] = field(default_factory=lambda: [1000])
     episodes_per_task: int = 10
-    student_step_budget: int = 220
+    # LeRobot 0.5.2 fixes LIBERO-Spatial evaluation to 280 environment
+    # steps.  Collection uses the same budget so failure/takeover decisions
+    # are comparable to the paired baseline and adapted evaluations.
+    student_step_budget: int = 280
     teacher_step_budget: int = 1200
     output_root: str = "vla_benchmarking/libero/automatic_ttt/runs"
     dataset_root: str = "vla_benchmarking/libero/automatic_ttt/datasets"

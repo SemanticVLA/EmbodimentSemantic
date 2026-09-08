@@ -49,7 +49,7 @@
     "official_code_commit": null,
     "optimizer": "AdamW",
     "optimizer_betas_eps_clip": null,
-    "paper": "RoboTTT: Test-Time Training for Generalizable Robot Manipulation",
+    "paper": "RoboTTT: Context Scaling for Robot Policies",
     "paper_identifier": "arXiv:2607.15275v1",
     "posttrain_global_batch_size": 8,
     "posttrain_context_length": 1000,
@@ -146,7 +146,7 @@
       "task09_seed1500_val00"
     ]
   },
-  "student_step_budget": 220,
+  "student_step_budget": 280,
   "task_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
   "teacher_step_budget": 1200,
   "vla_names": ["openvla", "pi05", "smolvla", "ours"]

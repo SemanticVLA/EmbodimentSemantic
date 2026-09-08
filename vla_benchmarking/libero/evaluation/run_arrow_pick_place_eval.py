@@ -4533,8 +4533,14 @@ def build_libero_env(
                     "filtered_nv": target_schema.nv,
                 }
             env.set_init_state(selected_state)
+            selected_array = np.ascontiguousarray(np.asarray(selected_state))
+            selected_digest = hashlib.sha256()
+            selected_digest.update(str(selected_array.dtype).encode("ascii") + b"\0")
+            selected_digest.update(repr(tuple(selected_array.shape)).encode("ascii") + b"\0")
+            selected_digest.update(selected_array.tobytes(order="C"))
             init_state_diagnostics.update({
                 "selected_index": int(selected_index),
+                "selected_row_sha256": selected_digest.hexdigest(),
                 "fallback": False,
                 "projection": projection,
             })

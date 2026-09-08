@@ -19,7 +19,7 @@ from .config import (
     save_config, STUDY_PROTOCOL_DEFAULTS, validate_study_protocol,
 )
 from .dataset import (
-    CANONICAL_OBSERVATION_SCHEMA, EpisodeRecord, ObservationSchemaError,
+    CANONICAL_OBSERVATION_SCHEMA, PEFT_EXPORT_METHOD, EpisodeRecord, ObservationSchemaError,
     TTTDataset, TransitionRecord as TrainingTransition,
     episode_from_executed_records, validate_student_observation_schema,
 )
@@ -54,6 +54,11 @@ from .adapters import (
     SUPPORTED_VLAS, VLAAdapterRegistry,
 )
 from .arrow_bridge import ArrowCanaryBridge
+from .live_collection import (
+    COLLECTION_SCHEMA, PEFT_METHOD_LABEL, SOURCE_KIND, CanonicalLiveEnvironment,
+    CollectionResult, canonical_student_observation, collect_task_corrections,
+    export_correction_only_lerobot_dataset,
+)
 from .demonstrations import (
     DemonstrationRecord, DemonstrationReceipt, DemonstrationValidationError,
     ValidatedDemonstration, validate_and_build_demonstration,
@@ -96,7 +101,7 @@ __all__ = [
     "ExperimentConfig", "FIDELITY_MODES", "PAPER_KNOWN_SETTINGS",
     "STUDY_PROTOCOL_DEFAULTS", "validate_study_protocol",
     "ProvenanceConfig", "SplitConfig", "VLA_ALIASES", "VLA_DISPLAY_NAMES",
-    "VLA_NAMES", "load_config", "save_config", "CANONICAL_OBSERVATION_SCHEMA",
+    "VLA_NAMES", "load_config", "save_config", "CANONICAL_OBSERVATION_SCHEMA", "PEFT_EXPORT_METHOD",
     "EpisodeRecord", "ObservationSchemaError", "TTTDataset", "TrainingTransition",
     "episode_from_executed_records", "validate_student_observation_schema",
     "EpisodeCoordinator", "RolloutResult", "EnvironmentFactory", "EnvironmentHandle",
@@ -117,6 +122,9 @@ __all__ = [
     "train_from_config", "TrialMetric", "evaluate_from_config", "paired_report",
     "write_metrics", "AdaptableVLA", "AdapterMetadata", "AdapterRegistration",
     "LegacyPolicyBridge", "SUPPORTED_VLAS", "VLAAdapterRegistry", "ArrowCanaryBridge",
+    "COLLECTION_SCHEMA", "SOURCE_KIND", "PEFT_METHOD_LABEL", "CanonicalLiveEnvironment",
+    "CollectionResult", "canonical_student_observation", "collect_task_corrections",
+    "export_correction_only_lerobot_dataset",
     "DemonstrationRecord", "DemonstrationReceipt", "DemonstrationValidationError",
     "ValidatedDemonstration", "validate_and_build_demonstration", "ADAPTATION_TASKS",
     "CHECKPOINTS", "SEEDS", "TRANSFER_TASKS", "CostReceipt", "ProtocolError",

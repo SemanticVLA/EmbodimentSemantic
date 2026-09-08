@@ -23,11 +23,9 @@ class ArrowCanaryBridge(ArrowGraspControllerTeacher):
     """Adapt ``arrow_grasp_controller.controller.runner.run_canary_episode``.
 
     ``episode_runner`` must execute actions through its supplied environment
-    and return a mapping containing ``transitions`` (atomic clean observations,
-    action, next observation) and ``success``.  If a custom runner stores the
-    transitions externally, ``transition_getter`` can retrieve them from the
-    controller result.  Arrow overlays, candidate boxes and simulator contact
-    state remain in result metadata only.
+    and return the controller audit mapping.  Transition data comes only from
+    the guarded live-view recorder; controller manifests, overlays, candidate
+    boxes and simulator contact state remain metadata.
     """
 
     def __init__(
@@ -51,15 +49,12 @@ class ArrowCanaryBridge(ArrowGraspControllerTeacher):
         self.destination_uv = None if destination_uv is None else tuple(float(value) for value in destination_uv)
         self.output_root = Path(output_root)
         self.variant = variant
-        if transition_getter is None:
-            def _missing_transition_getter(_result: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
-                raise ContractError(
-                    "Arrow canary returned no training transitions. Wire the episode_runner/env.step recorder "
-                    "and pass transition_getter; controller manifests alone are not VLA training data."
-                )
-            self.transition_getter = _missing_transition_getter
-        else:
-            self.transition_getter = transition_getter
+        # Kept as a compatibility argument for older callers, but never used
+        # as the source of training rows.  The guarded view is authoritative:
+        # only its pre/action/post records prove that Arrow actually stepped
+        # the live post-VLA environment.  A manifest or callback cannot
+        # fabricate a transition.
+        self.transition_getter = transition_getter
         self.held_recover_fn = held_recover_fn
         self.refresh_fn = refresh_fn
         self.allow_stale_geometry_for_tests = bool(allow_stale_geometry_for_tests)
@@ -115,20 +110,42 @@ class ArrowCanaryBridge(ArrowGraspControllerTeacher):
         )
         if not isinstance(raw, Mapping):
             raise ContractError("run_canary_episode must return a mapping")
-        transitions = self.transition_getter(raw)
+        transitions = tuple(view.executed_transitions)
+        if self.transition_getter is not None:
+            # An optional legacy getter is an audit assertion only.  Do not
+            # ingest its rows; callers must migrate to the authoritative view
+            # recorder.  Empty output is accepted for legacy manifests.
+            legacy_rows = self.transition_getter(raw)
+            if legacy_rows and len(tuple(legacy_rows)) != len(transitions):
+                raise ContractError(
+                    "legacy transition_getter disagrees with the authoritative live-view recorder"
+                )
         # ``run_canary_episode`` returns a manifest whose controller result is
         # nested under ``final_result``.  The top-level manifest is not an
         # evaluator verdict: it may only contain attempt bookkeeping.  Require
         # the explicit evaluator boolean so a completed motion or a non-empty
         # manifest cannot be mislabeled as a successful training target.
         evaluator_success, controller_status = self._controller_verdict(raw)
+        final_transition_success = bool(transitions and transitions[-1].success)
+        # Arrow's evaluator runs after retreat.  Its explicit episode verdict
+        # is the acceptance criterion; an individual final env.step may still
+        # carry ``success=False`` because it is not the evaluator.  Preserve
+        # that raw flag and expose the mismatch instead of rewriting it.
+        accepted_success = bool(evaluator_success)
         return {
             "transitions": transitions,
-            "success": evaluator_success,
-            "status": "teacher_success" if evaluator_success else "teacher_failed",
+            "success": accepted_success,
+            "status": "teacher_success" if accepted_success else "teacher_failed",
             "metadata": {
                 "controller_status": controller_status,
                 "evaluator_success": evaluator_success,
+                "final_transition_success": final_transition_success,
+                "acceptance_reason": (
+                    "evaluator_success_post_retreat"
+                    if accepted_success
+                    else "evaluator_rejected"
+                ),
+                "evaluator_phase": "post_retreat",
                 "controller_attempt_count": len(raw.get("attempts", ())) if isinstance(raw.get("attempts", ()), (list, tuple)) else None,
                 "teacher_privilege": "simulator_bbox_and_contact_state",
                 "source_state": request.source_state.value,

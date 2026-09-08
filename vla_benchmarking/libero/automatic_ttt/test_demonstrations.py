@@ -67,6 +67,38 @@ def test_successful_teacher_requires_final_success_and_evaluator():
         _valid(teacher_success=True, evaluator_success=False)
 
 
+def test_evaluator_success_cannot_fabricate_final_transition_success():
+    with pytest.raises(DemonstrationValidationError, match="no fabricated transition success"):
+        validate_and_build_demonstration(
+            (
+                _row("ep", 0, Actor.VLA, {"state": [0]}, {"state": [1]}),
+                _row("ep", 1, Actor.TEACHER, {"state": [1]}, {"state": [2]}, success=False, done=True, source=SourceState.SOURCE_UNHELD),
+            ),
+            task_id=0,
+            seed=1,
+            environment_identity="env-1",
+            teacher_success=False,
+            evaluator_success=True,
+        )
+
+
+def test_post_retreat_evaluator_can_accept_raw_final_step_false():
+    artifact = validate_and_build_demonstration(
+        (
+            _row("ep", 0, Actor.VLA, {"state": [0]}, {"state": [1]}),
+            _row("ep", 1, Actor.TEACHER, {"state": [1]}, {"state": [2]}, success=False, done=True, source=SourceState.SOURCE_UNHELD),
+        ),
+        task_id=0,
+        seed=1,
+        environment_identity="env-1",
+        teacher_success=True,
+        evaluator_success=True,
+        provenance={"evaluator_phase": "post_retreat"},
+    )
+    assert artifact.receipt.evaluator_success is True
+    assert artifact.record.transitions[-1].success is False
+
+
 def test_failed_teacher_demonstration_is_valid_but_not_successful():
     artifact = _valid(teacher_success=False, evaluator_success=False)
     assert artifact.record.teacher_success is False

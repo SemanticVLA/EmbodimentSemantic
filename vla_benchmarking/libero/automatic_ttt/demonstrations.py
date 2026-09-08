@@ -1,4 +1,4 @@
-"""Strict conversion of live VLA-failure/Arrow-correction traces.
+"""Strict conversion of executed Arrow demonstrations and takeover traces.
 
 This module does not invoke the controller.  It validates records produced by
 the live environment view and creates an immutable receipt suitable for a
@@ -114,12 +114,19 @@ class DemonstrationReceipt:
     evaluator_success: bool
     rejected_reasons: tuple[str, ...] = ()
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    collection_mode: str = "same_episode_takeover"
 
     def __post_init__(self) -> None:
         if self.rejected_reasons:
             raise DemonstrationValidationError(self.rejected_reasons)
-        if self.vla_transition_count <= 0 or self.teacher_transition_count <= 0:
-            raise DemonstrationValidationError(("demonstration requires VLA and teacher transitions",))
+        if self.teacher_transition_count <= 0:
+            raise DemonstrationValidationError(("demonstration requires teacher transitions",))
+        if self.collection_mode not in {"same_episode_takeover", "fresh_arrow"}:
+            raise DemonstrationValidationError(("unknown demonstration collection mode",))
+        if self.collection_mode == "same_episode_takeover" and self.vla_transition_count <= 0:
+            raise DemonstrationValidationError(("takeover demonstration requires VLA transitions",))
+        if self.collection_mode == "fresh_arrow" and self.vla_transition_count != 0:
+            raise DemonstrationValidationError(("fresh Arrow demonstration cannot contain VLA transitions",))
         if len(self.transitions_sha256) != 64 or len(self.observations_sha256) != 64:
             raise DemonstrationValidationError(("demonstration hashes must be SHA-256",))
         _json_safe(self.provenance)
@@ -148,10 +155,12 @@ def validate_and_build_demonstration(
     evaluator_success: bool,
     source_controller: str = "arrow_grasp_controller",
     provenance: Mapping[str, Any] | None = None,
+    collection_mode: str = "same_episode_takeover",
 ) -> ValidatedDemonstration:
-    """Validate and convert one executed VLA-failure/Arrow-correction trace."""
+    """Validate one executed trace for takeover or fresh Arrow collection."""
 
     reasons: list[str] = []
+    resolved_provenance = dict(provenance or {})
     rows = tuple(records)
     if not rows:
         reasons.append("trace is empty")
@@ -167,16 +176,26 @@ def validate_and_build_demonstration(
     if not isinstance(evaluator_success, bool) or not isinstance(teacher_success, bool):
         reasons.append("teacher_success and evaluator_success must be boolean")
 
+    if collection_mode not in {"same_episode_takeover", "fresh_arrow"}:
+        reasons.append("collection_mode must be same_episode_takeover or fresh_arrow")
     first_teacher = next((index for index, row in enumerate(rows) if row.actor is Actor.TEACHER), None)
     if first_teacher is None:
         reasons.append("trace has no teacher correction")
         first_teacher = len(rows)
-    if first_teacher == 0:
-        reasons.append("trace must begin with at least one VLA transition")
-    if first_teacher == len(rows) and rows:
-        reasons.append("trace has no teacher correction suffix")
-    if any(row.actor is Actor.VLA for row in rows[first_teacher:]):
-        reasons.append("VLA transitions cannot follow teacher takeover")
+    if collection_mode == "same_episode_takeover":
+        if first_teacher == 0:
+            reasons.append("trace must begin with at least one VLA transition")
+        if first_teacher == len(rows) and rows:
+            reasons.append("trace has no teacher correction suffix")
+        if any(row.actor is Actor.VLA for row in rows[first_teacher:]):
+            reasons.append("VLA transitions cannot follow teacher takeover")
+    else:
+        if first_teacher != 0:
+            reasons.append("fresh Arrow trace must contain only Arrow transitions")
+        if any(row.actor is not Actor.TEACHER for row in rows):
+            reasons.append("fresh Arrow trace must contain only teacher transitions")
+        if any(row.actor is Actor.TEACHER and not row.training_eligible for row in rows):
+            reasons.append("fresh Arrow transitions must be training eligible")
 
     teacher_rows = rows[first_teacher:]
     for index, row in enumerate(rows):
@@ -205,13 +224,25 @@ def validate_and_build_demonstration(
             reasons.append(f"timestep {first_teacher + index}: teacher row is not training eligible")
         if row.source_state not in {SourceState.SOURCE_UNHELD, SourceState.SOURCE_HELD}:
             reasons.append(f"timestep {first_teacher + index}: invalid teacher source state")
-    if first_teacher and teacher_rows and not _same_observation(rows[first_teacher - 1].next_observation, teacher_rows[0].observation):
+    if collection_mode == "same_episode_takeover" and first_teacher and teacher_rows and not _same_observation(rows[first_teacher - 1].next_observation, teacher_rows[0].observation):
         reasons.append("first teacher observation does not equal final VLA next_observation")
     if teacher_success:
-        if not teacher_rows or not teacher_rows[-1].success:
+        if not teacher_rows:
+            reasons.append("successful teacher outcome requires executed teacher transitions")
+        elif not teacher_rows[-1].success and resolved_provenance.get("evaluator_phase") != "post_retreat":
             reasons.append("successful teacher outcome requires final teacher transition success")
         if evaluator_success is not True:
             reasons.append("successful teacher outcome requires evaluator_success=True")
+    elif evaluator_success is True and (not teacher_rows or not teacher_rows[-1].success) and resolved_provenance.get("evaluator_phase") != "post_retreat":
+        # The Arrow evaluator is queried after retreat, while TransitionRecord
+        # success is an annotation of an individual executed env.step.  A
+        # positive evaluator verdict cannot rewrite that final row; retain the
+        # trace only as a failed/cost record and force the caller to resolve the
+        # discrepancy explicitly.
+        reasons.append(
+            "evaluator_success=True disagrees with final executed transition success=False; "
+            "no fabricated transition success is allowed"
+        )
 
     chunks: list[Mapping[str, Any]] = []
     for chunk_id in dict.fromkeys(row.action_chunk_id for row in teacher_rows):
@@ -224,7 +255,6 @@ def validate_and_build_demonstration(
 
     if reasons:
         raise DemonstrationValidationError(tuple(dict.fromkeys(reasons)))
-    resolved_provenance = dict(provenance or {})
     record = DemonstrationRecord(
         episode_id=episode_id,
         task_id=task_id,
@@ -250,6 +280,7 @@ def validate_and_build_demonstration(
         teacher_success=teacher_success,
         evaluator_success=evaluator_success,
         provenance=resolved_provenance,
+        collection_mode=collection_mode,
     )
     return ValidatedDemonstration(record, receipt)
 

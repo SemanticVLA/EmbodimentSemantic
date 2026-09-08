@@ -32,6 +32,24 @@ _TARGET_RE = re.compile(r"^" + ACTION_SIDE_TARGET_REGEX + r"$")
 EXPECTED_INVENTORY_SCHEMA_VERSION = 1
 PINNED_BASE_POLICY_REVISION = "6721902bc4d61e50a3bfdb11dfb4cb626f05d102"
 
+# This is the effective PEFT port used by the existing SmolVLA workflow
+# (canonical run 1910197).  These values are not RoboTTT parameters: RoboTTT
+# updates its TTT fast weights, whereas this experiment uses ordinary LoRA.
+# Keeping every field here prevents PEFT's dataclass defaults from silently
+# changing the treatment between runs.
+EFFECTIVE_LORA_CONFIG = {
+    "peft_type": "LORA",
+    "r": 16,
+    "lora_alpha": 8,
+    "lora_dropout": 0.0,
+    "bias": "none",
+    "init_lora_weights": True,
+    "use_rslora": False,
+    "fan_in_fan_out": False,
+    "target_modules": ACTION_SIDE_TARGET_REGEX,
+    "modules_to_save": [],
+}
+
 
 def _strip_model_prefix(value: str) -> str:
     """Normalize the names emitted by PEFT and by a wrapped LeRobot policy."""
@@ -70,10 +88,7 @@ def validate_expected_inventory(value: dict[str, Any]) -> dict[str, Any]:
     if value.get("base_policy_revision") != PINNED_BASE_POLICY_REVISION:
         raise ValueError("expected LoRA inventory base revision is not pinned")
     effective = value.get("effective_peft_config")
-    if effective != {
-        "peft_type": "LORA", "r": 16,
-        "target_modules": ACTION_SIDE_TARGET_REGEX, "modules_to_save": [],
-    }:
+    if effective != EFFECTIVE_LORA_CONFIG:
         raise ValueError("expected LoRA inventory lacks the exact resolved LeRobot PEFT config")
     modules = value.get("matched_module_names")
     trainable = value.get("trainable_parameter_names")
@@ -196,17 +211,28 @@ def _effective_peft_config(model: Any) -> dict[str, Any]:
     config = next(iter(configs.values()))
     peft_type = getattr(config, "peft_type", None)
     peft_type = getattr(peft_type, "value", peft_type)
-    target_modules = getattr(config, "target_modules", None)
+    def _required(name: str) -> Any:
+        if not hasattr(config, name):
+            raise RuntimeError(f"resolved PEFT config does not expose required field {name}")
+        return getattr(config, name)
+
+    target_modules = _required("target_modules")
     if isinstance(target_modules, (set, tuple, list)):
         target_modules = sorted(str(value) for value in target_modules)
-    modules_to_save = getattr(config, "modules_to_save", None)
+    modules_to_save = _required("modules_to_save")
     if isinstance(modules_to_save, (set, tuple)):
         modules_to_save = sorted(str(value) for value in modules_to_save)
     elif modules_to_save is None:
         modules_to_save = []
     return {
         "peft_type": str(peft_type).upper(),
-        "r": int(getattr(config, "r", -1)),
+        "r": int(_required("r")),
+        "lora_alpha": int(_required("lora_alpha")),
+        "lora_dropout": float(_required("lora_dropout")),
+        "bias": str(_required("bias")),
+        "init_lora_weights": _required("init_lora_weights"),
+        "use_rslora": bool(_required("use_rslora")),
+        "fan_in_fan_out": bool(_required("fan_in_fan_out")),
         "target_modules": target_modules,
         "modules_to_save": list(modules_to_save),
     }
@@ -275,12 +301,14 @@ def _load_and_wrap_pinned_smolvla(base_policy: str | Path) -> Any:
         # explicit override (--peft.r=16) with SmolVLA's own default target
         # regex and PEFT method.  Avoid constructing a hand-written config,
         # which can change task_type/alpha semantics across releases.
-        wrapped = wrap(peft_cli_overrides={"method_type": "LORA", "r": 16})
-        resolved = _effective_peft_config(wrapped)
-        if resolved != {
-            "peft_type": "LORA", "r": 16,
+        wrapped = wrap(peft_cli_overrides={
+            "method_type": "LORA", "r": 16, "lora_alpha": 8,
+            "lora_dropout": 0.0, "bias": "none", "init_lora_weights": True,
+            "use_rslora": False, "fan_in_fan_out": False,
             "target_modules": ACTION_SIDE_TARGET_REGEX, "modules_to_save": [],
-        }:
+        })
+        resolved = _effective_peft_config(wrapped)
+        if resolved != EFFECTIVE_LORA_CONFIG:
             raise RuntimeError(f"resolved LeRobot PEFT config differs from the sealed action-side config: {resolved!r}")
         return wrapped
     except Exception as exc:  # pragma: no cover - depends on compute runtime
@@ -418,6 +446,20 @@ def audit_adapter_checkpoint(
         raise ValueError("modules_to_save must be empty for action-side LoRA")
     if config.get("target_modules") != ACTION_SIDE_TARGET_REGEX:
         raise ValueError("adapter target_modules is not the sealed action-side target regex")
+    actual_config = {
+        "peft_type": str(config.get("peft_type", "")).upper(),
+        "r": int(config.get("r", -1)),
+        "lora_alpha": config.get("lora_alpha"),
+        "lora_dropout": config.get("lora_dropout"),
+        "bias": config.get("bias"),
+        "init_lora_weights": config.get("init_lora_weights"),
+        "use_rslora": config.get("use_rslora"),
+        "fan_in_fan_out": config.get("fan_in_fan_out"),
+        "target_modules": config.get("target_modules"),
+        "modules_to_save": [] if config.get("modules_to_save") is None else config.get("modules_to_save"),
+    }
+    if actual_config != EFFECTIVE_LORA_CONFIG:
+        raise ValueError(f"adapter effective LoRA config drifted: expected {EFFECTIVE_LORA_CONFIG!r}, got {actual_config!r}")
     expected = None
     if expected_inventory is not None:
         expected = load_expected_inventory(expected_inventory) if isinstance(expected_inventory, (str, Path)) else validate_expected_inventory(expected_inventory)
@@ -481,6 +523,7 @@ def audit_adapter_checkpoint(
         "target_regex": ACTION_SIDE_TARGET_REGEX,
         "peft_type": "LORA",
         "rank": 16,
+        "effective_peft_config": actual_config,
         "modules_to_save": [],
         "tensor_count": len(inventory),
         "tensor_keys": [item["key"] for item in inventory],

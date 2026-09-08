@@ -8,6 +8,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 # Preserve direct-launch behavior after moving this evaluator into its package.
 if __package__ in {None, ""}:  # pragma: no cover - direct script smoke
@@ -48,6 +49,88 @@ from vla_benchmarking.libero.evaluation.visual_scene_graph import (
 )
 
 _FILTERED_BDDL_CACHE: dict[tuple[str, tuple[str, ...]], str] = {}
+
+
+def _first_env_value(env: Any, names: tuple[str, ...]) -> Any:
+    for name in names:
+        value = getattr(env, name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _paired_reset_identity(
+    *,
+    sub_env: Any,
+    task_id: int,
+    env_index: int,
+    reset_sequence: int,
+    reset_details: dict,
+) -> dict[str, Any]:
+    """Build the immutable identity of one paired sealed-eval reset.
+
+    ``SceneRandomizerVecEnvWrapper`` captures ``init_state`` before the native
+    reset increments its counter.  Requiring that evidence here prevents the
+    standard PEFT paired path from silently falling back to an inferred or
+    post-reset state.  Environment geometry/configuration is read from the
+    instantiated environment so the audit records what was actually evaluated.
+    """
+    if not isinstance(reset_details, dict):
+        raise RuntimeError("paired evaluation reset details are malformed")
+    init_state = reset_details.get("init_state")
+    if not isinstance(init_state, dict):
+        raise RuntimeError(
+            "paired evaluation requires pre-reset init-state evidence in the randomization audit"
+        )
+    selected_index = init_state.get("selected_index")
+    selected_hash = init_state.get("selected_row_sha256")
+    if (
+        isinstance(selected_index, bool)
+        or not isinstance(selected_index, (int, np.integer))
+        or int(selected_index) < 0
+    ):
+        raise RuntimeError("paired evaluation init-state selected_index is invalid")
+    if (
+        not isinstance(selected_hash, str)
+        or len(selected_hash) != 64
+        or any(char not in "0123456789abcdefABCDEF" for char in selected_hash)
+    ):
+        raise RuntimeError("paired evaluation init-state SHA256 is missing or malformed")
+
+    horizon = _first_env_value(sub_env, ("episode_length", "_episode_length", "horizon", "_horizon"))
+    if isinstance(horizon, bool) or not isinstance(horizon, (int, np.integer)) or int(horizon) <= 0:
+        raise RuntimeError("paired evaluation requires a positive instantiated episode horizon")
+
+    cameras = _first_env_value(sub_env, ("camera_name", "camera_names", "_camera_names"))
+    if isinstance(cameras, str):
+        cameras = [item.strip() for item in cameras.split(",") if item.strip()]
+    elif cameras is not None:
+        cameras = [str(item) for item in cameras]
+    if not cameras:
+        raise RuntimeError("paired evaluation requires instantiated camera names")
+
+    height = _first_env_value(sub_env, ("observation_height", "_observation_height"))
+    width = _first_env_value(sub_env, ("observation_width", "_observation_width"))
+    if (
+        isinstance(height, bool)
+        or isinstance(width, bool)
+        or not isinstance(height, (int, np.integer))
+        or not isinstance(width, (int, np.integer))
+        or int(height) <= 0
+        or int(width) <= 0
+    ):
+        raise RuntimeError("paired evaluation requires instantiated observation height and width")
+
+    return {
+        "task_id": int(task_id),
+        "env_index": int(env_index),
+        "reset_sequence": int(reset_sequence),
+        "selected_init_state_index": int(selected_index),
+        "init_state_sha256": selected_hash.lower(),
+        "horizon": int(horizon),
+        "cameras": list(cameras),
+        "resolution": {"height": int(height), "width": int(width)},
+    }
 
 
 def _assert_graph_relations_not_removed(
@@ -116,6 +199,20 @@ class RandomizationAuditLogger:
         record["status"] = "ok" if complete else "failed_prompt_realization"
         record["details"]["prompt_status"] = "ok" if complete else "failed"
 
+    def details_for(self, *, task_id, env_index, reset_sequence) -> dict:
+        """Return the realized reset details for an already logged reset.
+
+        The scene randomizer writes the selected init-state evidence before the
+        task-description callback runs.  Paired evaluation enriches that same
+        record, rather than creating a second reset record that could drift from
+        the environment actually evaluated.
+        """
+        key = (int(task_id), int(env_index), int(reset_sequence))
+        try:
+            return self._records[key]["details"]
+        except KeyError as exc:
+            raise RuntimeError(f"randomization audit has no reset record for {key}") from exc
+
     def close(self):
         pending = [key for key, record in self._records.items() if record.get("status") != "ok"]
         if pending:
@@ -141,6 +238,7 @@ class TaskContextVecEnv:
         prompt_suffix_by_task=None,
         randomization_audit_logger=None,
         suite_mode="sealed_randomized",
+        paired_reset_mode=False,
     ):
         self.env = env
         self.live_generator = live_generator
@@ -153,6 +251,7 @@ class TaskContextVecEnv:
         self.prompt_suffix_by_task = prompt_suffix_by_task or {}
         self.randomization_audit_logger = randomization_audit_logger
         self.suite_mode = parse_suite_mode(suite_mode)
+        self.paired_reset_mode = bool(paired_reset_mode)
         self._debug_printed = False
 
     def __getattr__(self, name):
@@ -192,6 +291,21 @@ class TaskContextVecEnv:
                     prompt.encode("utf-8")
                 ).hexdigest(),
             }
+            paired_identity = None
+            if self.paired_reset_mode:
+                reset_details = self.randomization_audit_logger.details_for(
+                    task_id=task_id,
+                    env_index=getattr(sub_env, "_randomization_env_index", index),
+                    reset_sequence=reset_sequence,
+                )
+                paired_identity = _paired_reset_identity(
+                    sub_env=sub_env,
+                    task_id=task_id,
+                    env_index=getattr(sub_env, "_randomization_env_index", index),
+                    reset_sequence=reset_sequence,
+                    reset_details=reset_details,
+                )
+                details["reset_identity"] = paired_identity
             compensation = getattr(sub_env, "_paired_reset_compensation", None)
             if compensation is not None:
                 if not isinstance(compensation, dict) or compensation.get("detected") is not True:
@@ -206,11 +320,13 @@ class TaskContextVecEnv:
                     "triplet_sha256": hashlib.sha256(
                         json.dumps(triplets, sort_keys=True, separators=(",", ":")).encode("utf-8")
                     ).hexdigest(),
-                    "reset_identity": {
-                        "env_index": getattr(sub_env, "_randomization_env_index", 0),
-                        "reset_sequence": reset_sequence,
-                    },
                 })
+                if paired_identity is None:
+                    details["reset_identity"] = {
+                        "task_id": int(task_id),
+                        "env_index": int(getattr(sub_env, "_randomization_env_index", index)),
+                        "reset_sequence": reset_sequence,
+                    }
             self.randomization_audit_logger.update_prompt(
                 task_id=task_id,
                 env_index=getattr(sub_env, "_randomization_env_index", 0),
@@ -369,6 +485,22 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "True"}
 
 
+def _paired_evaluation_enabled() -> bool:
+    """Resolve the standard PEFT paired mode from an explicit environment flag.
+
+    Standard evaluations remain unchanged unless the launcher opts in with
+    ``PEFT_PAIRED_EVAL=1`` (or ``true``).  Invalid values fail closed instead
+    of being interpreted as a false/default condition.
+    """
+    raw = os.environ.get("PEFT_PAIRED_EVAL")
+    if raw is None:
+        return False
+    normalized = raw.strip().lower()
+    if normalized not in {"0", "1", "false", "true"}:
+        raise SystemExit("ERROR: PEFT_PAIRED_EVAL must be one of: 0, 1, false, true")
+    return normalized in {"1", "true"}
+
+
 def _suite_mode() -> str:
     """Resolve and validate the evaluation suite condition.
 
@@ -406,7 +538,7 @@ def _append_default_lerobot_args() -> None:
         (("--env.type",), os.environ.get("ENV_TYPE", "libero")),
         (("--env.task",), os.environ.get("ENV_TASK", "libero_spatial")),
         (("--env.task_ids",), os.environ.get("TASK_IDS", "[0,1,2,3,4,5,6,7,8,9]")),
-        (("--env.camera_name",), ",".join(LEROBOT_CAMERA_KEYS)),
+        (("--env.camera_name",), os.environ.get("EVAL_CAMERAS", ",".join(LEROBOT_CAMERA_KEYS))),
         (("--env.max_parallel_tasks",), os.environ.get("MAX_PARALLEL_TASKS", "1")),
         (("--eval.n_episodes",), os.environ.get("N_EPISODES", "1")),
         (("--eval.batch_size",), os.environ.get("BATCH_SIZE", "1")),
@@ -416,6 +548,22 @@ def _append_default_lerobot_args() -> None:
     rename_map = os.environ.get("RENAME_MAP")
     if rename_map:
         defaults.append((("--rename_map",), rename_map))
+
+    # Experimental launchers may seal these native LeRobot environment
+    # fields.  Only append them when explicitly supplied so historical runs
+    # retain their existing behavior, while paired experiments cannot merely
+    # record values that the evaluator silently ignores.
+    episode_length = os.environ.get("LIBERO_EPISODE_LENGTH")
+    if episode_length:
+        defaults.append((("--env.episode_length",), episode_length))
+    resolution = os.environ.get("EVAL_RESOLUTION")
+    if resolution:
+        defaults.extend(
+            [
+                (("--env.observation_height",), resolution),
+                (("--env.observation_width",), resolution),
+            ]
+        )
 
     for names, value in defaults:
         if names == ("--policy.n_action_steps",) and str(value).strip().lower() == "checkpoint":
@@ -543,23 +691,23 @@ def _patch_libero_env_terminal_reset_compensation() -> None:
 
 
 def _disable_vector_autoreset(vec_env) -> None:
-    """Require explicit vector resets for the paired graph evaluation."""
+    """Require explicit vector resets for any paired sealed evaluation."""
     mode = getattr(vec_env, "autoreset_mode", None)
     if mode is None:
         raise RuntimeError(
-            "graph paired evaluation cannot prove explicit-reset semantics: vector env lacks autoreset_mode"
+            "paired evaluation cannot prove explicit-reset semantics: vector env lacks autoreset_mode"
         )
     try:
         from gymnasium.vector.vector_env import AutoresetMode
         disabled = AutoresetMode.DISABLED
     except (ImportError, AttributeError) as exc:  # pragma: no cover - runtime dependency
-        raise RuntimeError("graph paired evaluation requires gymnasium AutoresetMode.DISABLED") from exc
+        raise RuntimeError("paired evaluation requires gymnasium AutoresetMode.DISABLED") from exc
     try:
         setattr(vec_env, "autoreset_mode", disabled)
     except Exception as exc:  # pragma: no cover - runtime dependency
-        raise RuntimeError("graph paired evaluation could not disable vector autoreset") from exc
+        raise RuntimeError("paired evaluation could not disable vector autoreset") from exc
     if getattr(vec_env, "autoreset_mode", None) != disabled:
-        raise RuntimeError("graph paired evaluation failed to disable vector autoreset")
+        raise RuntimeError("paired evaluation failed to disable vector autoreset")
     vec_env._paired_explicit_reset_mode = True
 
 
@@ -667,6 +815,7 @@ def _wrap_task_vec_envs(
     visual_prompt_suffix_by_task,
     randomization_audit_logger,
     suite_mode="sealed_randomized",
+    paired_reset_mode=False,
 ):
     if not isinstance(result, dict):
         return result
@@ -675,10 +824,7 @@ def _wrap_task_vec_envs(
         if not isinstance(suite_map, dict):
             continue
         for task_id, vec_env in list(suite_map.items()):
-            if (
-                suite_mode == "sealed_randomized"
-                and os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower() == "graph_treatment"
-            ):
+            if suite_mode == "sealed_randomized" and paired_reset_mode:
                 _disable_vector_autoreset(vec_env)
             wrapped = vec_env
             if suite_mode == "sealed_randomized":
@@ -717,6 +863,7 @@ def _wrap_task_vec_envs(
                 visual_prompt_suffix_by_task,
                 randomization_audit_logger,
                 suite_mode,
+                paired_reset_mode,
             )
             suite_map[task_id] = wrapped
 
@@ -750,6 +897,9 @@ def main() -> None:
     _append_default_lerobot_args()
 
     suite_mode = _suite_mode()
+    paired_eval = _paired_evaluation_enabled()
+    if paired_eval and suite_mode != "sealed_randomized":
+        raise SystemExit("ERROR: PEFT_PAIRED_EVAL requires SUITE_MODE=sealed_randomized")
 
     profile = os.environ.get("TRAINING_PROFILE", os.environ.get("PROFILE", "")).strip().lower()
     graph_profile = profile in {"graph_treatment", "arrow_graph_treatment"}
@@ -822,7 +972,8 @@ def main() -> None:
     if suite_mode == "sealed_randomized" and TASK_REMOVE_CONFIG:
         _patch_libero_env_bddl_selection(TASK_REMOVE_CONFIG)
 
-    if graph_profile:
+    paired_reset_mode = paired_eval or graph_profile
+    if paired_reset_mode:
         _patch_libero_env_terminal_reset_compensation()
 
     _patch_libero_env_camera_creation()
@@ -862,6 +1013,7 @@ def main() -> None:
             visual_prompt_suffix_by_task,
             randomization_audit_logger,
             suite_mode,
+            paired_reset_mode,
         )
 
     lerobot_eval.make_env = make_env_patched
