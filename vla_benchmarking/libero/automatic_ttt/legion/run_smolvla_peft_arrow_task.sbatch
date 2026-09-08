@@ -194,7 +194,9 @@ export BASELINE_EVAL_FILE
 EVAL_RESET_CONTRACT="$RUN_ROOT/eval_reset_contract.json"
 "$PYTHON" - "$BASELINE_EVAL_FILE" "$EVAL_RESET_CONTRACT" "$TASK_ID" <<'PY'
 import json, pathlib, sys
-eval_info, output, task_id = map(pathlib.Path, sys.argv[1:])
+eval_info = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+task_id = int(sys.argv[3])
 audit_path = eval_info.parent / "randomization_audit.jsonl"
 rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 identities = []
@@ -202,7 +204,7 @@ for row in rows:
     identity = row.get("details", {}).get("reset_identity")
     if not isinstance(identity, dict):
         raise SystemExit("baseline audit lacks reset_identity")
-    if int(identity.get("task_id", -1)) != int(task_id):
+    if int(identity.get("task_id", -1)) != task_id:
         raise SystemExit("baseline reset identity task mismatch")
     identities.append(identity)
 identities.sort(key=lambda item: int(item.get("selected_init_state_index", -1)))
@@ -211,7 +213,7 @@ if [item.get("selected_init_state_index") for item in identities] != list(range(
 hashes = [item.get("init_state_sha256") for item in identities]
 if any(not isinstance(value, str) or len(value) != 64 for value in hashes):
     raise SystemExit("baseline eval reset identities lack init_state_sha256")
-payload = {"schema_version": 1, "task_id": int(task_id),
+payload = {"schema_version": 1, "task_id": task_id,
            "reserved_eval_init_state_indices": list(range(10)),
            "reserved_eval_init_state_hashes": [value.lower() for value in hashes]}
 tmp = output.with_name("." + output.name + ".partial")

@@ -54,6 +54,8 @@ def test_launcher_uses_matching_sealed_evaluation_seeds():
     assert "SCHEDULER_DECAY_LR=2.5e-6" in text
     assert '--save_freq="$SAVE_FREQ"' in text
     assert 'print(min(2000, int(sys.argv[1])))' in text
+    assert 'task_id = int(sys.argv[3])' in text
+    assert 'eval_info, output, task_id = map(pathlib.Path, sys.argv[1:])' not in text
     assert "REQUESTED_EPOCHS=5" in text
     assert "math.ceil(epochs*frames/batch)" in text
     assert text.count("PEFT_PAIRED_EVAL=1") == 2
