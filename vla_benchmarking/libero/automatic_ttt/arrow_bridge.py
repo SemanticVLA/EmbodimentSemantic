@@ -65,13 +65,13 @@ class ArrowCanaryBridge(ArrowGraspControllerTeacher):
             )
         self.run_kwargs = dict(run_kwargs)
         super().__init__(
-            self._recover,
+            self._run_controller,
             teacher_id="arrow_grasp_controller",
             teacher_privilege="simulator_bbox_and_contact_state",
             requires_privileged_environment=True,
         )
 
-    def _recover(
+    def _run_controller(
         self,
         view: TakeoverEnvironmentView,
         request: TeacherRecoveryRequest,

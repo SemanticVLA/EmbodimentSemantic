@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 from .arrow_bridge import ArrowCanaryBridge
-from .contracts import ContractError, EpisodeSpec, SourceState, TeacherRecoveryRequest
+from .contracts import ContractError, EpisodeSpec, SourceState, TeacherRecoveryRequest, TeacherRecoveryResult
+from .teacher import PrivilegedTakeoverEnvironmentView
 
 
 def _bridge() -> ArrowCanaryBridge:
@@ -82,3 +83,40 @@ def test_bridge_accepts_numpy_arrow_endpoints_from_production_decoder():
     )
     assert geometry["source_uv"] == (3.0, 4.0)
     assert geometry["destination_uv"] == (5.0, 6.0)
+
+
+def test_fresh_recovery_coerces_controller_mapping_to_typed_result(monkeypatch, tmp_path):
+    from vla_benchmarking.libero.arrow_grasp_controller.controller import runner
+
+    monkeypatch.setattr(
+        runner,
+        "run_canary_episode",
+        lambda **_kwargs: {
+            "attempts": [],
+            "final_result": {"status": "task_failure", "evaluator_success": False},
+        },
+    )
+
+    class Env:
+        def observe(self):
+            return {"state": [0]}
+
+        def step(self, _action):
+            return {"done": False}
+
+    bridge = ArrowCanaryBridge(
+        worker=object(),
+        episode_runner=lambda **_kwargs: {},
+        source_uv=(1, 2),
+        output_root=tmp_path,
+        transition_getter=lambda _raw: [],
+        allow_stale_geometry_for_tests=True,
+    )
+    view = PrivilegedTakeoverEnvironmentView(
+        Env(), episode_id="episode-0", source_state=SourceState.SOURCE_UNHELD,
+    )
+
+    result = bridge.recover_from_reset(view, _request())
+
+    assert isinstance(result, TeacherRecoveryResult)
+    assert result.success is False
