@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 from ..shared.task_manifest import (
+    ARM_ONLY_ATOMIC_TASKS as _SHARED_ARM_ONLY_ATOMIC_TASKS,
     PICK_PLACE_TASKS as _SHARED_PICK_PLACE_TASKS,
     PickPlaceTask as _SharedPickPlaceTask,
 )
@@ -47,7 +48,12 @@ def _from_shared(task: _SharedPickPlaceTask) -> TaskSpec:
 PICK_PLACE_TASKS: tuple[TaskSpec, ...] = tuple(
     _from_shared(task) for task in _SHARED_PICK_PLACE_TASKS
 )
-TASKS_BY_NAME: Mapping[str, TaskSpec] = {task.name: task for task in PICK_PLACE_TASKS}
+ARM_ONLY_ATOMIC_TASKS: tuple[TaskSpec, ...] = tuple(
+    _from_shared(task) for task in _SHARED_ARM_ONLY_ATOMIC_TASKS
+)
+TASKS_BY_NAME: Mapping[str, TaskSpec] = {
+    task.name: task for task in (*PICK_PLACE_TASKS, *ARM_ONLY_ATOMIC_TASKS)
+}
 
 
 def get_task(name: str) -> TaskSpec:
@@ -61,4 +67,7 @@ def manifest() -> list[dict[str, Any]]:
     return [task.as_dict() for task in PICK_PLACE_TASKS]
 
 
-__all__ = ["PICK_PLACE_TASKS", "TASKS_BY_NAME", "TaskSpec", "get_task", "manifest"]
+__all__ = [
+    "PICK_PLACE_TASKS", "ARM_ONLY_ATOMIC_TASKS", "TASKS_BY_NAME", "TaskSpec",
+    "get_task", "manifest",
+]

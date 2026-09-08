@@ -97,9 +97,9 @@ def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int
     extrinsic = np.asarray(camera_utils.get_camera_extrinsic_matrix(sim, camera_name), dtype=np.float64)
     if intrinsic.shape != (3, 3) or extrinsic.shape != (4, 4):
         raise ValueError(f"unexpected calibration shapes K={intrinsic.shape}, T={extrinsic.shape}")
-    # robosuite's camera utility returns the positive OpenCV intrinsic matrix
+    # RoboSuite's camera utility returns the positive OpenCV intrinsic matrix
     # for the image after the native MuJoCo render is vertically flipped.
-    # Keep K unchanged: flipping K as well would mirror projected bboxes a
+    # Keep K unchanged: changing fy/cy here would mirror projected roles a
     # second time relative to the post-flip RGB/depth frame.
     image_intrinsic = intrinsic.copy()
     return CameraCalibration(

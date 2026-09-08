@@ -104,6 +104,17 @@ VERIFIED_TASK_ID = 0
 VERIFIED_SEED = 1000
 VERIFIED_RESOLUTION = 256
 
+# ``status`` describes execution lifecycle.  ``outcome_status`` describes the
+# benchmark result and is intentionally separate so a completed controller
+# failure cannot be mistaken for a missing/not-run cell.
+OUTCOME_STATUSES = frozenset({
+    "success", "failure", "not_run", "not_evaluated", "unresolved",
+})
+_CONTROLLER_FAILURE_STATUSES = frozenset({
+    "candidate_failed", "grasp_failed", "no_candidates", "recovery_failed",
+    "post_lift_retention_failed", "empty_gripper_likely",
+})
+
 
 def _resolve_controller_selection(
     *, controller_variant: str, controller_config: str | Path | None,
@@ -763,6 +774,123 @@ def _failure_class(stage: str, exc: BaseException) -> str:
     return "unknown_failure"
 
 
+def _controller_failure_reason(record: Mapping[str, Any]) -> str | None:
+    """Extract an explicit controller-terminal failure from preserved evidence.
+
+    The canonical Arrow wrapper can finish an episode with no evaluator Boolean
+    when candidate generation is exhausted or a grasp is lost before placement.
+    Those are executed controller failures, not missing cells.  Keep this
+    inference narrow: only named terminal statuses/errors in the manifest are
+    promoted; an otherwise empty completed record remains ``unresolved``.
+    """
+    audit = record.get("audit")
+    if not isinstance(audit, Mapping):
+        return None
+    manifest = audit.get("canary_manifest")
+    if not isinstance(manifest, Mapping):
+        return None
+    final = manifest.get("final_result")
+    final_status = ""
+    final_error = ""
+    if isinstance(final, Mapping):
+        final_status = str(final.get("status", "")).strip().lower()
+        final_error = str(final.get("error", "")).strip().lower()
+        if final.get("evaluator_success") is False:
+            return "task_failure"
+    attempts = manifest.get("attempts")
+    if not isinstance(attempts, list):
+        attempts = []
+    statuses: list[str] = []
+    last_attempt_errors: list[str] = []
+    for attempt in attempts:
+        if not isinstance(attempt, Mapping):
+            continue
+        status = str(attempt.get("status", "")).strip().lower()
+        if status:
+            statuses.append(status)
+        attempt_errors: list[str] = []
+        for result in attempt.get("results", []):
+            if not isinstance(result, Mapping):
+                continue
+            result_status = str(result.get("status", "")).strip().lower()
+            if result_status:
+                statuses.append(result_status)
+            error = str(result.get("error", "")).strip().lower()
+            if error:
+                attempt_errors.append(error)
+        last_attempt_errors = attempt_errors
+    # Only the terminal/last attempt is authoritative.  An earlier
+    # candidate_failed followed by a later selected attempt is a recovered
+    # episode, not a benchmark failure.
+    last_attempt_status = statuses[-1] if statuses else ""
+    if isinstance(final, Mapping):
+        terminal_errors = [final_error, *last_attempt_errors]
+        if final_status in {"selected", "placed", "completed", "success", "succeeded"}:
+            return None
+        if "post_lift_retention" in " ".join(error for error in terminal_errors if error):
+            return "post_lift_retention_failure"
+        if final_status in _CONTROLLER_FAILURE_STATUSES:
+            return final_status
+    if last_attempt_status == "no_candidates":
+        return "no_candidates"
+    if last_attempt_status in _CONTROLLER_FAILURE_STATUSES:
+        return last_attempt_status
+    return None
+
+
+def _outcome(record: Mapping[str, Any]) -> tuple[str, str]:
+    """Return explicit benchmark outcome and reason for one matrix cell."""
+    lifecycle = str(record.get("status", "")).strip().lower()
+    if lifecycle == "planned":
+        return "not_run", "planned"
+    if lifecycle == "running":
+        return "unresolved", "running"
+    if lifecycle == "interrupted":
+        return "unresolved", str(record.get("failure_class") or "interrupted")
+    if lifecycle == "failed":
+        controller_reason = _controller_failure_reason(record)
+        if controller_reason is not None:
+            return "failure", controller_reason
+        if record.get("failure_class") == "controller_failure":
+            return "failure", "controller_failure"
+        return "unresolved", str(
+            record.get("failure_class") or record.get("error_type") or "execution_failure"
+        )
+    if bool(record.get("dry_run")):
+        return "not_evaluated", "dry_run"
+    protocol = record.get("protocol")
+    if isinstance(protocol, Mapping) and protocol.get("motion_mode") == "dry_run":
+        return "not_evaluated", "dry_run"
+    evaluator = _audit_success(record)
+    if evaluator is None and isinstance(record.get("evaluator_result"), bool):
+        evaluator = record["evaluator_result"]
+    if evaluator is True:
+        return "success", "evaluator_success"
+    if evaluator is False:
+        return "failure", "task_failure"
+    controller_reason = _controller_failure_reason(record)
+    if controller_reason is not None:
+        return "failure", controller_reason
+    audit = record.get("audit")
+    if isinstance(audit, Mapping) and audit.get("evaluator_error"):
+        return "unresolved", "evaluator_error"
+    explicit = str(record.get("outcome_status", "")).strip().lower()
+    if explicit in OUTCOME_STATUSES:
+        return explicit, str(record.get("outcome_reason") or "recorded")
+    if lifecycle == "completed":
+        return "unresolved", "missing_evaluator_result"
+    return "not_run", "not_started"
+
+
+def _attach_outcome(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach durable outcome fields without changing legacy lifecycle fields."""
+    result = dict(record)
+    outcome_status, outcome_reason = _outcome(result)
+    result["outcome_status"] = outcome_status
+    result["outcome_reason"] = outcome_reason
+    return result
+
+
 def _error_record(
     cell: Mapping[str, Any], *, stage: str, exc: BaseException,
     motion_began: bool = False,
@@ -772,6 +900,8 @@ def _error_record(
         "status": "failed",
         "stage": stage,
         "failure_class": _failure_class(stage, exc),
+        "outcome_status": "unresolved",
+        "outcome_reason": _failure_class(stage, exc),
         "error_type": type(exc).__name__,
         "error": str(exc),
         "error_traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
@@ -999,6 +1129,18 @@ def _partition_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     evaluated = [value for value in evaluated if value is not None]
     successes = sum(value is True for value in evaluated)
     has_evaluator_result = bool(evaluated)
+    outcomes = [_outcome(record) for record in records]
+    outcome_counts = {
+        status: sum(outcome_status == status for outcome_status, _ in outcomes)
+        for status in sorted(OUTCOME_STATUSES)
+    }
+    outcome_reason_counts = {
+        reason: sum(outcome_reason == reason for _, outcome_reason in outcomes)
+        for reason in sorted({reason for _, reason in outcomes})
+    }
+    outcome_successes = outcome_counts["success"]
+    outcome_failures = outcome_counts["failure"]
+    outcome_denominator = outcome_successes + outcome_failures
     return {
         "total": len(records),
         "planned": len(records) - len(terminal),
@@ -1016,6 +1158,15 @@ def _partition_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "conservative_success_rate": (float(successes) / len(records))
         if records and has_evaluator_result else None,
         "evaluable_denominator": len(evaluated),
+        "outcome_status_counts": outcome_counts,
+        "outcome_reason_counts": outcome_reason_counts,
+        "outcome_successes": outcome_successes,
+        "outcome_failures": outcome_failures,
+        "outcome_denominator": outcome_denominator,
+        "outcome_success_rate": (
+            float(outcome_successes) / outcome_denominator
+            if outcome_denominator else None
+        ),
     }
 
 
@@ -1080,9 +1231,11 @@ def _planned_record(cell: Mapping[str, Any]) -> dict[str, Any]:
         "status": "planned",
         "stage": "planning",
         "failure_class": None,
-                "error_type": None,
-                "error": None,
-                "error_traceback": None,
+        "outcome_status": "not_run",
+        "outcome_reason": "planned",
+        "error_type": None,
+        "error": None,
+        "error_traceback": None,
         "audit_path": None,
         "audit": None,
         "diagnostics": None,
@@ -1621,7 +1774,10 @@ def _run_matrix_impl(
             return legacy
         return None
 
-    status_records = [prior_for_cell(cell) or _planned_record(cell) for cell in cells]
+    status_records = [
+        _attach_outcome(prior_for_cell(cell) or _planned_record(cell))
+        for cell in cells
+    ]
 
     def write_status() -> None:
         _atomic_write_text(
@@ -1650,8 +1806,9 @@ def _run_matrix_impl(
             + "\n",
         )
 
-    if not resume:
-        write_status()
+    # Also rewrite a resumed status snapshot so legacy cells receive the
+    # additive outcome fields even when execution selects no new cells.
+    write_status()
 
     def write_initial_manifest() -> None:
         """Initialize terminal-only JSONL; plan/status hold the full inventory."""
@@ -1659,7 +1816,7 @@ def _run_matrix_impl(
 
     def append_manifest(record: Mapping[str, Any]) -> None:
         """Append terminal/retry history without erasing earlier attempts."""
-        line = dict(record)
+        line = _attach_outcome(record)
         line.setdefault("protocol", protocol)
         line.setdefault("contract_hash", contract_hash)
         with manifest_path.open("a", encoding="utf-8") as manifest:
@@ -1778,6 +1935,7 @@ def _run_matrix_impl(
                 "provenance": provenance,
                 "contract_hash": contract_hash,
             })
+            running_record = _attach_outcome(running_record)
             if resolved_runtime_provenance is not None:
                 # Persist the exact validated runtime selection before env
                 # construction or motion, so failure records retain what was
@@ -2077,6 +2235,11 @@ def _run_matrix_impl(
                         "controller_variant", cell_record.get("controller_config_observed")
                     )
             cell_record["contract_hash"] = contract_hash
+            # Persist an explicit benchmark outcome independently of the
+            # execution lifecycle.  In particular, a completed controller
+            # failure with no evaluator Boolean is still ``failure`` while an
+            # evaluator/infra exception remains ``unresolved``.
+            cell_record = _attach_outcome(cell_record)
             status_records[cell_index] = cell_record
             records.append(cell_record)
             write_status()
@@ -2112,6 +2275,18 @@ def _run_matrix_impl(
     evaluated = [value for value in evaluated if value is not None]
     successes = sum(value is True for value in evaluated)
     has_evaluator_result = bool(evaluated)
+    outcome_pairs = [_outcome(record) for record in inventory_records]
+    outcome_status_counts = {
+        status: sum(outcome_status == status for outcome_status, _ in outcome_pairs)
+        for status in sorted(OUTCOME_STATUSES)
+    }
+    outcome_successes = outcome_status_counts["success"]
+    outcome_failures_count = outcome_status_counts["failure"]
+    outcome_denominator = outcome_successes + outcome_failures_count
+    outcome_reason_counts = {
+        reason: sum(outcome_reason == reason for _, outcome_reason in outcome_pairs)
+        for reason in sorted({reason for _, reason in outcome_pairs})
+    }
     class_records = [record for record in inventory_records if _record_failure_class(record) is not None]
     by_task_records = {
         task_id: [record for record in inventory_records if int(record["task_id"]) == task_id]
@@ -2157,6 +2332,34 @@ def _run_matrix_impl(
         if cells and evaluated else None,
         "evaluable_denominator": len(evaluated),
         "evaluable_success_rate": (float(successes) / len(evaluated)) if evaluated else None,
+        # Outcome fields are the unambiguous reporting surface.  Lifecycle
+        # fields above remain for backward compatibility with existing tools.
+        "outcome_status_counts": outcome_status_counts,
+        "outcome_reason_counts": outcome_reason_counts,
+        "outcome_successes": outcome_successes,
+        "outcome_failures_count": outcome_failures_count,
+        "outcome_unresolved_count": outcome_status_counts["unresolved"],
+        "outcome_not_run_count": outcome_status_counts["not_run"],
+        "outcome_not_evaluated_count": outcome_status_counts["not_evaluated"],
+        "outcome_denominator": outcome_denominator,
+        "outcome_success_rate": (
+            float(outcome_successes) / outcome_denominator
+            if outcome_denominator else None
+        ),
+        "outcome_failures": [
+            {
+                "cell_index": record["cell_index"],
+                "task_id": record["task_id"],
+                "episode_index": record["episode_index"],
+                "seed": record["seed"],
+                "output_dir": record["output_dir"],
+                "outcome_reason": reason,
+                "failure_class": _record_failure_class(record),
+                "status": record.get("status"),
+            }
+            for record, (outcome_status, reason) in zip(inventory_records, outcome_pairs)
+            if outcome_status == "failure"
+        ],
         "failed_cells": [
             {
                 "cell_index": record["cell_index"],

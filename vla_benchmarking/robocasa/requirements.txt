@@ -3,11 +3,13 @@
 # Python 3.11 is the RoboCasa reference setup.
 #
 # The controller loads the pinned MolmoPoint checkpoint locally.  These pins
-# mirror the known-good controller runtime; torch/torchvision remain supplied
-# by RoboCasa's pinned LeRobot dependency and the isolated Python environment.
+# mirror the known-good controller runtime, including its CUDA-compatible torch
+# stack. These versions are validated against the reusable Legion environment.
 numpy==2.2.5
 numba==0.61.2
 scipy==1.15.3
+torch==2.7.1
+torchvision==0.22.1
 opencv-python-headless==4.11.0.86
 mujoco==3.3.1
 lerobot==0.3.3

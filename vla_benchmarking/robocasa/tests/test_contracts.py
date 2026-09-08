@@ -21,11 +21,59 @@ from vla_benchmarking.robocasa.evaluation import (
 from vla_benchmarking.robocasa.evaluation.runner import build_rows, selected_tasks
 from vla_benchmarking.robocasa.evaluation.live import (
     RoboCasaControllerEnv,
+    RoboCasaLiveError,
     _source_label,
+    _project_bbox,
     _world_points,
     official_success,
     project_task_bboxes,
 )
+
+
+def _identity_capture(*, width: int = 256, height: int = 256, focal: float = 100.0):
+    return type("Capture", (), {
+        "rgb": np.zeros((height, width, 3), dtype=np.uint8),
+        "calibration": type("Calibration", (), {
+            "intrinsic": [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
+            "world_from_camera": np.eye(4).tolist(),
+        })(),
+    })()
+
+
+def test_project_bbox_gives_subpixel_in_frame_role_pixel_support() -> None:
+    capture = _identity_capture(focal=100.0)
+    # The world footprint is finite and visible, but projects to less than one
+    # pixel in both dimensions at this image resolution.
+    points = np.asarray([
+        [0.0, -1e-4, 1.0], [0.0, 1e-4, 1.0],
+    ])
+    bbox = _project_bbox(points, capture, width=256, height=256)
+    assert bbox[2] > bbox[0]
+    assert bbox[3] > bbox[1]
+    assert bbox[0] == pytest.approx(127.5)
+    assert bbox[2] == pytest.approx(128.5)
+
+
+def test_project_bbox_remains_fail_closed_when_role_is_out_of_frame() -> None:
+    capture = _identity_capture(focal=100.0)
+    points = np.asarray([
+        [-10.1, -1e-4, 1.0], [-10.0, 1e-4, 1.0],
+    ])
+    with pytest.raises(RoboCasaLiveError, match="no visible area"):
+        _project_bbox(points, capture, width=256, height=256)
+
+
+def test_project_bbox_accepts_overlapping_box_with_no_vertex_inside() -> None:
+    capture = _identity_capture(focal=100.0)
+    # The projected square spans [-72, 328] in both axes.  It covers the
+    # 256x256 image, but every vertex is outside the image rectangle.
+    points = np.asarray(
+        [(-2.0, -2.0, 1.0), (2.0, -2.0, 1.0),
+         (2.0, 2.0, 1.0), (-2.0, 2.0, 1.0)],
+        dtype=np.float64,
+    )
+    bbox = _project_bbox(points, capture, width=256, height=256)
+    assert bbox == pytest.approx((0.0, 0.0, 255.0, 255.0))
 from vla_benchmarking.robocasa.shared.config import TARGET_SPLIT, target_env_kwargs
 from vla_benchmarking.robocasa.shared.task_manifest import (
     PICK_PLACE_TASKS as SHARED_TASKS,

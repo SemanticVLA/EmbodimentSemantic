@@ -2023,5 +2023,3 @@ __all__ = [
     "measure_endpoint_change",
     "compute_endpoint_change",
 ]
-
-

@@ -9,6 +9,7 @@ from .config import (
     target_env_kwargs,
 )
 from .task_manifest import (
+    ARM_ONLY_ATOMIC_TASKS,
     PICK_PLACE_TASKS,
     PickPlaceTask,
     RoleSpec,
@@ -20,6 +21,7 @@ from .task_manifest import (
 __all__ = [
     "BENCHMARK_NAME",
     "CAMERA",
+    "ARM_ONLY_ATOMIC_TASKS",
     "PICK_PLACE_TASKS",
     "PickPlaceTask",
     "ROBOSUITE_COMMIT",

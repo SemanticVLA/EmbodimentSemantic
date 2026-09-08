@@ -440,5 +440,3 @@ __all__ = [
     "MolmoPointRuntimeError",
     "build_mask_highlight",
 ]
-
-

@@ -997,7 +997,7 @@ def _render_pair(
 
 
 def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int) -> CameraCalibration:
-    """Build the RoboCasa image-aligned calibration with positive OpenCV K."""
+    """Build the RoboCasa image-aligned calibration used by LIBERO agentview."""
     if camera_utils is None:
         raise RuntimeError("robosuite camera_utils is required for metric deprojection")
     intrinsic = np.asarray(
@@ -1008,9 +1008,13 @@ def build_camera_calibration(sim: Any, camera_name: str, width: int, height: int
     extrinsic = np.asarray(camera_utils.get_camera_extrinsic_matrix(sim, camera_name), dtype=np.float64)
     if intrinsic.shape != (3, 3) or extrinsic.shape != (4, 4):
         raise ValueError(f"unexpected calibration shapes K={intrinsic.shape}, T={extrinsic.shape}")
+    # The native MuJoCo render is flipped before the controller sees it, and
+    # RoboSuite's positive OpenCV K already describes that post-flip image.
+    # Keeping fy/cy positive preserves the LIBERO agentview projection.
+    image_intrinsic = intrinsic.copy()
     return CameraCalibration(
         camera_name=str(camera_name), width=int(width), height=int(height),
-        intrinsic=intrinsic.tolist(), world_from_camera=extrinsic.tolist(),
+        intrinsic=image_intrinsic.tolist(), world_from_camera=extrinsic.tolist(),
         raw_projection_intrinsic=intrinsic.tolist(),
         world_frame="robocasa_mujoco_world",
         projection_vertical_axis="robocasa_camera_utils_positive_opencv_K",

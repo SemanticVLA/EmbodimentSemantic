@@ -1,0 +1,64 @@
+{
+  "name": "object_contact_v3",
+  "base_profile": "canonical_molmo_rgbd_grasp",
+  "changed_factors": [
+    "v2 world-down and camera-ray approach hypotheses are retained",
+    "each admitted or permitted arrow-tail seed is promoted to a bounded visible upper surface",
+    "an 8-connected same-frame RGB-D top component replaces the point-local support patch",
+    "image-boundary rejection guards truncated target support",
+    "target contact is allowed only in the late measured finger/pad capture volume",
+    "local support surfaces below the promoted contact may be exempted only for measured finger/pad sweeps",
+    "all observed points remain in the full sweep; only late finger/pad contact volume is exempted",
+    "a robot-occluded arrow tail cannot seed fallback or model admission"
+  ],
+  "derivation_labels": {
+    "model_seed": "molmo_contact",
+    "empty_model_fallback": "arrow_tail_anchor",
+    "all_model_points_rejected_fallback": "arrow_tail_anchor_all_model_points_rejected",
+    "surface_promotion": "promoted_upper_surface",
+    "approach_hypotheses": [
+      "world_down",
+      "camera_ray"
+    ]
+  },
+  "prompt": "Point to visible grasp contact locations on the {noun} at the tail, or start, of the green arrow. Ignore the arrowhead and destination. Choose locations where a parallel-jaw gripper can descend from above, straddle the object, and close without touching nearby objects or support surfaces. Point only on the {noun}.",
+  "arrow_color_rgb": [
+    0,
+    166,
+    107
+  ],
+  "admission_gate": {
+    "distance": "finite same-frame RGB-D image-metric ellipse",
+    "threshold": "0.5 * robot_calibration.max_aperture_m"
+  },
+  "surface_promotion": {
+    "max_snap_radius_px": 12,
+    "max_displacement_m": 0.015,
+    "connectivity": 8,
+    "upper_band_m": 0.008,
+    "component_radius": "0.5 * robot_calibration.max_aperture_m",
+    "terminal_contact_allowance": "0.5 * robot_calibration.max_aperture_m",
+    "max_component_pixels": 512,
+    "max_component_fraction": 0.05,
+    "reject_outer_annulus": true,
+    "reject_image_boundary": true,
+    "adaptive_retries": [
+      {
+        "component_radius_m": "min(0.5 * robot_calibration.max_aperture_m, 0.012)",
+        "upper_band_m": 0.004
+      },
+      {
+        "component_radius_m": "min(0.5 * robot_calibration.max_aperture_m, 0.009)",
+        "upper_band_m": 0.003
+      }
+    ]
+  },
+  "approach_hypotheses": {
+    "camera_ray": "camera_origin_to_contact",
+    "max_tilt_deg": 55.0,
+    "direction": "camera_origin_toward_contact",
+    "world_down_retained": true
+  },
+  "candidate_engine": "generate_grasp_candidates",
+  "training": "none"
+}

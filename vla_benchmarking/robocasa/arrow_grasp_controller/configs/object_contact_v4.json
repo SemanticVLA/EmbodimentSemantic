@@ -1,0 +1,38 @@
+{
+  "name": "object_contact_v4",
+  "base_profile": "object_contact_v3",
+  "changed_factors": [
+    "object_contact_v3 behavior is retained as the control",
+    "a bounded same-frame upper outer ring may support frozen candidate geometry",
+    "the strict seed-connected component remains the only contact/collision target mask",
+    "generator anchors maximize local upper support within the inherited 15 mm displacement cap",
+    "outer-ring pixels never receive contact or collision exemptions",
+    "when both retained approaches are blocked by a measured non-target pixel, one blocker-away axis is tested within a 55 degree tilt cap",
+    "world-down and camera-ray approach hypotheses are retained"
+  ],
+  "derivation_labels": {
+    "model_seed": "molmo_contact",
+    "empty_model_fallback": "arrow_tail_anchor",
+    "all_model_points_rejected_fallback": "arrow_tail_anchor_all_model_points_rejected",
+    "surface_promotion": "promoted_upper_surface",
+    "approach_hypotheses": ["world_down", "camera_ray", "blocker_away"],
+    "geometry_support": "outer_annulus_geometry_only",
+    "contact_mask": "strict_seed_connected_component",
+    "blocker_away_approach": "same_frame_rgbd_non_target_rejection"
+  },
+  "prompt": "Point to visible grasp contact locations on the {noun} at the tail, or start, of the green arrow. Ignore the arrowhead and destination. Choose locations where a parallel-jaw gripper can descend from above, straddle the object, and close without touching nearby objects or support surfaces. Point only on the {noun}.",
+  "geometry_contact_split": {
+    "geometry_support": "bounded_same_frame_outer_ring",
+    "contact_mask": "strict_seed_connected_component",
+    "contact_exemption": "measured_pad_prism_and_local_support_only"
+  },
+  "approach_hypotheses": {
+    "camera_ray": "camera_origin_to_contact",
+    "blocker_away": "same_frame_rgbd_non_target_rejection",
+    "max_tilt_deg": 55.0,
+    "direction": "camera_origin_toward_contact",
+    "world_down_retained": true
+  },
+  "candidate_engine": "generate_grasp_candidates",
+  "training": "none"
+}

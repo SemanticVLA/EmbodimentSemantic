@@ -136,20 +136,48 @@ PICK_PLACE_TASKS: tuple[PickPlaceTask, ...] = (
     PickPlaceTask("PickPlaceCounterToBlender", _obj("obj"), _fixture("self.blender"), "obj inside blender; gripper far"),
 )
 
+# A small arm-only atomic extension requested for the exploratory sweep.  The
+# canonical PickPlace-21 tuple remains unchanged so historical full-mode
+# accounting and its 21-task contract are preserved.
+ARM_ONLY_ATOMIC_TASKS: tuple[PickPlaceTask, ...] = (
+    PickPlaceTask(
+        "CoffeeSetupMug",
+        _obj("obj"),
+        _region("self.coffee_machine", "bottom"),
+        "mug under coffee-machine dispenser; gripper far",
+        notes="Official atomic task CoffeeSetupMug; the coffee-machine bottom reset region is the pouring target.",
+    ),
+    PickPlaceTask(
+        "CloseBlenderLid",
+        RoleSpec(
+            key="blender_lid",
+            kind="fixture",
+            label_mode="static",
+            static_label="blender lid",
+            supports_direct_bbox=False,
+        ),
+        _region("self.blender", "lid_closed"),
+        "blender lid on blender; gripper far",
+        notes="Official atomic task CloseBlenderLid; the target is the measured closed-lid pose.",
+    ),
+)
+
 
 _TASKS_BY_NAME = {task.name: task for task in PICK_PLACE_TASKS}
+_TASKS_BY_NAME.update({task.name: task for task in ARM_ONLY_ATOMIC_TASKS})
 
 
 def iter_tasks(names: Iterable[str] | None = None) -> tuple[PickPlaceTask, ...]:
     """Return manifest entries in stable order, optionally selecting names."""
 
+    registered = (*PICK_PLACE_TASKS, *ARM_ONLY_ATOMIC_TASKS)
     if names is None:
         return PICK_PLACE_TASKS
     selected = set(names)
     unknown = selected.difference(_TASKS_BY_NAME)
     if unknown:
         raise KeyError(f"unknown RoboCasa PickPlace task(s): {sorted(unknown)}")
-    return tuple(task for task in PICK_PLACE_TASKS if task.name in selected)
+    return tuple(task for task in registered if task.name in selected)
 
 
 def get_task(name: str) -> PickPlaceTask:
@@ -179,6 +207,7 @@ validate_manifest()
 
 __all__ = [
     "PICK_PLACE_TASKS",
+    "ARM_ONLY_ATOMIC_TASKS",
     "PickPlaceTask",
     "RoleKind",
     "RoleSpec",

@@ -481,6 +481,10 @@ class PerceptionRequest:
     previous_candidate_ids: tuple[str, ...]
     output_dir: Path
     placement_displacement_world_m: tuple[float, float, float] | None = None
+    # The exact arrow rendering paired with the RGB-D capture.  Kept optional
+    # at the tail of the dataclass so existing positional canonical fixtures
+    # retain their call contract; object_contact_v1 requires it explicitly.
+    arrow_rgb: Any | None = None
 
 
 class PerceptionWorker(Protocol):
@@ -905,6 +909,7 @@ def run_canary_episode(
             previous_candidate_ids=previous_ids,
             output_dir=root,
             placement_displacement_world_m=displacement,
+            arrow_rgb=None if arrow_rgb is None else np.asarray(arrow_rgb, dtype=np.uint8),
         )
         # Candidate geometry must use a no-motion probe synchronized with the
         # exact capture that feeds proposal generation.  This is called for
@@ -1033,7 +1038,7 @@ def build_local_molmo_runtime(
         from vla_benchmarking.robocasa.arrow_grasp_controller.controller.molmopoint import MolmoPointRuntime, MolmoPointRuntimeConfig, PROMPT_VARIANTS
     if str(molmopoint_prompt_id) not in PROMPT_VARIANTS:
         raise ValueError(f"unknown MolmoPoint prompt id: {molmopoint_prompt_id}")
-    return MolmoPointRuntime(MolmoPointRuntimeConfig(
+    runtime = MolmoPointRuntime(MolmoPointRuntimeConfig(
         model_id=str(molmopoint_model), model_revision=str(molmopoint_revision),
         transformers_version=TRANSFORMERS_VERSION, dtype=MODEL_DTYPE,
         device=device, device_map=MODEL_DEVICE_MAP,
@@ -1042,6 +1047,31 @@ def build_local_molmo_runtime(
         padding_side=MOLMOPOINT_PADDING_SIDE,
         prompt_id=str(molmopoint_prompt_id), prompt=PROMPT_VARIANTS[str(molmopoint_prompt_id)],
     ))
+    # MolmoPoint's model shards are large and are loaded before the canonical
+    # runtime asks Transformers for its processor.  On a fresh shared cache a
+    # model download can finish while the small processor files are still
+    # absent, causing every episode in the batch to fail at construction.  A
+    # processor-only prefetch makes the cache contract explicit without
+    # loading weights, changing the pinned model, or touching inference.
+    try:
+        import transformers
+    except ModuleNotFoundError:
+        # Dependency-light provenance and resume tests intentionally run
+        # without the live VLM stack; the runtime will report the dependency
+        # boundary when an actual motion cell requests inference.
+        return runtime
+    try:
+        transformers.AutoProcessor.from_pretrained(
+                str(molmopoint_model),
+                trust_remote_code=True,
+                revision=str(molmopoint_revision),
+                padding_side=MOLMOPOINT_PADDING_SIDE,
+            )
+    except Exception as exc:  # pragma: no cover - depends on live HF cache
+        raise RuntimeError(
+            "MolmoPoint processor assets could not be prefetched"
+        ) from exc
+    return runtime
 
 
 def preflight_local_molmo_runtime(molmo: Any, *, load_models: bool = False) -> dict[str, Any]:
@@ -1120,10 +1150,20 @@ def _deproject_capture(capture: Any, uv: Sequence[float]) -> np.ndarray:
 class ModelPerceptionWorker:
     """Persistent MolmoPoint worker with deterministic RGB-D geometry."""
 
-    def __init__(self, molmo: Any, robot_calibration: Any, *, effective_prompt: str | None = None) -> None:
+    def __init__(
+        self,
+        molmo: Any,
+        robot_calibration: Any,
+        *,
+        effective_prompt: str | None = None,
+        grasp_profile: str = "canonical_rim",
+    ) -> None:
         self.molmo = molmo
         self.robot_calibration = robot_calibration
         self.effective_prompt = effective_prompt
+        if grasp_profile not in {"canonical_rim", "object_contact_v1", "object_contact_v2", "object_contact_v3", "object_contact_v4", "object_contact_v5"}:
+            raise ValueError("grasp_profile must be canonical_rim, object_contact_v1, object_contact_v2, object_contact_v3, object_contact_v4, or object_contact_v5")
+        self.grasp_profile = grasp_profile
 
     @staticmethod
     def _write_overlay(
@@ -1171,6 +1211,18 @@ class ModelPerceptionWorker:
 
     def _propose_rgbd(self, request: PerceptionRequest) -> Any:
         """Generate candidates from arrow-seeded RGB-D support only."""
+        if self.grasp_profile in {"object_contact_v1", "object_contact_v2", "object_contact_v3", "object_contact_v4", "object_contact_v5"}:
+            try:
+                from .object_contact import propose_object_contact, propose_object_contact_v2, propose_object_contact_v3, propose_object_contact_v4, propose_object_contact_v5
+            except ImportError:  # pragma: no cover - direct script use
+                from vla_benchmarking.robocasa.arrow_grasp_controller.controller.object_contact import propose_object_contact, propose_object_contact_v2, propose_object_contact_v3, propose_object_contact_v4, propose_object_contact_v5
+            proposer = {"object_contact_v1": propose_object_contact, "object_contact_v2": propose_object_contact_v2, "object_contact_v3": propose_object_contact_v3, "object_contact_v4": propose_object_contact_v4, "object_contact_v5": propose_object_contact_v5}[self.grasp_profile]
+            return proposer(
+                molmo=self.molmo,
+                request=request,
+                robot_calibration=self.robot_calibration,
+                prompt=self.effective_prompt or "",
+            )
         try:
             from .grasp_candidates import MolmoPoint, generate_grasp_candidates
             from vla_benchmarking.robocasa.arrow_grasp_controller.legacy_engine.rgbd_region import derive_observed_region_mask
@@ -1268,36 +1320,99 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
         def __getattr__(self, name: str) -> Any:
             return getattr(self._source, name)
 
+        def _name_pairs(self, kind: str) -> list[tuple[int, str]]:
+            pairs: dict[int, str] = {}
+            source_wrapper = self._source
+            source = getattr(source_wrapper, "_model", source_wrapper)
+            available = getattr(source, f"{kind}_names", None)
+            if isinstance(available, Mapping):
+                for actual, index in available.items():
+                    try:
+                        pairs[int(index)] = str(actual)
+                    except (TypeError, ValueError):
+                        continue
+            elif isinstance(available, (list, tuple)):
+                pairs.update({index: str(actual) for index, actual in enumerate(available)})
+            names_mapping = getattr(source, "names", None)
+            if isinstance(names_mapping, Mapping):
+                listed = names_mapping.get(kind)
+                if isinstance(listed, Mapping):
+                    for actual, index in listed.items():
+                        try:
+                            pairs[int(index)] = str(actual)
+                        except (TypeError, ValueError):
+                            continue
+                elif isinstance(listed, (list, tuple)):
+                    pairs.update({index: str(actual) for index, actual in enumerate(listed)})
+            count = getattr(source, f"n{kind}", None)
+            if count is None:
+                count = len(pairs)
+            id2name = getattr(source, f"{kind}_id2name", None)
+            if callable(id2name):
+                for index in range(int(count)):
+                    try:
+                        actual = id2name(index)
+                    except (AttributeError, KeyError, ValueError, IndexError, TypeError):
+                        continue
+                    if actual:
+                        pairs[index] = str(actual)
+            accessor = getattr(source, kind, None)
+            if callable(accessor):
+                for index in range(int(count)):
+                    try:
+                        item = accessor(index)
+                        item_id = int(getattr(item, "id", index))
+                        actual = getattr(item, "name", None)
+                    except (AttributeError, KeyError, ValueError, IndexError, TypeError):
+                        continue
+                    if actual:
+                        pairs[item_id] = str(actual)
+            if not callable(id2name) and not callable(accessor) and not pairs:
+                try:
+                    import mujoco
+
+                    object_type = getattr(mujoco.mjtObj, f"mjOBJ_{kind.upper()}")
+                    for index in range(int(count)):
+                        actual = mujoco.mj_id2name(source, object_type, index)
+                        if actual:
+                            pairs[index] = str(actual)
+                except (ImportError, AttributeError, KeyError, ValueError, TypeError):
+                    pass
+            return sorted(pairs.items())
+
+        def _id2name(self, kind: str, index: int) -> str | None:
+            for candidate_index, actual in self._name_pairs(kind):
+                if int(candidate_index) == int(index):
+                    return actual
+            return None
+
         def _name2id(self, kind: str, name: str) -> int:
+            pairs = self._name_pairs(kind)
+            for index, actual_name in pairs:
+                if actual_name == str(name):
+                    return int(index)
+            suffix = f"_{name}"
+            matches = [(index, actual_name) for index, actual_name in pairs if actual_name.endswith(suffix)]
+            if len(matches) == 1:
+                return int(matches[0][0])
+            if len(matches) > 1:
+                raise KeyError(f"ambiguous {kind} suffix {name!r}: {matches}")
+            # A legacy resolver can be the only available source on tiny
+            # fixtures.  Missing aliases must be caught so suffix lookup is
+            # never short-circuited by a ValueError.
             legacy = getattr(self._source, f"{kind}_name2id", None)
             if callable(legacy):
-                return int(legacy(name))
+                try:
+                    return int(legacy(name))
+                except (AttributeError, KeyError, ValueError, IndexError, TypeError):
+                    pass
             accessor = getattr(self._source, kind, None)
-            if not callable(accessor):
-                raise KeyError(name)
-            try:
-                return int(accessor(name).id)
-            except (AttributeError, KeyError, ValueError, IndexError, TypeError):
-                pass
-            count = int(getattr(self._source, f"n{kind}", 0))
-            suffix = f"_{name}"
-            matches: list[int] = []
-            for index in range(count):
-                item = accessor(index)
-                actual_name = str(getattr(item, "name", "") or "")
-                if not actual_name:
-                    try:
-                        import mujoco
-
-                        object_type = getattr(mujoco.mjtObj, f"mjOBJ_{kind.upper()}")
-                        actual_name = str(mujoco.mj_id2name(self._source, object_type, index) or "")
-                    except (AttributeError, KeyError, TypeError, ValueError):
-                        actual_name = ""
-                if actual_name == name or actual_name.endswith(suffix):
-                    matches.append(int(getattr(item, "id", index)))
-            if len(matches) != 1:
-                raise KeyError(name)
-            return matches[0]
+            if callable(accessor):
+                try:
+                    return int(accessor(name).id)
+                except (AttributeError, KeyError, ValueError, IndexError, TypeError):
+                    pass
+            raise KeyError(name)
 
         def site_name2id(self, name: str) -> int:
             return self._name2id("site", name)
@@ -1309,35 +1424,161 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
             return self._name2id("geom", name)
 
         def geom_id2name(self, index: int) -> str | None:
-            legacy = getattr(self._source, "geom_id2name", None)
-            if callable(legacy):
-                return legacy(index)
-            accessor = getattr(self._source, "geom", None)
-            if not callable(accessor):
-                return None
-            return getattr(accessor(int(index)), "name", None)
+            return self._id2name("geom", int(index))
+
+        def site_id2name(self, index: int) -> str | None:
+            return self._id2name("site", int(index))
+
+        def body_id2name(self, index: int) -> str | None:
+            return self._id2name("body", int(index))
 
     local_data = _B0DataView(world_data)
+
+    def _data_value(source: Any, *names: str) -> Any:
+        """Read the first available MuJoCo array without mutating ``source``."""
+        for name in names:
+            try:
+                return getattr(source, name)
+            except AttributeError:
+                continue
+        return None
+
     def _local_points(value: Any) -> Any:
         arr = np.asarray(value, dtype=np.float64)
         if arr.ndim >= 2 and arr.shape[-1] == 3:
             return np.einsum("ij,...j->...i", R_bw, arr) + t_bw
         return value
+
     def _local_rotations(value: Any) -> Any:
         arr = np.asarray(value, dtype=np.float64)
+        if arr.ndim >= 1 and arr.shape[-1] == 9:
+            original_shape = arr.shape
+            matrices = arr.reshape(-1, 3, 3)
+            transformed = np.einsum("ij,...jk->...ik", R_bw, matrices)
+            return transformed.reshape(original_shape)
         if arr.ndim >= 2 and arr.shape[-2:] == (3, 3):
             return np.einsum("ij,...jk->...ik", R_bw, arr)
         return value
-    for _name in ("site_xpos", "body_xpos", "xpos", "geom_xpos"):
-        if hasattr(world_data, _name):
-            setattr(local_data, _name, _local_points(getattr(world_data, _name)))
-    for _name in ("site_xmat", "body_xmat", "geom_xmat"):
-        if hasattr(world_data, _name):
-            setattr(local_data, _name, _local_rotations(getattr(world_data, _name)))
+
+    for _target, _aliases in (
+        ("site_xpos", ("site_xpos",)),
+        ("body_xpos", ("body_xpos", "xpos")),
+        ("xpos", ("xpos", "body_xpos")),
+        ("geom_xpos", ("geom_xpos",)),
+    ):
+        value = _data_value(world_data, *_aliases)
+        if value is not None:
+            setattr(local_data, _target, _local_points(value))
+    for _target, _aliases in (
+        ("site_xmat", ("site_xmat",)),
+        ("body_xmat", ("body_xmat", "xmat")),
+        ("geom_xmat", ("geom_xmat",)),
+    ):
+        value = _data_value(world_data, *_aliases)
+        if value is not None:
+            setattr(local_data, _target, _local_rotations(value))
     local_sim = type("_B0Sim", (), {})()
     local_sim.model = _MujocoModelView(getattr(sim_world, "model", None))
     local_sim.data = local_data
-    record = probe_grip_site_frame(local_sim)
+
+    def _right_robot() -> tuple[Any, bool]:
+        """Return the right robot and whether this is an authoritative mapping."""
+        if not hasattr(env, "robots"):
+            return None, False
+        robots = getattr(env, "robots", None)
+        if robots is None:
+            raise RuntimeError("Panda calibration probe found a real env without a robot mapping")
+        try:
+            if len(robots) != 1:
+                raise RuntimeError("Panda calibration probe requires exactly one authoritative robot")
+            robot = robots[0]
+        except (IndexError, KeyError, TypeError):
+            raise RuntimeError("Panda calibration probe found a real env without a robot mapping")
+        if robot is None:
+            raise RuntimeError("Panda calibration probe found a real env without a robot mapping")
+        return robot, True
+
+    robot, authoritative_robot = _right_robot()
+    model_view = local_sim.model
+    site_name_candidates: tuple[str, ...] = ("grip_site", "gripper0_grip_site", "robot0_grip_site")
+    body_name_candidates: tuple[str, ...] = ("right_hand", "robot0_right_hand", "panda_hand", "gripper0_hand")
+    scoped_body_candidates: dict[str, tuple[str, ...]] = {}
+    scoped_geom_candidates: dict[str, tuple[str, ...]] = {}
+    authoritative_site_id: int | None = None
+    if authoritative_robot:
+        eef_ids = getattr(robot, "eef_site_id", None)
+        if isinstance(eef_ids, Mapping):
+            if "right" in eef_ids:
+                authoritative_site_id = int(eef_ids["right"])
+            else:
+                raise RuntimeError("Panda calibration probe requires authoritative robot.eef_site_id['right']")
+        elif eef_ids is not None:
+            authoritative_site_id = int(eef_ids)
+        if authoritative_site_id is None or authoritative_site_id < 0:
+            raise RuntimeError("Panda calibration probe requires authoritative robot.eef_site_id['right']")
+        authoritative_site_name = model_view.site_id2name(authoritative_site_id)
+        if not authoritative_site_name:
+            raise RuntimeError("Panda calibration probe could not name authoritative eef site")
+        site_name_candidates = (str(authoritative_site_name),)
+        grippers = getattr(robot, "gripper", None)
+        if isinstance(grippers, Mapping):
+            gripper = grippers.get("right")
+        else:
+            raise RuntimeError("Panda calibration probe requires authoritative robot.gripper['right']")
+        if gripper is None:
+            raise RuntimeError("Panda calibration probe requires authoritative robot.gripper['right']")
+        important_sites = getattr(gripper, "important_sites", None) if gripper is not None else None
+        if not isinstance(important_sites, Mapping) or "grip_site" not in important_sites:
+            raise RuntimeError("Panda calibration probe requires gripper important_sites['grip_site']")
+        important_site = important_sites["grip_site"]
+        if isinstance(important_site, str):
+            try:
+                important_site = model_view.site_name2id(important_site)
+            except (KeyError, ValueError, IndexError, TypeError):
+                raise RuntimeError("Panda calibration probe could not resolve robot gripper important_sites['grip_site']")
+        if int(important_site) != authoritative_site_id:
+            raise RuntimeError(
+                "Panda calibration probe found inconsistent eef_site_id and gripper important_sites"
+            )
+        robot_model = getattr(robot, "robot_model", None)
+        eef_name = getattr(robot_model, "eef_name", None) if robot_model is not None else None
+        if isinstance(eef_name, Mapping):
+            eef_name = eef_name.get("right")
+        if not eef_name:
+            raise RuntimeError("Panda calibration probe requires robot.robot_model.eef_name")
+        eef_name = str(eef_name)
+        body_name_candidates = tuple(dict.fromkeys((eef_name, f"robot0_{eef_name}", "right_hand", "robot0_right_hand")))
+        scope = str(authoritative_site_name)
+        if scope.endswith("_grip_site"):
+            scope = scope[: -len("_grip_site")]
+        if scope:
+            scoped_body_candidates = {
+                "left": (f"{scope}_leftfinger", f"{scope}_left_finger"),
+                "right": (f"{scope}_rightfinger", f"{scope}_right_finger"),
+                "right_gripper": (f"{scope}_right_gripper",),
+            }
+            scoped_geom_candidates = {
+                "left_pad": (f"{scope}_finger1_pad_collision",),
+                "right_pad": (f"{scope}_finger2_pad_collision",),
+                "hand": (f"{scope}_hand_collision",),
+                "fingers": (f"{scope}_finger1_collision", f"{scope}_finger2_collision"),
+            }
+
+    record = probe_grip_site_frame(
+        local_sim,
+        site_name=site_name_candidates[0] if authoritative_robot else None,
+        body_name=body_name_candidates[0] if authoritative_robot else None,
+    )
+    if authoritative_site_id is not None and int(record.get("site_id", -1)) != authoritative_site_id:
+        raise RuntimeError("Panda calibration probe did not use authoritative robot eef site")
+    if authoritative_robot:
+        record = dict(record)
+        record["authoritative_robot_mapping"] = {
+            "source": "robot.eef_site_id_and_gripper.important_sites",
+            "eef_site_id": int(authoritative_site_id),
+            "eef_site_name": str(site_name_candidates[0]),
+            "eef_body_name_requested": str(body_name_candidates[0]),
+        }
     if not bool(record.get("passed")):
         raise RuntimeError("Panda grip-site frame probe failed")
     transform = np.asarray(record["observed_body_to_site_rotation_matrix"], dtype=np.float64)
@@ -1346,46 +1587,67 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
     if model is None or data is None:
         raise RuntimeError("Panda calibration probe requires MuJoCo model/data")
 
-    def named_id(kind: str, names: Sequence[str]) -> tuple[int, str]:
+    def resolve_model_name(kind: str, names: Sequence[str]) -> tuple[int, str]:
+        """Resolve a candidate set with exact precedence and unique suffixes."""
+        candidates = tuple(str(name) for name in names if name)
+        pairs = model._name_pairs(kind)
+        by_name = {actual: int(index) for index, actual in pairs}
+        for candidate in candidates:
+            if candidate in by_name:
+                return by_name[candidate], candidate
+        for candidate in candidates:
+            matches = [(int(index), actual) for index, actual in pairs if actual.endswith(f"_{candidate}")]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise RuntimeError(
+                    f"Panda calibration probe found ambiguous {kind} suffix {candidate!r}: "
+                    + ", ".join(actual for _, actual in matches)
+                )
         resolver = getattr(model, f"{kind}_name2id", None)
-        for name in names:
-            if callable(resolver):
+        if callable(resolver):
+            for candidate in candidates:
                 try:
-                    idx = int(resolver(name))
-                except (KeyError, ValueError, IndexError, TypeError):
+                    index = int(resolver(candidate))
+                except (AttributeError, KeyError, ValueError, IndexError, TypeError):
                     continue
-                if idx >= 0:
-                    return idx, name
-        raise RuntimeError(f"Panda calibration probe could not resolve {kind} names {tuple(names)!r}")
+                if index >= 0:
+                    actual = model._id2name(kind, index) or candidate
+                    return index, str(actual)
+        raise RuntimeError(f"Panda calibration probe could not resolve {kind} names {candidates!r}")
+
+    def named_id(kind: str, names: Sequence[str]) -> tuple[int, str]:
+        return resolve_model_name(kind, names)
 
     def optional_named_id(kind: str, names: Sequence[str]) -> tuple[int, str] | None:
         """Resolve a model name when present (fixtures omit some Panda geoms)."""
-        resolver = getattr(model, f"{kind}_name2id", None)
-        if not callable(resolver):
+        try:
+            return resolve_model_name(kind, names)
+        except RuntimeError as exc:
+            if "ambiguous" in str(exc):
+                raise
             return None
-        for name in names:
-            try:
-                idx = int(resolver(name))
-            except (KeyError, ValueError, IndexError, TypeError):
-                continue
-            if idx >= 0:
-                return idx, name
-        return None
 
     # Robosuite's Panda XML exposes the two finger bodies under these stable
     # names.  Resolve them as an identity check, but use contact-pad geoms
     # below for all physical aperture and translation measurements.
-    left_id, left_name = named_id("body", ("gripper0_leftfinger", "gripper0_left_finger", "leftfinger", "left_finger"))
-    right_id, right_name = named_id("body", ("gripper0_rightfinger", "gripper0_right_finger", "rightfinger", "right_finger"))
+    left_body_names = scoped_body_candidates.get("left", ()) + (
+        "gripper0_leftfinger", "gripper0_left_finger", "leftfinger", "left_finger"
+    )
+    right_body_names = scoped_body_candidates.get("right", ()) + (
+        "gripper0_rightfinger", "gripper0_right_finger", "rightfinger", "right_finger"
+    )
+    left_id, left_name = named_id("body", left_body_names)
+    right_id, right_name = named_id("body", right_body_names)
 
     # Use the MuJoCo contact-pad geoms, not finger-body origins.  Body origins
     # are useful as a fallback diagnostic but are not a calibrated contact
     # point and must never determine aperture or the grasp-site translation.
-    left_pad_id, left_pad_name = named_id("geom", (
+    left_pad_id, left_pad_name = named_id("geom", scoped_geom_candidates.get("left_pad", ()) + (
         "gripper0_finger1_pad_collision", "finger1_pad_collision",
         "gripper0_leftfinger_pad_collision", "leftfinger_pad_collision",
     ))
-    right_pad_id, right_pad_name = named_id("geom", (
+    right_pad_id, right_pad_name = named_id("geom", scoped_geom_candidates.get("right_pad", ()) + (
         "gripper0_finger2_pad_collision", "finger2_pad_collision",
         "gripper0_rightfinger_pad_collision", "rightfinger_pad_collision",
     ))
@@ -1477,7 +1739,9 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
     # when available, and explicitly resolve the stable palm collision geom
     # because some MuJoCo models omit body-parent metadata on lightweight
     # wrappers.  Finger collision meshes are likewise included by name.
-    right_gripper = optional_named_id("body", ("gripper0_right_gripper", "right_gripper"))
+    right_gripper = optional_named_id(
+        "body", scoped_body_candidates.get("right_gripper", ()) + ("gripper0_right_gripper", "right_gripper")
+    )
     hand_body_ids = {int(left_id), int(right_id), int(palm_id)}
     if right_gripper is not None:
         hand_body_ids.add(int(right_gripper[0]))
@@ -1489,8 +1753,8 @@ def probe_robot_calibration(env: Any) -> tuple[Any, np.ndarray, Mapping[str, Any
     collision_boxes: list[dict[str, Any]] = []
     candidate_geom_ids = {int(left_pad_id), int(right_pad_id)}
     for geom_names in (
-        ("gripper0_hand_collision", "hand_collision"),
-        (
+        scoped_geom_candidates.get("hand", ()) + ("gripper0_hand_collision", "hand_collision"),
+        scoped_geom_candidates.get("fingers", ()) + (
             "gripper0_leftfinger_collision", "gripper0_rightfinger_collision",
             "gripper0_finger1_collision", "gripper0_finger2_collision",
             "leftfinger_collision", "rightfinger_collision", "finger1_collision", "finger2_collision",
@@ -1922,9 +2186,14 @@ def run_episode(
     evaluator: Callable[[Any], bool],
     arrow_refresh_builder: Callable[[Any, Any], tuple[np.ndarray, Mapping[str, Sequence[float]], str, str]] | None = None,
     source_prompt: str | None = None,
+    molmo_runtime: Any | None = None,
+    grasp_profile: str = "canonical_rim",
 ) -> dict[str, Any]:
     """Execute one faithful local copy of the canonical high-level pipeline."""
     from . import episode_contract as episode
+
+    if grasp_profile not in {"canonical_rim", "object_contact_v1", "object_contact_v2", "object_contact_v3", "object_contact_v4", "object_contact_v5"}:
+        raise ValueError("grasp_profile must be canonical_rim, object_contact_v1, object_contact_v2, object_contact_v3, object_contact_v4, or object_contact_v5")
 
     root = Path(output_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -1957,11 +2226,14 @@ def run_episode(
             raise RuntimeError("preshape opening measurement is non-finite")
         return opening
 
-    molmo = build_local_molmo_runtime()
+    molmo = molmo_runtime if molmo_runtime is not None else build_local_molmo_runtime()
     calibration_obj, transform, probe = probe_robot_calibration(env)
     calibration_holder["transform"] = np.asarray(transform, dtype=np.float64)
     calibration_holder["probe"] = probe
+    # Keep the high-level seam compatible with lightweight worker fixtures
+    # that implement the historical two-argument constructor.
     worker = ModelPerceptionWorker(molmo, calibration_obj)
+    worker.grasp_profile = grasp_profile
     worker.effective_prompt = source_prompt
 
     def refresh_inputs(frame: Any) -> None:

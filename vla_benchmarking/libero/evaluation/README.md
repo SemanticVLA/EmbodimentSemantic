@@ -45,5 +45,23 @@ manifests continue to validate as `shared_evaluation_plan.v1`.
 The package does not merge these into a universal action loop. Evaluator
 outputs are reporting data only and never enter candidate or action selection.
 
+## Matrix outcome reporting
+
+`run_arrow_pick_place_matrix.py` keeps execution lifecycle (`status`) separate
+from the benchmark result (`outcome_status`). Every persisted cell and summary
+uses these outcome values:
+
+- `success`: the evaluator returned `true`.
+- `failure`: the evaluator returned `false`, or the terminal controller
+  manifest records a failed grasp, recovery, or candidate-generation outcome.
+- `unresolved`: execution ended without a trustworthy benchmark result (for
+  example an environment/input/evaluator exception, interruption, or a
+  completed row with no evaluator result).
+- `not_run`: the planned cell was not executed.
+- `not_evaluated`: dry-run evidence only; no benchmark result is claimed.
+
+The summary's `outcome_*` counts and rates are the unambiguous reporting
+surface; legacy lifecycle/evaluator fields remain for compatibility.
+
 The former root-level launcher paths were removed. Imports and direct launches
 must use `vla_benchmarking.libero.evaluation`.

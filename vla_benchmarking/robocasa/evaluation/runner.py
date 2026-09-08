@@ -12,12 +12,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .task_manifest import PICK_PLACE_TASKS, TaskSpec
+from .task_manifest import ARM_ONLY_ATOMIC_TASKS, PICK_PLACE_TASKS, TaskSpec
 
 
-DEFAULT_EPISODES_PER_TASK = 10
+DEFAULT_EPISODES_PER_TASK = 1
 DEFAULT_SEED_BASE = 1000
 DEFAULT_SPLIT = "target"
+GRASP_PROFILES = ("canonical_rim", "object_contact_v1", "object_contact_v2", "object_contact_v3", "object_contact_v4", "object_contact_v5")
 _INFRASTRUCTURE_FAILURES = {"dependency_missing", "runtime_backend_unavailable"}
 
 # These markers identify failures at the RoboCasa input/action boundary. They
@@ -45,6 +46,59 @@ _DEPENDENCY_MARKERS = (
 )
 
 
+def _robocasa_semantic_source_files(root: Path | None = None) -> tuple[Path, ...]:
+    """List production RoboCasa Python sources in deterministic order."""
+    source_root = (root or Path(__file__).resolve().parents[1]).resolve()
+    excluded_parts = {"tests", "__pycache__", ".pytest_cache", "output", "logs"}
+    return tuple(
+        path
+        for path in sorted(source_root.rglob("*.py"))
+        if path.is_file() and not any(part in excluded_parts for part in path.relative_to(source_root).parts)
+    )
+
+
+def _grasp_profile_identity(name: str) -> dict[str, Any]:
+    if name not in GRASP_PROFILES:
+        raise ValueError(f"unknown RoboCasa grasp profile: {name!r}")
+    if name == "canonical_rim":
+        return {"name": name, "basis": "unchanged_canonical_config_and_policy_lock"}
+    path = Path(__file__).resolve().parents[1] / "arrow_grasp_controller" / "configs" / f"{name}.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if config.get("name") != name:
+        raise ValueError("grasp profile name does not match its allowlisted file")
+    encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "name": name,
+        "config": config,
+        "config_sha256": hashlib.sha256(encoded).hexdigest(),
+        "config_hash_algorithm": "sha256-canonical-json-sorted-compact",
+        "config_file_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def _robocasa_semantic_source_fingerprint(root: Path | None = None) -> dict[str, Any]:
+    """Fingerprint the local production adapter and ML/controller sources."""
+    source_root = (root or Path(__file__).resolve().parents[1]).resolve()
+    files = _robocasa_semantic_source_files(source_root)
+    digest = hashlib.sha256()
+    relative_files: list[str] = []
+    for path in files:
+        relative = path.relative_to(source_root).as_posix()
+        payload = path.read_bytes()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(payload)
+        digest.update(b"\0")
+        relative_files.append(relative)
+    return {
+        "algorithm": "sha256-relative-path-and-bytes-v1",
+        "root": "vla_benchmarking/robocasa",
+        "file_count": len(relative_files),
+        "files": relative_files,
+        "sha256": digest.hexdigest(),
+    }
+
+
 def _robocasa_controller_identity() -> dict[str, Any]:
     """Resolve stable controller provenance without importing live backends.
 
@@ -68,9 +122,9 @@ def _robocasa_controller_identity() -> dict[str, Any]:
             "module": None,
             "entrypoint": None,
             "source_sha256": None,
-            "frame_contract": "robocasa_base_frame_v1",
-            "camera_contract": "post_flip_xy_positive_k_world_from_camera_v1",
-            "action_contract": "pandaomron_12d_embed_canonical_7d_v1",
+            "frame_contract": "robocasa_frozen_b0_proprio_current_base_actions_v2",
+            "camera_contract": "post_flip_y_positive_opencv_K_world_from_camera_v3",
+            "action_contract": "pandaomron_12d_embed_b0_to_current_base_7d_v2",
         },
         "errors": [],
     }
@@ -101,6 +155,16 @@ def _robocasa_controller_identity() -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - exercised on partial installs
         identity["errors"].append({
             "stage": "robocasa_adapter",
+            "type": type(exc).__name__,
+        })
+
+    try:
+        identity["robocasa_adapter"]["semantic_source_fingerprint"] = (
+            _robocasa_semantic_source_fingerprint()
+        )
+    except Exception as exc:  # pragma: no cover - unusual filesystem failures
+        identity["errors"].append({
+            "stage": "robocasa_semantic_sources",
             "type": type(exc).__name__,
         })
 
@@ -178,6 +242,7 @@ def _experiment_identity(
     resolved_controller_identity = dict(
         controller_identity or _robocasa_controller_identity()
     )
+    adapter_identity = resolved_controller_identity.get("robocasa_adapter", {})
     payload = {
         "schema": "robocasa-pick-place-21.v1",
         "tasks": [task.name for task in tasks],
@@ -192,6 +257,10 @@ def _experiment_identity(
         "robosuite_commit": ROBOSUITE_COMMIT,
         "controller": resolved_controller_identity.get("canonical_controller", {}),
         "controller_source": "robocasa_local_adapter",
+        "semantic_source_fingerprint": (
+            adapter_identity.get("semantic_source_fingerprint")
+            if isinstance(adapter_identity, Mapping) else None
+        ),
         "controller_identity": resolved_controller_identity,
         "controller_camera_seam": CAMERA.name,
         "prompt_sha256": hashlib.sha256(canonical_prompt().encode()).hexdigest(),
@@ -202,7 +271,9 @@ def _experiment_identity(
 def selected_tasks(names: Sequence[str] | None = None) -> tuple[TaskSpec, ...]:
     if not names or tuple(names) == ("all",):
         return PICK_PLACE_TASKS
-    by_name = {task.name: task for task in PICK_PLACE_TASKS}
+    by_name = {
+        task.name: task for task in (*PICK_PLACE_TASKS, *ARM_ONLY_ATOMIC_TASKS)
+    }
     unknown = [name for name in names if name not in by_name]
     if unknown:
         raise ValueError(f"unknown RoboCasa task(s): {', '.join(unknown)}")
@@ -273,14 +344,20 @@ def _read_existing(path: Path, *, experiment_identity: str) -> dict[tuple[str, i
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             continue
-        if row.metadata.get("experiment_identity") == experiment_identity:
-            existing[_cell_key(row)] = row
+        if row.metadata.get("experiment_identity") != experiment_identity:
+            raise ValueError(
+                "Existing results have a different experiment identity; "
+                "choose a new output directory to preserve the prior run"
+            )
+        existing[_cell_key(row)] = row
     return existing
 
 
 def _write_outputs(
-    output_dir: Path, rows: Sequence[TerminalRow], *, mode: str, experiment_identity: str
+    output_dir: Path, rows: Sequence[TerminalRow], *, mode: str, experiment_identity: str,
+    planned_count: int | None = None,
 ) -> None:
+    planned_count = len(rows) if planned_count is None else planned_count
     output_dir.mkdir(parents=True, exist_ok=True)
     result_path = output_dir / "results.jsonl"
     temporary_path = output_dir / "results.jsonl.tmp"
@@ -298,7 +375,7 @@ def _write_outputs(
         category: sum(row.failure_category == category for row in rows)
         for category in sorted({row.failure_category for row in rows if row.failure_category})
     }
-    if not all(row.terminal for row in rows):
+    if len(rows) < planned_count or not all(row.terminal for row in rows):
         evaluation_status = "incomplete"
     elif any(row.failure_category in _INFRASTRUCTURE_FAILURES for row in rows):
         evaluation_status = "infrastructure_unavailable"
@@ -310,8 +387,8 @@ def _write_outputs(
         "benchmark": "robocasa_pick_place_21",
         "experiment_identity": experiment_identity,
         "mode": mode,
-        "expected": len(rows),
-        "planned": len(rows),
+        "expected": planned_count,
+        "planned": planned_count,
         "complete": sum(row.terminal for row in rows),
         "terminal": sum(row.terminal for row in rows),
         "successes": sum(row.success for row in rows),
@@ -319,9 +396,11 @@ def _write_outputs(
         "per_task": by_task,
         "evaluation_status": evaluation_status,
     }
-    (output_dir / "summary.json").write_text(
+    temporary_summary = output_dir / "summary.json.tmp"
+    temporary_summary.write_text(
         json.dumps(_json_safe(summary), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    temporary_summary.replace(output_dir / "summary.json")
 
 
 def _failure_category(
@@ -392,7 +471,9 @@ def _run_live_cell(
     *, task: TaskSpec, episode_index: int, seed: int, output_dir: Path,
     mode: str, experiment_identity: str,
     controller_identity: Mapping[str, Any] | None = None,
-    execute_motion: bool = True, resolution: int = 256
+    execute_motion: bool = True, resolution: int = 256,
+    molmo_runtime: Any | None = None,
+    grasp_profile: str = "canonical_rim",
 ) -> TerminalRow:
     if importlib.util.find_spec("robocasa") is None:
         return TerminalRow(
@@ -412,6 +493,8 @@ def _run_live_cell(
         live = run_live_cell(
             task_name=task.name, seed=seed, output_dir=output_dir,
             resolution=resolution, execute_motion=execute_motion,
+            molmo_runtime=molmo_runtime,
+            grasp_profile=grasp_profile,
         )
     except Exception as exc:  # Runtime boundary: preserve a terminal matrix row.
         live = {
@@ -459,11 +542,29 @@ def run(
     seed_base: int = DEFAULT_SEED_BASE,
     split: str = DEFAULT_SPLIT,
     execute_motion: bool = False,
+    grasp_profile: str = "canonical_rim",
 ) -> int:
     if mode not in {"preflight", "smoke", "full"}:
         raise ValueError("mode must be preflight, smoke, or full")
+    if mode == "full" and not execute_motion:
+        raise ValueError("full mode requires execute_motion=True")
+    if episodes_per_task <= 0 or seed_base < 0:
+        raise ValueError("episodes_per_task must be positive and seed_base non-negative")
+    if split != DEFAULT_SPLIT:
+        raise ValueError("the RoboCasa portability run is locked to split='target'")
     tasks = selected_tasks(task_names)
-    controller_identity = _robocasa_controller_identity()
+    if len({task.name for task in tasks}) != len(tasks):
+        raise ValueError("RoboCasa task names must be unique")
+    if mode == "full":
+        if tuple(task.name for task in tasks) != tuple(task.name for task in PICK_PLACE_TASKS):
+            raise ValueError("full mode requires all 21 canonical RoboCasa tasks in manifest order")
+        if episodes_per_task != 1:
+            raise ValueError("full mode requires exactly one episode per task")
+        if seed_base != DEFAULT_SEED_BASE:
+            raise ValueError("full mode requires seed_base=1000")
+    planned_count = len(tasks) * episodes_per_task
+    controller_identity = dict(_robocasa_controller_identity())
+    controller_identity["grasp_profile"] = _grasp_profile_identity(grasp_profile)
     experiment_identity = _experiment_identity(
         tasks=tasks, episodes_per_task=episodes_per_task, seed_base=seed_base,
         split=split, mode=mode, controller_identity=controller_identity,
@@ -495,6 +596,8 @@ def run(
                             experiment_identity=experiment_identity,
                             controller_identity=controller_identity,
                             execute_motion=False,
+                            molmo_runtime=None,
+                            grasp_profile=grasp_profile,
                         )
                     )
         _write_outputs(output_dir, rows, mode=mode, experiment_identity=experiment_identity)
@@ -516,30 +619,67 @@ def run(
             },
         )
     else:
-        existing = _read_existing(output_dir / "results.jsonl", experiment_identity=experiment_identity)
-        rows = []
-        for task in tasks:
-            for episode_index in range(episodes_per_task):
-                seed = seed_base + episode_index
-                key = (task.name, seed, mode)
-                prior = existing.get(key)
-                # Infrastructure failures are intentionally rerunnable after an
-                # environment install; completed task/controller outcomes are not.
-                if prior is not None and prior.terminal and prior.failure_category not in _INFRASTRUCTURE_FAILURES:
-                    rows.append(prior)
-                    continue
-                rows.append(
-                    _run_live_cell(
-                        task=task,
-                        episode_index=episode_index,
-                        seed=seed,
-                        output_dir=output_dir / "cells" / f"{task.name}__seed{seed}",
-                        mode=mode,
-                        experiment_identity=experiment_identity,
-                        controller_identity=controller_identity,
-                    )
+        molmo_runtime: Any | None = None
+
+        def pinned_runtime() -> Any | None:
+            nonlocal molmo_runtime
+            if molmo_runtime is None and importlib.util.find_spec("robocasa") is not None:
+                # Keep the optional model/runtime import behind the first
+                # actually executed motion cell.  This keeps preflight and
+                # all-skipped resume paths dependency-light and load-free.
+                from ..arrow_grasp_controller.controller.runner import build_local_molmo_runtime
+                molmo_runtime = build_local_molmo_runtime()
+            return molmo_runtime
+
+        try:
+            existing = _read_existing(output_dir / "results.jsonl", experiment_identity=experiment_identity)
+            saved_rows = dict(existing)
+            planned_keys = [
+                (task.name, seed_base + episode_index, mode)
+                for task in tasks for episode_index in range(episodes_per_task)
+            ]
+
+            def save_progress(row: TerminalRow) -> None:
+                saved_rows[_cell_key(row)] = row
+                # Retain later completed cells when an earlier infrastructure cell
+                # is rerun. A second interruption must not erase their evidence.
+                _write_outputs(
+                    output_dir, [saved_rows[key] for key in planned_keys if key in saved_rows],
+                    mode=mode, experiment_identity=experiment_identity, planned_count=planned_count,
                 )
-    _write_outputs(output_dir, rows, mode=mode, experiment_identity=experiment_identity)
+
+            rows = []
+            for task in tasks:
+                for episode_index in range(episodes_per_task):
+                    seed = seed_base + episode_index
+                    key = (task.name, seed, mode)
+                    prior = existing.get(key)
+                    # Infrastructure failures are intentionally rerunnable after an
+                    # environment install; completed task/controller outcomes are not.
+                    if prior is not None and prior.terminal and prior.failure_category not in _INFRASTRUCTURE_FAILURES:
+                        rows.append(prior)
+                        save_progress(prior)
+                        continue
+                    rows.append(
+                        _run_live_cell(
+                            task=task,
+                            episode_index=episode_index,
+                            seed=seed,
+                            output_dir=output_dir / "cells" / f"{task.name}__seed{seed}",
+                            mode=mode,
+                            experiment_identity=experiment_identity,
+                            controller_identity=controller_identity,
+                            molmo_runtime=pinned_runtime(),
+                            grasp_profile=grasp_profile,
+                        )
+                    )
+                    save_progress(rows[-1])
+        finally:
+            if molmo_runtime is not None:
+                close = getattr(molmo_runtime, "close", None)
+                if callable(close):
+                    close()
+    _write_outputs(output_dir, rows, mode=mode, experiment_identity=experiment_identity, planned_count=planned_count)
     print(f"RoboCasa {mode}: wrote {len(rows)} rows to {output_dir / 'results.jsonl'}")
     if execute_motion and mode == "full" and rows and all(
         row.failure_category in _INFRASTRUCTURE_FAILURES for row in rows
@@ -557,6 +697,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed-base", type=int, default=DEFAULT_SEED_BASE)
     parser.add_argument("--split", default=DEFAULT_SPLIT)
     parser.add_argument("--execute-motion", action="store_true", help="authorize live motion; required for full mode")
+    parser.add_argument("--grasp-profile", choices=GRASP_PROFILES, default="canonical_rim")
     args = parser.parse_args(argv)
     if args.mode == "full" and not args.execute_motion:
         parser.error("full mode requires --execute-motion")
@@ -564,6 +705,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output_dir, mode=args.mode, task_names=args.tasks,
         episodes_per_task=args.episodes_per_task, seed_base=args.seed_base,
         split=args.split, execute_motion=args.execute_motion,
+        grasp_profile=args.grasp_profile,
     )
 
 

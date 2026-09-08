@@ -131,8 +131,8 @@ def test_panda_probe_adapts_mujoco3_named_accessors() -> None:
 
     env.sim.model = NamedAccessOnlyModel()
     calibration, transform, record = runner.probe_robot_calibration(env)
-    assert record["resolved_site_name"] == "grip_site"
-    assert record["resolved_body_name"] == "right_hand"
+    assert record["resolved_site_name"] == "robot0_gripper0_grip_site"
+    assert record["resolved_body_name"] == "robot0_right_hand"
     assert calibration.grasp_to_grip_site.shape == (3, 3)
     assert transform.shape == (3, 3)
 

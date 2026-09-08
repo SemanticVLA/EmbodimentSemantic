@@ -116,6 +116,11 @@ def test_failure_classes_distinguish_environment_input_and_evaluator_failures(ma
         1: "input_failure",
         2: "evaluator_failure",
     }
+    assert {record["task_id"]: record["outcome_status"] for record in records} == {
+        0: "unresolved",
+        1: "unresolved",
+        2: "unresolved",
+    }
 
 
 def test_summary_exposes_conservative_and_evaluable_denominators(matrix, tmp_path: Path):
@@ -251,3 +256,138 @@ def test_dry_run_forces_evaluator_result_to_null(matrix, tmp_path: Path):
     assert record["audit"]["evaluator_success"] is None
     assert summary["evaluated_cells"] == 0
     assert summary["success_rate"] is None
+    assert record["outcome_status"] == "not_evaluated"
+    assert record["outcome_reason"] == "dry_run"
+    assert summary["outcome_not_evaluated_count"] == 1
+
+
+def test_outcome_status_distinguishes_controller_failure_from_missing_result(
+    matrix, tmp_path: Path
+):
+    """A completed no-candidate canary is a failure, not a missing cell."""
+    summary = _run(
+        matrix,
+        tmp_path,
+        dry_run=False,
+        execute_motion=True,
+        episode_runner=lambda **kwargs: {
+            **_audit(None, motion=True),
+            "canary_manifest": {
+                "final_result": None,
+                "attempts": [{"status": "no_candidates", "results": []}],
+            },
+        },
+    )
+    record = json.loads(
+        (tmp_path / matrix.MANIFEST_JSONL_FILENAME).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert record["status"] == "completed"
+    assert record["outcome_status"] == "failure"
+    assert record["outcome_reason"] == "no_candidates"
+    assert record["failure_class"] is None
+    assert summary["outcome_failures_count"] == 1
+    assert summary["outcome_status_counts"]["failure"] == 1
+
+
+def test_outcome_status_uses_terminal_attempt_after_recovery(matrix, tmp_path: Path):
+    """An earlier candidate failure is not reported when a later retry is selected."""
+    summary = _run(
+        matrix,
+        tmp_path,
+        dry_run=False,
+        execute_motion=True,
+        episode_runner=lambda **kwargs: {
+            **_audit(None, motion=True),
+            "canary_manifest": {
+                "final_result": {"status": "selected", "evaluator_success": None},
+                "attempts": [
+                    {
+                        "status": "candidate_failed",
+                        "results": [{"status": "grasp_failed", "error": "post_lift_retention"}],
+                    },
+                    {"status": "selected", "results": [{"status": "placed"}]},
+                ],
+            },
+        },
+    )
+    record = json.loads(
+        (tmp_path / matrix.MANIFEST_JSONL_FILENAME).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert record["outcome_status"] == "unresolved"
+    assert record["outcome_reason"] == "missing_evaluator_result"
+    assert summary["outcome_failures_count"] == 0
+
+
+def test_cleanup_failure_is_unresolved_even_after_successful_evaluator(matrix, tmp_path: Path):
+    class ClosingFailureEnv(_Env):
+        def close(self):
+            raise RuntimeError("teardown failed")
+
+    with pytest.raises(RuntimeError, match="teardown failed"):
+        _run(
+            matrix,
+            tmp_path,
+            dry_run=False,
+            execute_motion=True,
+            env_builder=lambda task, seed, resolution: ClosingFailureEnv(task, seed),
+            episode_runner=lambda **kwargs: _audit(True, motion=True),
+        )
+    status = json.loads((tmp_path / matrix.STATUS_FILENAME).read_text(encoding="utf-8"))
+    record = status["cells"][0]
+    assert record["status"] == "failed"
+    assert record["failure_class"] == "environment_failure"
+    assert record["outcome_status"] == "unresolved"
+
+
+def test_resume_normalizes_legacy_status_without_rerunning_or_rewriting_history(
+    matrix, tmp_path: Path
+):
+    first = _run(matrix, tmp_path, dry_run=True, execute_motion=False)
+    status_path = tmp_path / matrix.STATUS_FILENAME
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status["cells"][0].pop("outcome_status", None)
+    status["cells"][0].pop("outcome_reason", None)
+    status_path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path = tmp_path / matrix.MANIFEST_JSONL_FILENAME
+    original_history = manifest_path.read_text(encoding="utf-8")
+
+    resumed = _run(
+        matrix,
+        tmp_path,
+        dry_run=True,
+        execute_motion=False,
+        resume=True,
+        episode_runner=lambda **kwargs: (_ for _ in ()).throw(AssertionError("rerun")),
+    )
+    normalized = json.loads(status_path.read_text(encoding="utf-8"))
+    assert resumed["completed_cells"] == 1
+    assert normalized["cells"][0]["outcome_status"] == "not_evaluated"
+    assert normalized["cells"][0]["outcome_reason"] == "dry_run"
+    assert manifest_path.read_text(encoding="utf-8") == original_history
+
+
+def test_outcome_status_marks_completed_without_evaluator_as_unresolved(matrix, tmp_path: Path):
+    """A completed row with no evaluator and no terminal controller evidence is unresolved."""
+    summary = _run(
+        matrix,
+        tmp_path,
+        dry_run=False,
+        execute_motion=True,
+        episode_runner=lambda **kwargs: _audit(None, motion=True),
+    )
+    record = json.loads(
+        (tmp_path / matrix.MANIFEST_JSONL_FILENAME).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert record["outcome_status"] == "unresolved"
+    assert record["outcome_reason"] == "missing_evaluator_result"
+    assert summary["outcome_unresolved_count"] == 1
+    assert summary["outcome_failures_count"] == 0
+
+
+def test_planned_record_is_explicitly_not_run(matrix):
+    record = matrix._planned_record({"cell_index": 0, "task_id": 0, "episode_index": 0, "seed": 1000})
+    assert matrix._outcome(record) == ("not_run", "planned")
+    assert matrix._outcome({"status": "failed", "failure_class": "controller_failure"}) == (
+        "failure",
+        "controller_failure",
+    )

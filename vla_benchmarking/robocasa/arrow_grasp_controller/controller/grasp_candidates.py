@@ -1197,5 +1197,3 @@ __all__ = [
     "generate_from_observation",
     "generate_grasp_candidates",
 ]
-
-

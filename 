@@ -1,0 +1,2 @@
+HF_TOKEN=hf_TEST_SECRET
+UNRELATED_SECRET=should_not_escape

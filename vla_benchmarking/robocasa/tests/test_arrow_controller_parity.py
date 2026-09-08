@@ -94,6 +94,25 @@ def test_render_depth_is_flipped_once_and_declared() -> None:
     assert env._arrow_depth_encoding == "normalized"
 
 
+def test_render_agentview_uses_selected_physical_fallback_camera() -> None:
+    class Sim:
+        def __init__(self):
+            self.calls = []
+
+        def render(self, **kwargs):
+            self.calls.append(kwargs)
+            return np.zeros((1, 1, 3), dtype=np.uint8), np.ones((1, 1), dtype=np.float32)
+
+    class Raw:
+        sim = Sim()
+        action_space = None
+
+    env = RoboCasaControllerEnv(Raw())
+    env._arrow_physical_camera_name = "robot0_agentview_right"
+    env.render(camera_name="agentview", width=1, height=1, depth=True)
+    assert Raw.sim.calls[-1]["camera_name"] == "robot0_agentview_right"
+
+
 def test_frozen_algorithm_modules_match_libero_exactly() -> None:
     root = Path(__file__).resolve().parents[3]
     pairs = (
@@ -102,7 +121,7 @@ def test_frozen_algorithm_modules_match_libero_exactly() -> None:
         ("libero/arrow_grasp_controller/controller/molmopoint.py", "robocasa/arrow_grasp_controller/controller/molmopoint.py"),
     )
     for left, right in pairs:
-        assert (root / "vla_benchmarking" / left).read_text(encoding="utf-8").rstrip() == (root / "vla_benchmarking" / right).read_text(encoding="utf-8").rstrip()
+        assert (root / "vla_benchmarking" / left).read_bytes() == (root / "vla_benchmarking" / right).read_bytes()
 
 
 def test_robocasa_runtime_contains_no_libero_imports() -> None:

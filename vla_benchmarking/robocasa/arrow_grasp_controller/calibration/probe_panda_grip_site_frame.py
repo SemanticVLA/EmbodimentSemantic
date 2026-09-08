@@ -56,22 +56,115 @@ def _vector(value: Any, label: str) -> np.ndarray:
     return vector
 
 
+def _model_name_pairs(model: Any, kind: str) -> list[tuple[int, str]]:
+    """Return compiled ``(id, name)`` pairs from all supported MuJoCo APIs.
+
+    MuJoCo 3 exposes named accessors and ``mj_id2name`` while older wrappers
+    expose ``*_name2id``/``*_id2name`` and occasionally a names list.  The
+    latter APIs can raise ``ValueError`` for a missing alias, so name
+    discovery is deliberately independent of a name-to-id call.
+    """
+    pairs: dict[int, str] = {}
+    source_wrapper = getattr(model, "_source", model)
+    source = getattr(source_wrapper, "_model", source_wrapper)
+    available = getattr(model, f"{kind}_names", None)
+    if isinstance(available, Mapping):
+        for name, index in available.items():
+            try:
+                pairs[int(index)] = str(name)
+            except (TypeError, ValueError):
+                continue
+    elif isinstance(available, (list, tuple)):
+        pairs.update({int(index): str(name) for index, name in enumerate(available)})
+    names_mapping = getattr(model, "names", None)
+    if isinstance(names_mapping, Mapping):
+        listed = names_mapping.get(kind)
+        if isinstance(listed, Mapping):
+            for name, index in listed.items():
+                try:
+                    pairs[int(index)] = str(name)
+                except (TypeError, ValueError):
+                    continue
+        elif isinstance(listed, (list, tuple)):
+            pairs.update({int(index): str(name) for index, name in enumerate(listed)})
+
+    id2name = getattr(model, f"{kind}_id2name", None)
+    count = getattr(model, f"n{kind}", None)
+    if count is None:
+        count = len(pairs)
+    if callable(id2name):
+        for index in range(int(count)):
+            try:
+                name = id2name(index)
+            except (AttributeError, KeyError, ValueError, IndexError, TypeError):
+                continue
+            if name:
+                pairs[index] = str(name)
+
+    accessor = getattr(model, kind, None)
+    if callable(accessor):
+        for index in range(int(count)):
+            try:
+                item = accessor(index)
+                item_id = int(getattr(item, "id", index))
+                name = getattr(item, "name", None)
+            except (AttributeError, KeyError, ValueError, IndexError, TypeError):
+                continue
+            if name:
+                pairs[item_id] = str(name)
+
+    # Prefer the Python-exposed APIs.  Importing the native MuJoCo module is
+    # unnecessary for wrappers that already provide id-to-name data and can
+    # be unsafe in dependency-light test processes.
+    if not callable(id2name) and not callable(accessor) and not pairs:
+        try:
+            import mujoco
+
+            object_type = getattr(mujoco.mjtObj, f"mjOBJ_{kind.upper()}")
+            for index in range(int(count)):
+                name = mujoco.mj_id2name(source, object_type, index)
+                if name:
+                    pairs[index] = str(name)
+        except (ImportError, AttributeError, KeyError, ValueError, TypeError):
+            pass
+    return sorted(pairs.items())
+
+
 def _named_id(model: Any, kind: str, names_to_try: tuple[str, ...]) -> tuple[int, str]:
+    """Resolve exact names first, then one unambiguous ``_<suffix>`` match."""
+    names_to_try = tuple(str(name) for name in names_to_try if name)
+    pairs = _model_name_pairs(model, kind)
+    by_name = {name: index for index, name in pairs}
+    # Exact compiled names always outrank suffix aliases, regardless of the
+    # order in which aliases were supplied by the caller.
+    for requested in names_to_try:
+        if requested in by_name:
+            return int(by_name[requested]), requested
+
+    for requested in names_to_try:
+        suffix = f"_{requested}"
+        matches = [(index, name) for index, name in pairs if name.endswith(suffix)]
+        if len(matches) == 1:
+            return int(matches[0][0]), matches[0][1]
+        if len(matches) > 1:
+            raise AttributeError(
+                f"model has ambiguous {kind} suffix {requested!r}: "
+                + ", ".join(name for _, name in matches)
+            )
+
+    # A legacy resolver is still useful for tiny wrappers which cannot expose
+    # a names list or id-to-name API.  At this point all discoverable compiled
+    # names have already had exact and suffix precedence.
     resolver = getattr(model, f"{kind}_name2id", None)
     if callable(resolver):
-        for name in names_to_try:
+        for requested in names_to_try:
             try:
-                index = int(resolver(name))
-            except (KeyError, ValueError, IndexError, TypeError):
+                index = int(resolver(requested))
+            except (AttributeError, KeyError, ValueError, IndexError, TypeError):
                 continue
             if index >= 0:
-                return index, name
-    available = getattr(model, f"{kind}_names", None)
-    for name in names_to_try:
-        if isinstance(available, Mapping) and name in available:
-            return int(available[name]), name
-        if isinstance(available, (list, tuple)) and name in available:
-            return int(available.index(name)), name
+                resolved = dict(pairs).get(index, requested)
+                return index, str(resolved)
     joined = ", ".join(repr(name) for name in names_to_try)
     raise AttributeError(f"model does not expose any {kind} name in ({joined})")
 
@@ -279,5 +372,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

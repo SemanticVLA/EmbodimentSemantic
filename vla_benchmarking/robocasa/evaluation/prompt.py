@@ -10,6 +10,14 @@ _FALLBACK_CANONICAL_PROMPT: Final = (
     "robot fingers could grasp it without touching nearby objects."
 )
 
+_OBJECT_CONTACT_PROMPT_TEMPLATE: Final = (
+    "Point to visible grasp contact locations on the {noun} at the tail, or "
+    "start, of the green arrow. Ignore the arrowhead and destination. Choose "
+    "locations where a parallel-jaw gripper can descend from above, "
+    "straddle the object, and close without touching nearby objects or support "
+    "surfaces. Point only on the {noun}."
+)
+
 
 def canonical_prompt() -> str:
     """Return the frozen source prompt without importing another benchmark."""
@@ -40,4 +48,13 @@ def adapt_source_noun(source_noun: str, *, template: str | None = None) -> str:
     return prompt.replace("the bowl", f"the {noun}", 1)
 
 
-__all__ = ["adapt_source_noun", "canonical_prompt"]
+def object_contact_prompt(source_noun: str) -> str:
+    """Return the explicit green-arrow contact prompt for a source noun."""
+
+    noun = " ".join(str(source_noun).strip().split())
+    if not noun:
+        raise ValueError("source_noun must be non-empty")
+    return _OBJECT_CONTACT_PROMPT_TEMPLATE.format(noun=noun)
+
+
+__all__ = ["adapt_source_noun", "canonical_prompt", "object_contact_prompt"]

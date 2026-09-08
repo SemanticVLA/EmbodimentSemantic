@@ -1,0 +1,41 @@
+{
+  "name": "object_contact_v5",
+  "base_profile": "object_contact_v4",
+  "changed_factors": [
+    "object_contact_v4 geometry/contact split is retained",
+    "decoded-point admission uses half max aperture plus finger clearance in the same-frame image-metric ellipse",
+    "blocker recovery uses a low-tilt 15, 30, 45 degree ladder",
+    "blocker recovery requires both world-down and camera-ray hypotheses to execute and fail on measured non-target obstructions",
+    "full measured RGB-D sweep, aperture, palm checks, and late pad contact remain unchanged"
+  ],
+  "derivation_labels": {
+    "model_seed": "molmo_contact",
+    "empty_model_fallback": "arrow_tail_anchor",
+    "all_model_points_rejected_fallback": "arrow_tail_anchor_all_model_points_rejected",
+    "surface_promotion": "promoted_upper_surface",
+    "approach_hypotheses": ["world_down", "camera_ray", "blocker_away_ladder"],
+    "geometry_support": "outer_annulus_geometry_only",
+    "contact_mask": "strict_seed_connected_component",
+    "blocker_away_approach": "same_frame_rgbd_non_target_rejection"
+  },
+  "prompt": "Point to visible grasp contact locations on the {noun} at the tail, or start, of the green arrow. Ignore the arrowhead and destination. Choose locations where a parallel-jaw gripper can descend from above, straddle the object, and close without touching nearby objects or support surfaces. Point only on the {noun}.",
+  "admission_gate": {
+    "distance": "finite same-frame RGB-D image-metric ellipse",
+    "threshold": "0.5 * robot_calibration.max_aperture_m + robot_calibration.finger_clearance_m"
+  },
+  "geometry_contact_split": {
+    "geometry_support": "bounded_same_frame_outer_ring",
+    "contact_mask": "strict_seed_connected_component",
+    "contact_exemption": "measured_pad_prism_and_local_support_only"
+  },
+  "approach_hypotheses": {
+    "camera_ray": "camera_origin_to_contact",
+    "blocker_away": "same_frame_rgbd_non_target_rejection",
+    "blocker_away_tilts_deg": [15.0, 30.0, 45.0],
+    "max_tilt_deg": 45.0,
+    "direction": "contact_toward_blocker",
+    "world_down_retained": true
+  },
+  "candidate_engine": "generate_grasp_candidates",
+  "training": "none"
+}

@@ -35,6 +35,8 @@ LABEL="${ROBOCASA_RUN_LABEL:-robocasa_pickplace21_21x1}"
 TASKS="${ROBOCASA_TASKS:-all}"
 EPISODES="${ROBOCASA_EPISODES_PER_TASK:-1}"
 SEED_BASE="${ROBOCASA_SEED_BASE:-1000}"
+SETUP_RUNTIME="${ROBOCASA_SETUP_RUNTIME:-0}"
+MODE="${ROBOCASA_MODE:-}"
 [[ "$LABEL" =~ ^[A-Za-z0-9_.-]{1,96}$ ]] || die 'invalid ROBOCASA_RUN_LABEL'
 [[ "$TASKS" == all || "$TASKS" =~ ^[A-Za-z][A-Za-z0-9_]*(,[A-Za-z][A-Za-z0-9_]*)*$ ]] \
   || die 'ROBOCASA_TASKS must be all or a comma-separated registered task list'
@@ -42,6 +44,22 @@ SEED_BASE="${ROBOCASA_SEED_BASE:-1000}"
   || die 'ROBOCASA_TASKS must use all by itself, not mixed with task names'
 [[ "$EPISODES" =~ ^[1-9][0-9]*$ ]] || die 'ROBOCASA_EPISODES_PER_TASK must be positive'
 [[ "$SEED_BASE" =~ ^[0-9]+$ ]] || die 'ROBOCASA_SEED_BASE must be non-negative'
+[[ "$SETUP_RUNTIME" == 0 || "$SETUP_RUNTIME" == 1 ]] \
+  || die 'ROBOCASA_SETUP_RUNTIME must be 0 (reuse) or 1 (bootstrap)'
+[[ -z "$MODE" || "$MODE" == smoke || "$MODE" == full ]] \
+  || die 'ROBOCASA_MODE must be smoke or full'
+if [[ -z "$MODE" ]]; then
+  if [[ "$TASKS" == all ]]; then
+    MODE=full
+  else
+    MODE=smoke
+  fi
+fi
+if [[ "$MODE" == full ]]; then
+  [[ "$TASKS" == all ]] || die 'ROBOCASA_MODE=full requires ROBOCASA_TASKS=all'
+  [[ "$EPISODES" == 1 ]] || die 'ROBOCASA_MODE=full requires ROBOCASA_EPISODES_PER_TASK=1'
+  [[ "$SEED_BASE" == 1000 ]] || die 'ROBOCASA_MODE=full requires ROBOCASA_SEED_BASE=1000'
+fi
 
 TASK_ARGS=()
 if [[ "$TASKS" == all ]]; then
@@ -92,10 +110,22 @@ CONTROLLER_CONFIG="$CONTROLLER_ROOT/configs/canonical_molmo_rgbd_grasp.json"
 POLICY_LOCK="$CONTROLLER_ROOT/configs/active_policy.lock.json"
 MODEL_ID="allenai/MolmoPoint-8B"
 MODEL_REVISION="188130f961c8e0888a34e11121a1423c461a01ba"
+ROBOSUITE_REVISION="5ce6643f3092639d08f7b0f90ed1c6a84f50552c"
+ROBOCASA_REVISION="4f8a2980def75a55dff96b990745b83540425f09"
 PROMPT_ID="rim_clearance"
+GRASP_PROFILE="${ROBOCASA_GRASP_PROFILE:-canonical_rim}"
+case "$GRASP_PROFILE" in
+  canonical_rim) GRASP_CONFIG="$CONTROLLER_CONFIG" ;;
+  object_contact_v1) GRASP_CONFIG="$CONTROLLER_ROOT/configs/object_contact_v1.json" ;;
+  object_contact_v2) GRASP_CONFIG="$CONTROLLER_ROOT/configs/object_contact_v2.json" ;;
+  object_contact_v3) GRASP_CONFIG="$CONTROLLER_ROOT/configs/object_contact_v3.json" ;;
+  object_contact_v4) GRASP_CONFIG="$CONTROLLER_ROOT/configs/object_contact_v4.json" ;;
+  object_contact_v5) GRASP_CONFIG="$CONTROLLER_ROOT/configs/object_contact_v5.json" ;;
+  *) die 'ROBOCASA_GRASP_PROFILE must be canonical_rim, object_contact_v1, object_contact_v2, object_contact_v3, object_contact_v4, or object_contact_v5' ;;
+esac
 [[ -f "$REQUIREMENTS_FILE" ]] || die 'RoboCasa requirements file is missing'
 [[ -f "$ENTRYPOINT_FILE" ]] || die 'RoboCasa runner is missing'
-[[ -f "$CONTROLLER_CONFIG" ]] || die 'RoboCasa controller config is missing'
+[[ -f "$GRASP_CONFIG" ]] || die "RoboCasa grasp profile config is missing: $GRASP_CONFIG"
 [[ -f "$POLICY_LOCK" ]] || die 'RoboCasa policy lock is missing'
 
 ENTRYPOINT_SHA256=''
@@ -103,6 +133,8 @@ REQUIREMENTS_SHA256=''
 CONTROLLER_SOURCE_SHA256=''
 CONTROLLER_CONFIG_SHA256=''
 POLICY_LOCK_SHA256=''
+GRASP_CONFIG_SHA256=''
+RUNTIME_PROBE_PATH="$RUN_ROOT/runtime_probe.json"
 
 controller_source_sha256() {
   find "$CONTROLLER_ROOT" -type f \
@@ -135,11 +167,14 @@ archive_on_exit() {
     printf 'schema=robocasa_pickplace21_job.v2\n'
     printf 'job_id=%s\njob_name=%s\nlabel=%s\n' "$SLURM_JOB_ID" "$SLURM_JOB_NAME" "$LABEL"
     printf 'expected_commit=%s\nactual_commit=%s\nrepo_root=%s\n' "$ROBOCASA_EXPECTED_COMMIT" "$actual_commit" "$REPO_ROOT"
-    printf 'tasks=%s\nepisodes_per_task=%s\nseed_base=%s\nsplit=target\n' "$TASKS" "$EPISODES" "$SEED_BASE"
-    printf 'run_root=%s\noutput_root=%s\narchive_root=%s\nenv_root=%s\nruntime_root=%s\n' \
-      "$RUN_ROOT" "$OUTPUT_ROOT" "$ARCHIVE_ROOT" "$ENV_ROOT" "$RUNTIME_ROOT"
+    printf 'tasks=%s\nepisodes_per_task=%s\nseed_base=%s\nsplit=target\nmode=%s\n' "$TASKS" "$EPISODES" "$SEED_BASE" "$MODE"
+    printf 'run_root=%s\noutput_root=%s\narchive_root=%s\nenv_root=%s\nruntime_root=%s\nruntime_setup=%s\nruntime_probe=%s\n' \
+      "$RUN_ROOT" "$OUTPUT_ROOT" "$ARCHIVE_ROOT" "$ENV_ROOT" "$RUNTIME_ROOT" "$SETUP_RUNTIME" "$RUNTIME_PROBE_PATH"
+    printf 'runtime_versions=%s\n' "$RUN_ROOT/runtime_versions.json"
     printf 'requirements_sha256=%s\nentrypoint_sha256=%s\ncontroller_source_sha256=%s\n' \
       "$REQUIREMENTS_SHA256" "$ENTRYPOINT_SHA256" "$CONTROLLER_SOURCE_SHA256"
+    printf 'robosuite_revision=%s\nrobocasa_revision=%s\n' "$ROBOSUITE_REVISION" "$ROBOCASA_REVISION"
+    printf 'grasp_profile=%s\ngrasp_config=%s\ngrasp_config_sha256=%s\n' "$GRASP_PROFILE" "$GRASP_CONFIG" "$GRASP_CONFIG_SHA256"
     printf 'controller_config=%s\ncontroller_config_sha256=%s\npolicy_lock=%s\npolicy_lock_sha256=%s\n' \
       "$CONTROLLER_CONFIG" "$CONTROLLER_CONFIG_SHA256" "$POLICY_LOCK" "$POLICY_LOCK_SHA256"
     printf 'model_id=%s\nmodel_revision=%s\nprompt_id=%s\nregion_backend=rgbd\ncamera=agentview\n' \
@@ -154,23 +189,37 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
+ENTRYPOINT_SHA256="$(sha256sum -- "$ENTRYPOINT_FILE" | awk '{print tolower($1)}')"
+REQUIREMENTS_SHA256="$(sha256sum -- "$REQUIREMENTS_FILE" | awk '{print tolower($1)}')"
+CONTROLLER_SOURCE_SHA256="$(controller_source_sha256)"
+CONTROLLER_CONFIG_SHA256="$(sha256sum -- "$CONTROLLER_CONFIG" | awk '{print tolower($1)}')"
+POLICY_LOCK_SHA256="$(sha256sum -- "$POLICY_LOCK" | awk '{print tolower($1)}')"
+GRASP_CONFIG_SHA256="$(sha256sum -- "$GRASP_CONFIG" | awk '{print tolower($1)}')"
+
 module purge
 module load miniforge/24.3.0-0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
-if [[ ! -x "$ENV_ROOT/bin/python" ]]; then
-  conda create -y -p "$ENV_ROOT" python=3.11 pip
+if [[ "$SETUP_RUNTIME" == 1 ]]; then
+  if [[ ! -x "$ENV_ROOT/bin/python" ]]; then
+    conda create -y -p "$ENV_ROOT" python=3.11 pip
+  fi
+else
+  [[ -x "$ENV_ROOT/bin/python" ]] \
+    || die "reusable RoboCasa runtime is missing: $ENV_ROOT (set ROBOCASA_SETUP_RUNTIME=1 for bootstrap)"
 fi
 PYTHON="$ENV_ROOT/bin/python"
-"$PYTHON" -m pip install --upgrade pip
-"$PYTHON" -m pip install --requirement "$REQUIREMENTS_FILE"
-# RoboCasa and robosuite declare opencv-python while LeRobot declares
-# opencv-python-headless.  The cluster runtime is headless; leave exactly one
-# provider installed after dependency resolution so import order cannot change
-# the pixels supplied to the controller.
-"$PYTHON" -m pip uninstall --yes opencv-python opencv-contrib-python opencv-contrib-python-headless \
-  >/dev/null 2>&1 || true
-"$PYTHON" -m pip install --no-deps --force-reinstall "opencv-python-headless==4.11.0.86"
+if [[ "$SETUP_RUNTIME" == 1 ]]; then
+  "$PYTHON" -m pip install --upgrade pip
+  "$PYTHON" -m pip install --requirement "$REQUIREMENTS_FILE"
+  # RoboCasa and robosuite declare opencv-python while LeRobot declares
+  # opencv-python-headless.  The cluster runtime is headless; leave exactly one
+  # provider installed after dependency resolution so import order cannot change
+  # the pixels supplied to the controller.
+  "$PYTHON" -m pip uninstall --yes opencv-python opencv-contrib-python opencv-contrib-python-headless \
+    >/dev/null 2>&1 || true
+  "$PYTHON" -m pip install --no-deps --force-reinstall "opencv-python-headless==4.11.0.86"
+fi
 
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
@@ -179,16 +228,13 @@ export TMPDIR="$RUN_ROOT/tmp"
 export XDG_CACHE_HOME="$RUNTIME_ROOT/cache/xdg"
 export HF_HOME="$RUNTIME_ROOT/cache/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
-export TRANSFORMERS_CACHE="$HF_HOME/transformers"
+export TRANSFORMERS_CACHE="${ROBOCASA_TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
+[[ "$TRANSFORMERS_CACHE" = /* && "$TRANSFORMERS_CACHE" != / ]] \
+  || die 'ROBOCASA_TRANSFORMERS_CACHE must be an absolute non-root path'
 export HF_HUB_DISABLE_TELEMETRY=1
-export RUN_ROOT MODEL_ID MODEL_REVISION PROMPT_ID
+export RUN_ROOT MODEL_ID MODEL_REVISION PROMPT_ID SETUP_RUNTIME REQUIREMENTS_FILE
+export ROBOSUITE_REVISION ROBOCASA_REVISION
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$HF_HOME" "$HF_HUB_CACHE" "$TRANSFORMERS_CACHE"
-
-ENTRYPOINT_SHA256="$(sha256sum -- "$ENTRYPOINT_FILE" | awk '{print tolower($1)}')"
-REQUIREMENTS_SHA256="$(sha256sum -- "$REQUIREMENTS_FILE" | awk '{print tolower($1)}')"
-CONTROLLER_SOURCE_SHA256="$(controller_source_sha256)"
-CONTROLLER_CONFIG_SHA256="$(sha256sum -- "$CONTROLLER_CONFIG" | awk '{print tolower($1)}')"
-POLICY_LOCK_SHA256="$(sha256sum -- "$POLICY_LOCK" | awk '{print tolower($1)}')"
 
 "$PYTHON" - <<'PY'
 import importlib.metadata as metadata
@@ -196,9 +242,14 @@ import json
 import os
 import pathlib
 import sys
-import cv2, mujoco, robocasa, robosuite
-import torch
+if sys.version_info[:2] != (3, 11):
+    raise SystemExit(f"RoboCasa runtime requires Python 3.11, got {sys.version_info.major}.{sys.version_info.minor}")
 required = {
+    "numpy": "2.2.5",
+    "numba": "0.61.2",
+    "scipy": "1.15.3",
+    "torch": "2.7.1",
+    "torchvision": "0.22.1",
     "transformers": "4.57.1",
     "huggingface-hub": "0.36.0",
     "tokenizers": "0.22.1",
@@ -207,7 +258,19 @@ required = {
     "accelerate": "1.10.1",
     "safetensors": "0.8.0",
     "opencv-python-headless": "4.11.0.86",
+    "mujoco": "3.3.1",
+    "lerobot": "0.3.3",
+    "robosuite": "1.5.2",
+    "robocasa": "1.0.1",
 }
+source_revisions = {
+    "robosuite": os.environ["ROBOSUITE_REVISION"],
+    "robocasa": os.environ["ROBOCASA_REVISION"],
+}
+requirements_text = pathlib.Path(os.environ["REQUIREMENTS_FILE"]).read_text(encoding="utf-8")
+for package, revision in source_revisions.items():
+    if revision not in requirements_text:
+        raise SystemExit(f"{package} source revision is absent from requirements.txt: {revision}")
 for package, expected in required.items():
     actual = metadata.version(package)
     if actual != expected:
@@ -218,6 +281,26 @@ for package in ("opencv-python", "opencv-contrib-python", "opencv-contrib-python
     except metadata.PackageNotFoundError:
         continue
     raise SystemExit(f"conflicting OpenCV distribution is installed: {package}")
+for package, expected_revision in source_revisions.items():
+    direct_url = metadata.distribution(package).read_text("direct_url.json")
+    if not direct_url:
+        raise SystemExit(f"{package} has no direct_url.json; expected source revision {expected_revision}")
+    try:
+        direct_url_data = json.loads(direct_url)
+        vcs_info = direct_url_data["vcs_info"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{package} direct_url.json is not a VCS install: {exc}") from exc
+    if (
+        vcs_info.get("vcs") != "git"
+        or vcs_info.get("requested_revision") != expected_revision
+        or vcs_info.get("commit_id") != expected_revision
+    ):
+        raise SystemExit(
+            f"{package} source revision mismatch: requested={vcs_info.get('requested_revision')!r}, "
+            f"commit={vcs_info.get('commit_id')!r}, expected={expected_revision!r}"
+        )
+import cv2, mujoco, robocasa, robosuite
+import torch
 if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
     raise SystemExit("expected exactly one visible CUDA device")
 if not torch.cuda.is_bf16_supported():
@@ -232,6 +315,8 @@ runtime = {
     "cuda_device_name": torch.cuda.get_device_name(0),
     "bf16_supported": True,
     "dtype": "bfloat16",
+    "runtime_setup": os.environ["SETUP_RUNTIME"],
+    "source_revisions": source_revisions,
     "model_id": os.environ["MODEL_ID"],
     "model_revision": os.environ["MODEL_REVISION"],
     "prompt_id": os.environ["PROMPT_ID"],
@@ -251,21 +336,35 @@ print("transformers", metadata.version("transformers"))
 print("model", "allenai/MolmoPoint-8B", "revision", "188130f961c8e0888a34e11121a1423c461a01ba")
 PY
 
-ASSET_MARKER="$RUNTIME_ROOT/assets_ready_${ROBOCASA_EXPECTED_COMMIT}"
-if [[ ! -f "$ASSET_MARKER" ]]; then
-  printf 'y\n' | "$PYTHON" -m robocasa.scripts.setup_macros || true
-  printf 'y\n' | "$PYTHON" -m robocasa.scripts.download_kitchen_assets --type all
+ASSET_MARKER="$RUNTIME_ROOT/assets_ready_robocasa_${ROBOCASA_REVISION}"
+assets_marker_matches() {
+  [[ -f "$ASSET_MARKER" ]] && grep -Fxq "robocasa_revision=$ROBOCASA_REVISION" "$ASSET_MARKER"
+}
+verify_assets() {
   "$PYTHON" - <<'PY'
 import robocasa
 from pathlib import Path
 root = Path(robocasa.__path__[0]) / "models" / "assets"
 required = [root / "textures", root / "fixtures", root / "objects"]
-if not all(path.exists() and any(path.iterdir()) for path in required):
+if not all(path.is_dir() and any(path.iterdir()) for path in required):
     raise SystemExit(f"RoboCasa assets are incomplete under {root}")
 print("RoboCasa assets ready", root)
 PY
+}
+if [[ "$SETUP_RUNTIME" == 0 ]]; then
+  verify_assets
+  if ! assets_marker_matches; then
+    mkdir -p "$(dirname "$ASSET_MARKER")"
+    printf 'robocasa_revision=%s\nsource_commit=%s\n' "$ROBOCASA_REVISION" "$ROBOCASA_EXPECTED_COMMIT" > "$ASSET_MARKER"
+  fi
+else
+  if ! assets_marker_matches; then
+    printf 'y\n' | "$PYTHON" -m robocasa.scripts.setup_macros || true
+    printf 'y\n' | "$PYTHON" -m robocasa.scripts.download_kitchen_assets --type all
+  fi
+  verify_assets
   mkdir -p "$(dirname "$ASSET_MARKER")"
-  printf 'commit=%s\n' "$ROBOCASA_EXPECTED_COMMIT" > "$ASSET_MARKER"
+  printf 'robocasa_revision=%s\nsource_commit=%s\n' "$ROBOCASA_REVISION" "$ROBOCASA_EXPECTED_COMMIT" > "$ASSET_MARKER"
 fi
 
 cat > "$RUN_ROOT/job_context.env" <<EOF
@@ -279,14 +378,23 @@ tasks=$TASKS
 episodes_per_task=$EPISODES
 seed_base=$SEED_BASE
 split=target
+mode=$MODE
+runtime_setup=$SETUP_RUNTIME
+runtime_probe=$RUNTIME_PROBE_PATH
 run_root=$RUN_ROOT
 output_root=$OUTPUT_ROOT
 archive_root=$ARCHIVE_ROOT
 env_root=$ENV_ROOT
 runtime_root=$RUNTIME_ROOT
+runtime_versions=$RUN_ROOT/runtime_versions.json
 requirements_sha256=$REQUIREMENTS_SHA256
 entrypoint_sha256=$ENTRYPOINT_SHA256
 controller_source_sha256=$CONTROLLER_SOURCE_SHA256
+grasp_profile=$GRASP_PROFILE
+grasp_config=$GRASP_CONFIG
+grasp_config_sha256=$GRASP_CONFIG_SHA256
+robosuite_revision=$ROBOSUITE_REVISION
+robocasa_revision=$ROBOCASA_REVISION
 controller_config=$CONTROLLER_CONFIG
 controller_config_sha256=$CONTROLLER_CONFIG_SHA256
 policy_lock=$POLICY_LOCK
@@ -302,8 +410,21 @@ xdg_cache_home=$XDG_CACHE_HOME
 EOF
 
 cd "$REPO_ROOT"
+if HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "$PYTHON" -m vla_benchmarking.robocasa.tools.probe_runtime \
+    --task PickPlaceCounterToStove \
+    --seed 1000 \
+    --output "$RUN_ROOT/runtime_probe.json" \
+    --execute-motion; then
+  :
+else
+  probe_rc=$?
+  die "RoboCasa runtime probe failed with exit code $probe_rc"
+fi
+[[ -s "$RUNTIME_PROBE_PATH" ]] || die "RoboCasa runtime probe did not write $RUNTIME_PROBE_PATH"
+
 "$PYTHON" -m "$ENTRYPOINT_MODULE" \
-  --mode full \
+  --mode "$MODE" \
+  --grasp-profile "$GRASP_PROFILE" \
   --execute-motion \
   --tasks "${TASK_ARGS[@]}" \
   --output-dir "$OUTPUT_ROOT" \

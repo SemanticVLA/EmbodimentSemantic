@@ -23,10 +23,13 @@ openvla-oft:
     description: OpenVLA-OFT 7B fine-tuned on LIBERO Spatial with object-goal conditioning
 
 octo:
-  - id: akuramshin/octo-libero-100-finetuned
-    description: Octo fine-tuned on LIBERO (100 demos)
   - id: cyrusneary/octo-finetuned-libero
-    description: Octo fine-tuned on LIBERO
+    revision: f8a0888cfa7ef3be072417eb012339464a9bb6dc
+    checkpoint: 2025-06-21_octo_base_1p5_libero_finetune/octo_finetune/experiment_20250621_094538/190000
+    description: Octo-Base 1.5 community LIBERO multisuite reference at 190k (unmatched)
+  - id: rail-berkeley/octo-base-1.5
+    revision: ee3c10e8edd6ce2e8b1e8744d3c6fba4097bed48
+    description: Official Octo-Base 1.5 initialization for matched no-arrow training
 
 xvla:
   - id: lerobot/xvla-libero
