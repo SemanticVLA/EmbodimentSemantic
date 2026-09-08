@@ -120,3 +120,35 @@ def test_fresh_recovery_coerces_controller_mapping_to_typed_result(monkeypatch, 
 
     assert isinstance(result, TeacherRecoveryResult)
     assert result.success is False
+
+
+def test_no_candidate_zero_step_result_remains_a_discardable_failure(monkeypatch, tmp_path):
+    from vla_benchmarking.libero.arrow_grasp_controller.controller import runner
+
+    monkeypatch.setattr(
+        runner,
+        "run_canary_episode",
+        lambda **_kwargs: {"attempts": [], "final_result": None},
+    )
+
+    class Env:
+        def observe(self):
+            return {"state": [0]}
+
+        def step(self, _action):
+            raise AssertionError("zero-candidate result must not step")
+
+    bridge = ArrowCanaryBridge(
+        worker=object(), episode_runner=lambda **_kwargs: {}, source_uv=(1, 2),
+        output_root=tmp_path, transition_getter=lambda _raw: [],
+        allow_stale_geometry_for_tests=True,
+    )
+    view = PrivilegedTakeoverEnvironmentView(
+        Env(), episode_id="episode-0", source_state=SourceState.SOURCE_UNHELD,
+    )
+
+    result = bridge.recover_from_reset(view, _request())
+
+    assert isinstance(result, TeacherRecoveryResult)
+    assert result.success is False
+    assert result.transitions == ()
