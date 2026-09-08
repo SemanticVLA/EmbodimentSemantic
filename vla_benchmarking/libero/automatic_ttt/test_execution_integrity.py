@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from .contracts import ContractError, EpisodeSpec, EpisodeStatus, SourceState, TeacherRecoveryResult
@@ -86,3 +87,18 @@ def test_privileged_view_blocks_state_lifecycle_mutators():
     for name in ("set_init_state", "load_state", "restore_state"):
         with pytest.raises(ContractError, match="not allowed"):
             getattr(view, name)
+
+
+def test_live_view_normalizes_numpy_boolean_step_fields():
+    class NumpyBoolEnv(Env):
+        def step(self, _action):
+            self.t += 1
+            return self.observe(), 0.0, np.bool_(False), {"success": np.bool_(True)}
+
+    view = TakeoverEnvironmentView(
+        NumpyBoolEnv(), episode_id="episode", start_timestep=0,
+        source_state=SourceState.SOURCE_UNHELD,
+    )
+    view.step([0.0] * 7)
+    assert view.executed_transitions[0].done is False
+    assert view.executed_transitions[0].success is True

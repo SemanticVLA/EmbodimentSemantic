@@ -188,40 +188,45 @@ class PrivilegedTakeoverEnvironmentView(TakeoverEnvironmentView):
 RecoveryFn = Callable[[TakeoverEnvironmentView, TeacherRecoveryRequest], Any]
 
 
+def _runtime_boolean(value: Any, *, field: str) -> bool:
+    """Normalize Python and NumPy booleans at the simulator boundary."""
+
+    if type(value) is bool:
+        return value
+    value_type = type(value)
+    if value_type.__name__ == "bool_" and value_type.__module__.startswith("numpy"):
+        return bool(value)
+    raise ContractError(f"environment step {field} field must be boolean")
+
+
 def _step_done(result: Any) -> bool:
     if isinstance(result, Mapping):
         done = result.get("done", result.get("terminated", False))
         truncated = result.get("truncated", False)
-        if not isinstance(done, bool) or not isinstance(truncated, bool):
-            raise ContractError("environment step done/terminated/truncated fields must be boolean")
-        return done or truncated
+        return _runtime_boolean(done, field="done/terminated") or _runtime_boolean(
+            truncated, field="truncated"
+        )
     if isinstance(result, tuple) and len(result) >= 4:
         terminated = result[2]
         truncated = result[3] if len(result) >= 5 else False
-        if not isinstance(terminated, bool) or not isinstance(truncated, bool):
-            raise ContractError("environment step termination fields must be boolean")
-        return terminated or truncated
+        return _runtime_boolean(terminated, field="terminated") or _runtime_boolean(
+            truncated, field="truncated"
+        )
     return False
 
 
 def _step_success(result: Any) -> bool:
     if isinstance(result, Mapping):
         success = result.get("success", False)
-        if not isinstance(success, bool):
-            raise ContractError("environment step success field must be boolean")
-        return success
+        return _runtime_boolean(success, field="success")
     if isinstance(result, tuple) and len(result) == 5:
         info = result[4] if isinstance(result[4], Mapping) else {}
         success = info.get("success", False)
-        if not isinstance(success, bool):
-            raise ContractError("environment step info.success field must be boolean")
-        return success
+        return _runtime_boolean(success, field="info.success")
     if isinstance(result, tuple) and len(result) == 4:
         info = result[3] if isinstance(result[3], Mapping) else {}
         success = info.get("success", False)
-        if not isinstance(success, bool):
-            raise ContractError("environment step info.success field must be boolean")
-        return success
+        return _runtime_boolean(success, field="info.success")
     return False
 
 
