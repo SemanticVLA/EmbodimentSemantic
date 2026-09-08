@@ -194,8 +194,11 @@ def _runtime_boolean(value: Any, *, field: str) -> bool:
     if type(value) is bool:
         return value
     value_type = type(value)
-    if value_type.__name__ == "bool_" and value_type.__module__.startswith("numpy"):
-        return bool(value)
+    if value_type.__module__.startswith("numpy"):
+        dtype = getattr(value, "dtype", None)
+        if getattr(dtype, "kind", None) == "b" and int(getattr(value, "size", 1)) == 1:
+            item = getattr(value, "item", None)
+            return bool(item() if callable(item) else value)
     raise ContractError(f"environment step {field} field must be boolean")
 
 

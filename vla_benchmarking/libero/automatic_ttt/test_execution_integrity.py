@@ -93,7 +93,7 @@ def test_live_view_normalizes_numpy_boolean_step_fields():
     class NumpyBoolEnv(Env):
         def step(self, _action):
             self.t += 1
-            return self.observe(), 0.0, np.bool_(False), {"success": np.bool_(True)}
+            return self.observe(), 0.0, np.asarray(False), {"success": np.asarray(True)}
 
     view = TakeoverEnvironmentView(
         NumpyBoolEnv(), episode_id="episode", start_timestep=0,
