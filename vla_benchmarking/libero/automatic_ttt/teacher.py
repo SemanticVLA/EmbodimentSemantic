@@ -93,7 +93,7 @@ class TakeoverEnvironmentView:
         self.assert_usable()
         before = self.observe()
         action_tuple = validate_action(action)
-        result = self._environment.step(action_tuple)
+        result = self._step_environment(action_tuple)
         self._step_count += 1
         try:
             after = self.observe()
@@ -123,6 +123,9 @@ class TakeoverEnvironmentView:
                 )
             )
         return result
+
+    def _step_environment(self, action: Sequence[float]) -> Any:
+        return self._environment.step(action)
 
     def assert_usable(self) -> None:
         if self._closed:
@@ -171,6 +174,12 @@ class PrivilegedTakeoverEnvironmentView(TakeoverEnvironmentView):
     _MUTATING_NAMES = frozenset({
         "state", "qpos", "qvel", "model_state", "sim_state", "initial_state",
     })
+
+    def _step_environment(self, action: Sequence[float]) -> Any:
+        controller_step = getattr(self._environment, "step_with_raw_observation", None)
+        if callable(controller_step):
+            return controller_step(action)
+        return super()._step_environment(action)
 
     def __getattr__(self, name: str) -> Any:
         lowered = name.lower()

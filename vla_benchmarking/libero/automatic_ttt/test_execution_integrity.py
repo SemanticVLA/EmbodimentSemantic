@@ -3,8 +3,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from . import live_collection
 from .contracts import ContractError, EpisodeSpec, EpisodeStatus, SourceState, TeacherRecoveryResult
 from .episode import EpisodeCoordinator
+from .live_collection import CanonicalLiveEnvironment
 from .teacher import PrivilegedTakeoverEnvironmentView, TakeoverEnvironmentView
 
 
@@ -102,3 +104,48 @@ def test_live_view_normalizes_numpy_boolean_step_fields():
     view.step([0.0] * 7)
     assert view.executed_transitions[0].done is False
     assert view.executed_transitions[0].success is True
+
+
+def test_privileged_controller_gets_raw_proprioception_but_records_only_canonical_observations(monkeypatch):
+    class RawEnv:
+        def __init__(self):
+            self.steps = 0
+
+        def step(self, _action):
+            self.steps += 1
+            return {
+                "image": f"image-{self.steps}",
+                "robot0_eef_pos": np.asarray([0.1, 0.2, 0.3]),
+                "secret_object_state": np.asarray([9.0]),
+            }, 0.0, False, {"success": False}
+
+    monkeypatch.setattr(
+        live_collection,
+        "canonical_student_observation",
+        lambda value, *, instruction: {
+            "agentview": value["image"],
+            "wrist": value["image"],
+            "state": [0.0] * 8,
+            "instruction": instruction,
+        },
+    )
+    raw = RawEnv()
+    live = CanonicalLiveEnvironment(
+        raw,
+        initial_observation={"image": "image-0"},
+        instruction="pick up the object",
+    )
+    view = PrivilegedTakeoverEnvironmentView(
+        live,
+        episode_id="episode",
+        source_state=SourceState.SOURCE_UNHELD,
+    )
+
+    returned_observation, *_ = view.step([0.0] * 7)
+
+    assert raw.steps == 1
+    assert "robot0_eef_pos" in returned_observation
+    assert "secret_object_state" in returned_observation
+    transition = view.executed_transitions[0]
+    assert set(transition.observation) == {"agentview", "wrist", "state", "instruction"}
+    assert set(transition.next_observation) == {"agentview", "wrist", "state", "instruction"}

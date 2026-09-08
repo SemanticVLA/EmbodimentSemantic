@@ -110,10 +110,26 @@ class CanonicalLiveEnvironment:
         return dict(self._observation)
 
     def step(self, action: Sequence[float]) -> Any:
+        result, _raw_observation = self._step_and_update(action)
+        return _replace_step_observation(result, self._observation, result[1:])
+
+    def step_with_raw_observation(self, action: Sequence[float]) -> Any:
+        """Step once while returning raw proprioception to the Arrow controller.
+
+        The facade still updates its canonical observation, so transition
+        capture and every student-facing read remain restricted to the four
+        canonical fields.  Only the privileged controller view may call this
+        method; it needs the raw post-step EEF pose for closed-loop motion.
+        """
+
+        result, raw_observation = self._step_and_update(action)
+        return _replace_step_observation(result, raw_observation, result[1:])
+
+    def _step_and_update(self, action: Sequence[float]) -> tuple[tuple[Any, ...], Mapping[str, Any]]:
         result = self._raw_environment.step(action)
         observation, rest = _extract_step_observation(result)
         self._observation = canonical_student_observation(observation, instruction=self._instruction)
-        return _replace_step_observation(result, self._observation, rest)
+        return _replace_step_observation(result, observation, rest), observation
 
     def __getattr__(self, name: str) -> Any:
         # Deliberately delegates only non-lifecycle controller/runtime hooks.
