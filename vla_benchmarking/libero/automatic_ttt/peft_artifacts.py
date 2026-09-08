@@ -310,8 +310,7 @@ def _validate_fresh_reset_contract(
         raise PEFTArtifactError("fresh collection must record accepted reset identities in trajectory order")
     if len(successful) != expected_successes:
         raise PEFTArtifactError("fresh collection successful trajectory count is invalid")
-    seen_indices: set[int] = set()
-    seen_hashes: set[str] = set()
+    reserved_hash_set = set(normalized_hashes)
     normalized_accepted: list[Mapping[str, Any]] = []
     for position, identity in enumerate(accepted):
         if not isinstance(identity, Mapping):
@@ -322,15 +321,18 @@ def _validate_fresh_reset_contract(
         if isinstance(selected_index, bool) or not isinstance(selected_index, int) or selected_index < 10:
             raise PEFTArtifactError("accepted reset identity selected index is invalid")
         digest = _require_sha256(identity.get("init_state_sha256"), "accepted reset identity hash")
-        if selected_index in seen_indices or selected_index in range(10):
-            raise PEFTArtifactError("accepted reset identities contain a reserved or duplicate index")
-        if digest in seen_hashes or digest in set(normalized_hashes):
-            raise PEFTArtifactError("accepted reset identities contain a reserved or duplicate hash")
+        # LIBERO exposes a finite init-state table (normally 50 rows).  After
+        # reserving rows 0..9 for evaluation, a 50-success collection must
+        # revisit some of the remaining 40 layouts.  Repeated layouts are
+        # therefore valid; only overlap with the sealed evaluation identities
+        # is forbidden. Seeds and trajectory IDs remain unique elsewhere.
+        if selected_index in range(10):
+            raise PEFTArtifactError("accepted reset identities contain a reserved evaluation index")
+        if digest in reserved_hash_set:
+            raise PEFTArtifactError("accepted reset identities contain a reserved evaluation hash")
         expected_identity = successful[position].get("reset_identity")
         if expected_identity != dict(identity):
             raise PEFTArtifactError("successful trajectory reset identity order does not match accepted identities")
-        seen_indices.add(selected_index)
-        seen_hashes.add(digest)
         normalized_accepted.append({
             "task_id": int(identity["task_id"]),
             "selected_init_state_index": selected_index,

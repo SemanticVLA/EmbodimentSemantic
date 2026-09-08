@@ -129,10 +129,46 @@ from vla_benchmarking.libero.evaluation.native_vla_eval import _task_description
 print(_task_description(0, {"suite_mode": "sealed_randomized"}))
 PY
  )"
+EVAL_RESET_CONTRACT="$RUN_ROOT/eval_reset_contract.json"
+"$PYTHON" - "$EVAL_RESET_CONTRACT" <<'PY'
+import json, pathlib, sys
+from vla_benchmarking.libero.evaluation.run_arrow_pick_place_eval import build_libero_env
+
+output = pathlib.Path(sys.argv[1])
+identities = []
+for index in range(10):
+    env = build_libero_env(
+        0, 1000 + index, 256, suite_mode="sealed_randomized",
+        extra_camera_names=("robot0_eye_in_hand",), init_state_index=index,
+    )
+    try:
+        diagnostics = getattr(env, "_arrow_init_state_diagnostics", None)
+        if not isinstance(diagnostics, dict):
+            raise SystemExit("canary reset-contract probe lacks init-state diagnostics")
+        digest = diagnostics.get("selected_row_sha256")
+        if diagnostics.get("selected_index") != index or not isinstance(digest, str) or len(digest) != 64:
+            raise SystemExit(f"invalid canary reset identity for index {index}: {diagnostics}")
+        identities.append(digest.lower())
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
+if len(set(identities)) != 10:
+    raise SystemExit("canary evaluation reset hashes are not unique")
+payload = {
+    "schema_version": 1, "task_id": 0,
+    "reserved_eval_init_state_indices": list(range(10)),
+    "reserved_eval_init_state_hashes": identities,
+}
+tmp = output.with_name("." + output.name + ".partial")
+tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+tmp.replace(output)
+PY
 "$PYTHON" "$COLLECTOR" \
   --task-id 0 --task-description "$TASK_DESCRIPTION" --output-root "$COLLECTION_ROOT" \
   --accepted-target 1 --adaptation-seed-start 3000 --max-attempts 10 --vla-step-budget 280 --arrow-step-budget 1200 --resolution 256 \
   --controller-config-hash "$PEFT_CANARY_CONTROLLER_HASH" --collection-mode fresh_arrow \
+  --reserved-eval-contract "$EVAL_RESET_CONTRACT" \
   --factory vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect
 
 MANIFEST="$COLLECTION_ROOT/collection_manifest.json"

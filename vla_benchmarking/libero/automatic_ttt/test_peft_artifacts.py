@@ -106,8 +106,8 @@ def _fresh_inputs(tmp_path):
     for i, row in enumerate(rows):
         reset_identity = {
             "task_id": 0,
-            "selected_init_state_index": 10 + i,
-            "init_state_sha256": f"{100 + i:064x}",
+            "selected_init_state_index": 10 + (i % 40),
+            "init_state_sha256": f"{100 + (i % 40):064x}",
         }
         row["source_kind"] = FRESH_COLLECTION_SOURCE_KIND
         row["method_label"] = "fresh_arrow_behavior_cloning_peft"
