@@ -71,7 +71,19 @@ class ArrowCanaryBridge(ArrowGraspControllerTeacher):
             requires_privileged_environment=True,
         )
 
-    def _recover(self, view: TakeoverEnvironmentView, request: TeacherRecoveryRequest) -> Mapping[str, Any]:
+    def _recover(
+        self,
+        view: TakeoverEnvironmentView,
+        request: TeacherRecoveryRequest,
+        *,
+        collection_mode: str = "same_episode_takeover",
+    ) -> Mapping[str, Any]:
+        # ``ArrowGraspControllerTeacher.recover_from_reset`` forwards the
+        # collection mode to the injected recovery callable.  The bridge's
+        # controller mechanics are identical for a fresh reset and takeover;
+        # the superclass owns the mode-specific receipt/trace validation.
+        if collection_mode not in {"same_episode_takeover", "fresh_arrow"}:
+            raise ContractError(f"unknown Arrow collection mode: {collection_mode!r}")
         if request.source_state.value == "source_held":
             if self.held_recover_fn is None:
                 raise ContractError(
