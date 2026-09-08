@@ -206,3 +206,36 @@ def test_source_classifier_discards_closed_or_ambiguous_gripper() -> None:
     assert runtime.classify_source_state(object(), state(0.02, 0.02)) is SourceState.SOURCE_UNHELD
     assert runtime.classify_source_state(object(), state(0.0, 0.0)) is SourceState.UNSAFE
     assert runtime.classify_source_state(object(), state(0.015, 0.02)) is SourceState.UNSAFE
+
+
+def test_arrow_session_forwards_current_rendered_arrow_to_motion_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from vla_benchmarking.libero.evaluation import run_arrow_pick_place_eval as episode
+
+    arrow_rgb = np.zeros((8, 8, 3), dtype=np.uint8)
+    session = runtime._ArrowSession(
+        molmo=object(), resolution=8, output_root=tmp_path,
+        transform=np.eye(3), opening_m=0.04, task_id=0, seed=3000,
+        pending_arrow=(arrow_rgb, (1.0, 2.0), (3.0, 4.0)),
+    )
+    rendered, source, destination = session.refresh_arrow(object())
+    assert rendered is arrow_rgb
+    assert source == (1.0, 2.0)
+    assert destination == (3.0, 4.0)
+
+    seen = {}
+
+    def fake_run_episode(**kwargs):
+        seen.update(kwargs)
+        return {"status": "task_failure"}
+
+    monkeypatch.setattr(episode, "run_episode", fake_run_episode)
+    session.episode_runner(
+        env=object(),
+        context=SimpleNamespace(
+            output_dir=tmp_path, candidate=object(), agentview_capture=object()
+        ),
+        evaluator=None,
+    )
+    assert seen["arrow_rgb"] is arrow_rgb

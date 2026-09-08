@@ -363,6 +363,7 @@ class _ArrowSession:
     worker: Any | None = None
     pending_capture: Any | None = None
     pending_arrow: tuple[Any, Sequence[float], Sequence[float] | None] | None = None
+    current_arrow_rgb: Any | None = None
     current_view: Any | None = None
     task_id: int | None = None
     seed: int | None = None
@@ -390,6 +391,7 @@ class _ArrowSession:
         rendered, source_uv, destination_uv = self._render_arrow(
             view, capture, int(request.episode.task_id)
         )
+        self.current_arrow_rgb = None
         self.pending_arrow = (rendered, source_uv, destination_uv)
         calibration = getattr(capture, "calibration", None)
         camera_id = getattr(calibration, "camera_name", "agentview")
@@ -445,10 +447,12 @@ class _ArrowSession:
         if self.pending_arrow is not None:
             value = self.pending_arrow
             self.pending_arrow = None
-            return value
-        if self.current_view is None or self.task_id is None:
-            raise ContractError("Arrow retry requested before a live takeover was bound")
-        return self._render_arrow(self.current_view, capture, int(self.task_id))
+        else:
+            if self.current_view is None or self.task_id is None:
+                raise ContractError("Arrow retry requested before a live takeover was bound")
+            value = self._render_arrow(self.current_view, capture, int(self.task_id))
+        self.current_arrow_rgb = value[0]
+        return value
 
     def evaluate(self, environment: Any) -> bool:
         method = getattr(environment, "check_success", None)
@@ -465,12 +469,15 @@ class _ArrowSession:
                        retreat_completed_callback: Callable[[], None] | None = None) -> Mapping[str, Any]:
         if self.transform is None or self.opening_m is None:
             raise ContractError("Arrow controller calibration was not refreshed before takeover")
+        if self.current_arrow_rgb is None:
+            raise ContractError("Arrow controller motion requires the current rendered arrow frame")
         from vla_benchmarking.libero.evaluation import run_arrow_pick_place_eval as episode
         if self.action_budget is None:
             self.action_budget = episode._ActionBudget(DEFAULT_ARROW_STEP_BUDGET)
         result = episode.run_episode(
             env=env, task_id=int(self.task_id if self.task_id is not None else 0),
             seed=int(self.seed if self.seed is not None else 0), output_dir=context.output_dir,
+            arrow_rgb=self.current_arrow_rgb,
             dry_run=False, resolution=self.resolution,
             evaluator=evaluator, capture=context.agentview_capture,
             # ``run_episode`` accepts the Arrow canary variant name
