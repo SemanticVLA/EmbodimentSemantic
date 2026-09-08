@@ -78,7 +78,9 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
-PYTHON="${PEFT_PYTHON:-$HOME/.conda/envs/embodiment-smolvla-py312/bin/python}"
+# The generic SmolVLA environment currently carries Transformers 5.x.  Arrow's
+# pinned MolmoPoint worker requires the existing canonical 4.57.1 environment.
+PYTHON="${PEFT_PYTHON:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/venv-py312-eacdc54a9663db0a/bin/python}"
 BASE_POLICY="${PEFT_BASE_POLICY:-$HOME/EmbodimentSemantic/vla_benchmarking/base_models/smolvla_libero-6721902bc4d61e50a3bfdb11dfb4cb626f05d102}"
 LIBERO_DIR="${PEFT_LIBERO_DIR:-$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO}"
 LIBERO_CONFIG="${PEFT_LIBERO_CONFIG:-$HOME/EmbodimentSemantic_runtime/config/config.yaml}"
@@ -96,6 +98,12 @@ done
 [[ -d "$LIBERO_DIR/.git" && -f "$LIBERO_CONFIG" ]] || die 'pinned LIBERO runtime is missing'
 [[ "$(git -C "$LIBERO_DIR" rev-parse HEAD 2>/dev/null || true)" == "$LIBERO_COMMIT" ]] || die 'LIBERO checkout is not pinned'
 [[ -z "$(git -C "$LIBERO_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)" ]] || die 'LIBERO checkout is dirty'
+"$PYTHON" - <<'PY'
+from importlib.metadata import version
+if version("transformers") != "4.57.1":
+    raise SystemExit(f"Arrow MolmoPoint requires transformers==4.57.1, found {version('transformers')}")
+print("Arrow runtime Transformers 4.57.1 verified")
+PY
 
 module purge
 module load miniforge/24.3.0-0

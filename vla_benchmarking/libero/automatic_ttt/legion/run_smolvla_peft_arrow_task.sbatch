@@ -58,13 +58,21 @@ BASE_POLICY_REVISION="${PEFT_BASE_POLICY_REVISION:-6721902bc4d61e50a3bfdb11dfb4c
 BASE_POLICY="${PEFT_BASE_POLICY:-$HOME/EmbodimentSemantic/vla_benchmarking/base_models/smolvla_libero-$BASE_POLICY_REVISION}"
 LIBERO_DIR="${PEFT_LIBERO_DIR:-$HOME/EmbodimentSemantic/vla_benchmarking/LIBERO}"
 LIBERO_CONFIG="${PEFT_LIBERO_CONFIG:-$HOME/EmbodimentSemantic_runtime/config/config.yaml}"
-PYTHON="${PEFT_PYTHON:-$HOME/.conda/envs/embodiment-smolvla-py312/bin/python}"
+# Use the canonical Arrow/LeRobot runtime: MolmoPoint is pinned to
+# Transformers 4.57.1, while the generic SmolVLA environment may be 5.x.
+PYTHON="${PEFT_PYTHON:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/venv-py312-eacdc54a9663db0a/bin/python}"
 LIBERO_COMMIT="${PEFT_LIBERO_COMMIT:-8f1084e3132a39270c3a13ebe37270a43ece2a01}"
 TRAINER="$REPO_ROOT/vla_benchmarking/libero/finetuned_vlas/smolvla/workflows/run_lerobot_train.py"
 AUDITOR="$REPO_ROOT/vla_benchmarking/libero/finetuned_vlas/smolvla/workflows/adapter_audit.py"
 EVALUATOR="$REPO_ROOT/vla_benchmarking/libero/evaluation/run_lerobot_eval_with_context.py"
 [[ -x "$PYTHON" ]] || die "Python is missing: $PYTHON"
 for path in "$BASE_POLICY" "$LIBERO_DIR" "$LIBERO_CONFIG" "$TRAINER" "$AUDITOR" "$EVALUATOR"; do [[ -e "$path" ]] || die "required path is missing: $path"; done
+"$PYTHON" - <<'PY'
+from importlib.metadata import version
+if version("transformers") != "4.57.1":
+    raise SystemExit(f"Arrow MolmoPoint requires transformers==4.57.1, found {version('transformers')}")
+print("Arrow runtime Transformers 4.57.1 verified")
+PY
 REPO_ROOT="$(realpath -e -- "$REPO_ROOT")"
 if [[ -n "$COLLECTION_MANIFEST" ]]; then COLLECTION_MANIFEST="$(realpath -e -- "$COLLECTION_MANIFEST")"; fi
 [[ -d "$REPO_ROOT/.git" ]] || die 'REPO_ROOT is not a Git checkout'
