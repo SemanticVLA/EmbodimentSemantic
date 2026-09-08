@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from .arrow_bridge import ArrowCanaryBridge
@@ -62,3 +63,22 @@ def test_bridge_requires_fresh_capture_provenance_after_vla_motion():
         _request(),
     )
     assert geometry["source_uv"] == (3.0, 4.0)
+
+
+def test_bridge_accepts_numpy_arrow_endpoints_from_production_decoder():
+    geometry = _bridge()._fresh_geometry(
+        {
+            "source_uv": np.asarray([3.0, 4.0]),
+            "destination_uv": np.asarray([5.0, 6.0]),
+            "capture_provenance": {
+                "timestamp": 1.0,
+                "camera_id": "agentview",
+                "resolution": [256, 256],
+                "calibration_revision": "calib-1",
+                "captured_after_timestep": 0,
+            },
+        },
+        _request(),
+    )
+    assert geometry["source_uv"] == (3.0, 4.0)
+    assert geometry["destination_uv"] == (5.0, 6.0)

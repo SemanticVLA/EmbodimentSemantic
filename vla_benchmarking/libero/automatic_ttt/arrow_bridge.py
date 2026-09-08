@@ -200,15 +200,25 @@ class ArrowCanaryBridge(ArrowGraspControllerTeacher):
         source = raw.get("source_uv")
         destination = raw.get("destination_uv")
         provenance = raw.get("capture_provenance")
-        if not isinstance(source, Sequence) or isinstance(source, (str, bytes)) or len(source) != 2:
+        try:
+            if isinstance(source, (str, bytes, Mapping)):
+                raise TypeError
+            source_uv = tuple(float(value) for value in source)
+        except (TypeError, ValueError):
             raise ContractError("refresh_fn must return a finite two-dimensional source_uv")
-        source_uv = tuple(float(value) for value in source)
+        if len(source_uv) != 2:
+            raise ContractError("refresh_fn must return a finite two-dimensional source_uv")
         if not all(math.isfinite(value) for value in source_uv):
             raise ContractError("refresh_fn source_uv contains a non-finite value")
         if destination is not None:
-            if not isinstance(destination, Sequence) or isinstance(destination, (str, bytes)) or len(destination) != 2:
+            try:
+                if isinstance(destination, (str, bytes, Mapping)):
+                    raise TypeError
+                destination_uv = tuple(float(value) for value in destination)
+            except (TypeError, ValueError):
                 raise ContractError("refresh_fn destination_uv must be two-dimensional or null")
-            destination_uv = tuple(float(value) for value in destination)
+            if len(destination_uv) != 2:
+                raise ContractError("refresh_fn destination_uv must be two-dimensional or null")
             if not all(math.isfinite(value) for value in destination_uv):
                 raise ContractError("refresh_fn destination_uv contains a non-finite value")
         else:
