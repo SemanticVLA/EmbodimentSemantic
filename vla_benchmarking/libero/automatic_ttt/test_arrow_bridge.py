@@ -88,14 +88,14 @@ def test_bridge_accepts_numpy_arrow_endpoints_from_production_decoder():
 def test_fresh_recovery_coerces_controller_mapping_to_typed_result(monkeypatch, tmp_path):
     from vla_benchmarking.libero.arrow_grasp_controller.controller import runner
 
-    monkeypatch.setattr(
-        runner,
-        "run_canary_episode",
-        lambda **_kwargs: {
+    def run_canary_episode(**kwargs):
+        kwargs["env"].step([0.0] * 7)
+        return {
             "attempts": [],
             "final_result": {"status": "task_failure", "evaluator_success": False},
-        },
-    )
+        }
+
+    monkeypatch.setattr(runner, "run_canary_episode", run_canary_episode)
 
     class Env:
         def observe(self):

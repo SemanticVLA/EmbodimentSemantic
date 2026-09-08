@@ -16,7 +16,7 @@ import inspect
 from typing import Any, Callable, Mapping, Sequence
 
 from .contracts import ContractError, TeacherRecoveryRequest, TeacherRecoveryResult
-from .teacher import ArrowGraspControllerTeacher, TakeoverEnvironmentView
+from .teacher import ArrowGraspControllerTeacher, PrivilegedTakeoverEnvironmentView, TakeoverEnvironmentView
 
 
 class ArrowCanaryBridge(ArrowGraspControllerTeacher):
@@ -122,6 +122,9 @@ class ArrowCanaryBridge(ArrowGraspControllerTeacher):
         )
         if not isinstance(raw, Mapping):
             raise ContractError("run_canary_episode must return a mapping")
+        if not isinstance(view, PrivilegedTakeoverEnvironmentView):
+            raise ContractError("Arrow controller requires the privileged takeover view")
+        view.finalize_controller_trace()
         transitions = tuple(view.executed_transitions)
         if self.transition_getter is not None:
             # An optional legacy getter is an audit assertion only.  Do not

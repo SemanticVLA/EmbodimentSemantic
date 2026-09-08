@@ -112,7 +112,7 @@ class TakeoverEnvironmentView:
                     observation=before,
                     action=action_tuple,
                     next_observation=after,
-                    done=_step_done(result),
+                    done=self._recorded_done(result),
                     success=_step_success(result),
                     training_eligible=True,
                     source_state=self._source_state,
@@ -126,6 +126,9 @@ class TakeoverEnvironmentView:
 
     def _step_environment(self, action: Sequence[float]) -> Any:
         return self._environment.step(action)
+
+    def _recorded_done(self, result: Any) -> bool:
+        return _step_done(result)
 
     def assert_usable(self) -> None:
         if self._closed:
@@ -175,11 +178,38 @@ class PrivilegedTakeoverEnvironmentView(TakeoverEnvironmentView):
         "state", "qpos", "qvel", "model_state", "sim_state", "initial_state",
     })
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._controller_trace_finalized = False
+
     def _step_environment(self, action: Sequence[float]) -> Any:
+        if self._controller_trace_finalized:
+            raise ContractError("Arrow controller cannot step after its trace is finalized")
         controller_step = getattr(self._environment, "step_with_raw_observation", None)
         if callable(controller_step):
             return controller_step(action)
         return super()._step_environment(action)
+
+    def _recorded_done(self, result: Any) -> bool:
+        # LIBERO's step-level done becomes true as soon as the task predicate
+        # is met, but Arrow must still retreat and then run its evaluator.
+        # The controller trace therefore remains open until the runner exits.
+        return False
+
+    def finalize_controller_trace(self) -> None:
+        """Mark only the controller's final executed action as episode-ending."""
+
+        self.assert_usable()
+        if self._controller_trace_finalized:
+            raise ContractError("Arrow controller trace was already finalized")
+        if not self._executed_transitions:
+            raise ContractError("Arrow controller cannot finalize an empty trace")
+        last = len(self._executed_transitions) - 1
+        self._executed_transitions = [
+            replace(row, done=(index == last))
+            for index, row in enumerate(self._executed_transitions)
+        ]
+        self._controller_trace_finalized = True
 
     def __getattr__(self, name: str) -> Any:
         lowered = name.lower()

@@ -149,3 +149,24 @@ def test_privileged_controller_gets_raw_proprioception_but_records_only_canonica
     transition = view.executed_transitions[0]
     assert set(transition.observation) == {"agentview", "wrist", "state", "instruction"}
     assert set(transition.next_observation) == {"agentview", "wrist", "state", "instruction"}
+
+
+def test_privileged_controller_defers_libero_done_until_retreat_trace_finishes():
+    class SuccessPredicateEnv(Env):
+        def step(self, _action):
+            self.t += 1
+            return self.observe(), 0.0, self.t == 1, {"success": self.t == 1}
+
+    view = PrivilegedTakeoverEnvironmentView(
+        SuccessPredicateEnv(), episode_id="episode", source_state=SourceState.SOURCE_UNHELD,
+    )
+    view.step([0.0] * 7)
+    view.step([0.0] * 7)
+    assert [row.done for row in view.executed_transitions] == [False, False]
+    assert [row.success for row in view.executed_transitions] == [True, False]
+
+    view.finalize_controller_trace()
+
+    assert [row.done for row in view.executed_transitions] == [False, True]
+    with pytest.raises(ContractError, match="cannot step after"):
+        view.step([0.0] * 7)
