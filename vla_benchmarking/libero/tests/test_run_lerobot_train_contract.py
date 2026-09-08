@@ -44,6 +44,27 @@ class _TrainModule:
         return tracker, {"ok": True}
 
 
+class AcceleratedOptimizer:
+    __module__ = "accelerate.optimizer"
+
+    def __init__(self, optimizer):
+        self.optimizer = optimizer
+
+    def __getattr__(self, name):
+        return getattr(self.optimizer, name)
+
+
+class AcceleratedScheduler:
+    __module__ = "accelerate.scheduler"
+
+    def __init__(self, scheduler, optimizer):
+        self.scheduler = scheduler
+        self.optimizers = [optimizer]
+
+    def __getattr__(self, name):
+        return getattr(self.scheduler, name)
+
+
 def _set_expected(monkeypatch, updates=1):
     values = {
         "TRAIN_EXPECTED_UPDATES": str(updates), "TRAIN_EXPECTED_BASE_LR": "5e-5",
@@ -75,6 +96,27 @@ def test_runtime_evidence_observes_finite_training_metrics(tmp_path: Path, monke
     assert evidence["peak_cuda_allocated_bytes"] == 0
     assert evidence["attestation_status"] == "VERIFIED"
     assert evidence["optimizer_class"] == "torch.optim.adamw.AdamW"
+
+
+def test_runtime_evidence_audits_accelerate_wrapped_optimizer_and_scheduler(tmp_path: Path, monkeypatch):
+    callbacks = []
+    monkeypatch.setattr(atexit, "register", callbacks.append)
+    monkeypatch.setattr(run_lerobot_train.torch.cuda, "is_available", lambda: False)
+    _set_expected(monkeypatch)
+    module = _TrainModule()
+    wrapped_optimizer = AcceleratedOptimizer(module.optimizer)
+    wrapped_scheduler = AcceleratedScheduler(module.scheduler, wrapped_optimizer)
+    output = tmp_path / "runtime.json"
+    finalize = run_lerobot_train._install_runtime_evidence(module, output)
+    tracker, payload = module.update_policy(
+        None, None, None, wrapped_optimizer, 10, None, wrapped_scheduler
+    )
+    assert tracker.loss == 1.25 and payload == {"ok": True}
+    finalize()
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert evidence["attestation_status"] == "VERIFIED"
+    assert evidence["optimizer_class"] == "torch.optim.adamw.AdamW"
+    assert evidence["scheduler_class"] == "torch.optim.lr_scheduler.LambdaLR"
 
 
 def test_runtime_evidence_rejects_nonfinite_loss(tmp_path: Path, monkeypatch):

@@ -78,6 +78,23 @@ def _install_runtime_evidence(lerobot_train, output: Path):
             raise RuntimeError("runtime evidence could not bind optimizer and lr_scheduler")
         if grad_clip_norm is None or abs(float(grad_clip_norm) - expected["grad_clip_norm"]) > 1e-12:
             raise RuntimeError("gradient clipping differs from sealed value")
+        optimizer_wrapper = optimizer
+        if (optimizer.__class__.__name__, optimizer.__class__.__module__) == (
+            "AcceleratedOptimizer", "accelerate.optimizer"
+        ):
+            optimizer = getattr(optimizer, "optimizer", None)
+            if optimizer is None or optimizer is optimizer_wrapper:
+                raise RuntimeError("AcceleratedOptimizer does not expose its wrapped optimizer")
+        scheduler_wrapper = scheduler
+        if (scheduler.__class__.__name__, scheduler.__class__.__module__) == (
+            "AcceleratedScheduler", "accelerate.scheduler"
+        ):
+            wrapped_optimizers = list(getattr(scheduler, "optimizers", ()))
+            if optimizer_wrapper not in wrapped_optimizers:
+                raise RuntimeError("AcceleratedScheduler is not bound to the training optimizer wrapper")
+            scheduler = getattr(scheduler, "scheduler", None)
+            if scheduler is None or scheduler is scheduler_wrapper:
+                raise RuntimeError("AcceleratedScheduler does not expose its wrapped scheduler")
         if optimizer.__class__.__name__ != "AdamW" or optimizer.__class__.__module__ != "torch.optim.adamw":
             raise RuntimeError(f"optimizer is not torch.optim.AdamW: {type(optimizer)!r}")
         groups = list(getattr(optimizer, "param_groups", ()))
