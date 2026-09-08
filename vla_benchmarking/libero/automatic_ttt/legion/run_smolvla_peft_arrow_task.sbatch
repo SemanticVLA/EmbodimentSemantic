@@ -141,7 +141,11 @@ export REPO_ROOT VLA_ROOT="$REPO_ROOT/vla_benchmarking/libero" LIBERO_DIR LIBERO
 export SMOLVLA_BASE_POLICY="$BASE_POLICY"
 ARROW_HF_CACHE="${ARROW_HF_CACHE:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/cache/huggingface}"
 [[ -d "$ARROW_HF_CACHE/transformers/models--allenai--MolmoPoint-8B" ]] || die "pinned MolmoPoint cache is missing: $ARROW_HF_CACHE"
-export HF_HOME="$ARROW_HF_CACHE" HF_HUB_CACHE="$ARROW_HF_CACHE/hub" TRANSFORMERS_CACHE="$ARROW_HF_CACHE/transformers" HF_MODULES_CACHE="$ARROW_HF_CACHE/modules"
+SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"
+[[ -d "$SMOLVLA_HF_CACHE/hub/models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" ]] || die "pinned SmolVLM2 cache is missing: $SMOLVLA_HF_CACHE"
+use_arrow_cache() { export HF_HOME="$ARROW_HF_CACHE" HF_HUB_CACHE="$ARROW_HF_CACHE/hub" TRANSFORMERS_CACHE="$ARROW_HF_CACHE/transformers" HF_MODULES_CACHE="$ARROW_HF_CACHE/modules"; }
+use_smolvla_cache() { export HF_HOME="$SMOLVLA_HF_CACHE" HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub" TRANSFORMERS_CACHE="$SMOLVLA_HF_CACHE/hub" HF_MODULES_CACHE="$SMOLVLA_HF_CACHE/modules"; }
+use_smolvla_cache
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl HF_HUB_DISABLE_TELEMETRY=1 TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=1000 CUBLAS_WORKSPACE_CONFIG=:4096:8 CUDNN_DETERMINISTIC=1 ACCELERATE_MIXED_PRECISION=no
 copy_tree() { local source="$1" destination="$2"; [[ -e "$source" ]] || return 0; mkdir -p "$destination"; if command -v rsync >/dev/null 2>&1; then rsync -a -- "$source/" "$destination/"; else cp -a -- "$source/." "$destination/"; fi; }
 archive_on_exit() {
@@ -219,6 +223,7 @@ export EVAL_RESET_CONTRACT
 # Live collection is the normal path. A supplied manifest is a replay mode
 # for a previously completed collector run and is still loader-validated.
 if [[ -z "$COLLECTION_MANIFEST" ]]; then
+  use_arrow_cache
   COLLECTION_ROOT="$RUN_ROOT/collection"
   mkdir -p "$COLLECTION_ROOT"
   printf '[%s] collecting 50 fresh Arrow demonstrations for task %s\n' "$(date +'%F %T')" "$TASK_ID"
@@ -231,6 +236,7 @@ if [[ -z "$COLLECTION_MANIFEST" ]]; then
     --factory vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect
   COLLECTION_MANIFEST="$COLLECTION_ROOT/collection_manifest.json"
 fi
+use_smolvla_cache
 COLLECTION_MANIFEST="$(realpath -e -- "$COLLECTION_MANIFEST")" || die 'cannot resolve collection manifest after collection'
 export COLLECTION_MANIFEST COLLECTION_INFO="$RUN_ROOT/collection_normalized.json"
 "$PYTHON" - "$COLLECTION_MANIFEST" "$TASK_ID" "$COLLECTION_INFO" "$CONTROLLER_CONFIG_HASH" <<'PY'
@@ -277,13 +283,6 @@ PY
 export TRAIN_EXPECTED_UPDATES="$STEPS" TRAIN_EXPECTED_BASE_LR="$PEAK_LR" TRAIN_EXPECTED_WEIGHT_DECAY="$WEIGHT_DECAY" TRAIN_EXPECTED_BETAS="$OPTIMIZER_BETAS" TRAIN_EXPECTED_EPS="$OPTIMIZER_EPS" TRAIN_EXPECTED_GRAD_CLIP="$GRAD_CLIP" TRAIN_EXPECTED_SCHEDULER="$SCHEDULER_NAME" TRAIN_EXPECTED_WARMUP="$SCHEDULER_WARMUP_STEPS" TRAIN_EXPECTED_DECAY_STEPS="$SCHEDULER_DECAY_STEPS" TRAIN_EXPECTED_DECAY_LR="$SCHEDULER_DECAY_LR"
 COLLECTION_SUCCESS_COUNT=50
 export DATASET_ROOT DATASET_FRAMES EPOCH_EQUIVALENT COLLECTION_SUCCESS_COUNT REQUESTED_EPOCHS
-
-# Arrow collection needs the isolated Molmo cache; SmolVLA audit, training,
-# and evaluation need the separately populated SmolVLM2 cache.  Switch only
-# after collection so every process resolves its pinned local model offline.
-SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"
-[[ -d "$SMOLVLA_HF_CACHE/hub/models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" ]] || die "pinned SmolVLM2 cache is missing: $SMOLVLA_HF_CACHE"
-export HF_HOME="$SMOLVLA_HF_CACHE" HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub" TRANSFORMERS_CACHE="$SMOLVLA_HF_CACHE/hub" HF_MODULES_CACHE="$SMOLVLA_HF_CACHE/modules"
 
 "$PYTHON" - "$RUN_ROOT/run_context.json" <<'PY'
 import json, os, pathlib, platform

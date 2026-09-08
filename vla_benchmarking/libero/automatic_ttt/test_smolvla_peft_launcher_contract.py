@@ -75,10 +75,20 @@ def test_live_run_order_is_baseline_then_collection_then_training_then_eval():
 
 
 def test_launchers_switch_from_arrow_cache_to_pinned_smolvlm_cache_before_training():
-    for path in (LAUNCHER, CANARY):
-        text = path.read_text(encoding="utf-8")
-        switch = text.index('SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"')
-        audit = text.index('"$PYTHON" "$AUDITOR" --generate-expected')
-        assert switch < audit
-        assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" in text
-        assert 'HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub"' in text
+    text = LAUNCHER.read_text(encoding="utf-8")
+    baseline = text.index("baseline evaluation task")
+    live_branch = text.index('if [[ -z "$COLLECTION_MANIFEST" ]]; then')
+    arrow_switch = text.index("use_arrow_cache", live_branch)
+    collector = text.index("collect_smolvla_arrow_corrections", live_branch)
+    smol_switch_after_collection = text.index("use_smolvla_cache", collector)
+    audit = text.index('"$PYTHON" "$AUDITOR" --generate-expected')
+    assert text.index("use_smolvla_cache") < baseline < live_branch
+    assert live_branch < arrow_switch < collector < smol_switch_after_collection < audit
+    assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" in text
+    assert 'HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub"' in text
+
+    canary = CANARY.read_text(encoding="utf-8")
+    switch = canary.index('SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"')
+    audit = canary.index('"$PYTHON" "$AUDITOR" --generate-expected')
+    assert switch < audit
+    assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" in canary
