@@ -325,9 +325,8 @@ PY
 printf '[%s] training task %s for %s optimizer steps (requested_epochs=%s)\n' "$(date +'%F %T')" "$TASK_ID" "$STEPS" "$REQUESTED_EPOCHS"
 [[ ! -e "$TRAIN_ROOT" ]] || die 'trainer output directory unexpectedly exists'
 TRAINING_RUNTIME_EVIDENCE="$TRAIN_META_ROOT/runtime_evidence.json" "$PYTHON" "$TRAINER" \
-  --policy.push_to_hub=false --peft.r=16 --peft.lora_alpha=8 --peft.lora_dropout=0.0 --peft.bias=none \
-  --peft.init_lora_weights=true --peft.use_rslora=false --peft.fan_in_fan_out=false \
-  --peft.target_modules="$ACTION_SIDE_TARGET_REGEX" --peft.modules_to_save="[]" \
+  --policy.push_to_hub=false --peft.method_type=LORA --peft.r=16 \
+  --peft.target_modules="$ACTION_SIDE_TARGET_REGEX" --peft.full_training_modules="[]" \
   --dataset.repo_id="local/arrow_grasp_task_${TASK_ID}" --dataset.root="$DATASET_ROOT" --output_dir="$TRAIN_ROOT" \
   --steps="$STEPS" --save_freq="$SAVE_FREQ" --eval_freq=0 --batch_size="$PEFT_BATCH_SIZE" --seed=1000 \
   --num_workers="$NUM_WORKERS" --prefetch_factor="$PREFETCH_FACTOR" --persistent_workers="$PERSISTENT_WORKERS" \

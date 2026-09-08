@@ -236,9 +236,8 @@ SMOLVLA_HF_CACHE="${SMOLVLA_HF_CACHE:-$HOME/.cache/huggingface}"
 export HF_HOME="$SMOLVLA_HF_CACHE" HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub" TRANSFORMERS_CACHE="$SMOLVLA_HF_CACHE/hub" HF_MODULES_CACHE="$SMOLVLA_HF_CACHE/modules"
 "$PYTHON" "$AUDITOR" --generate-expected --base-policy "$BASE_POLICY" --output "$TRAIN_META/expected_adapter_inventory.json"
 TRAINING_RUNTIME_EVIDENCE="$TRAIN_META/runtime_evidence.json" "$PYTHON" "$TRAINER" \
-  --policy.push_to_hub=false --peft.r=16 --peft.lora_alpha=8 --peft.lora_dropout=0.0 --peft.bias=none \
-  --peft.init_lora_weights=true --peft.use_rslora=false --peft.fan_in_fan_out=false \
-  --peft.target_modules='(model\.vlm_with_expert\.lm_expert\..*\.(q|v)_proj|model\.(state_proj|action_in_proj|action_out_proj|action_time_mlp_in|action_time_mlp_out))' --peft.modules_to_save='[]' \
+  --policy.push_to_hub=false --peft.method_type=LORA --peft.r=16 \
+  --peft.target_modules='(model\.vlm_with_expert\.lm_expert\..*\.(q|v)_proj|model\.(state_proj|action_in_proj|action_out_proj|action_time_mlp_in|action_time_mlp_out))' --peft.full_training_modules='[]' \
   --dataset.repo_id=local/arrow_grasp_task_0_canary --dataset.root="$DATASET_ROOT" --output_dir="$TRAIN_ROOT" \
   --steps=2 --save_freq=2 --eval_freq=0 --batch_size=8 --seed=1000 \
   --num_workers=4 --prefetch_factor=4 --persistent_workers=true --log_freq=1 --tolerance_s=0.0001 --cudnn_deterministic=true \

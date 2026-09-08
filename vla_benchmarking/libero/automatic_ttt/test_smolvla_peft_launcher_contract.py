@@ -26,6 +26,10 @@ def test_launcher_is_scalar_task_specific_and_manifest_driven():
     assert "hdf5_to_lerobot_dataset" not in text
     assert "convert-pair" not in text
     assert '--steps="$STEPS"' in text
+    assert "--peft.method_type=LORA" in text
+    assert '--peft.full_training_modules="[]"' in text
+    for unsupported in ("--peft.lora_alpha", "--peft.lora_dropout", "--peft.bias", "--peft.init_lora_weights", "--peft.use_rslora", "--peft.fan_in_fan_out", "--peft.modules_to_save"):
+        assert unsupported not in text
     assert '--policy.optimizer_lr="$PEAK_LR"' in text
     assert '--policy.optimizer_weight_decay="$WEIGHT_DECAY"' in text
     assert '--policy.scheduler_decay_steps="$SCHEDULER_DECAY_STEPS"' in text
@@ -92,3 +96,5 @@ def test_launchers_switch_from_arrow_cache_to_pinned_smolvlm_cache_before_traini
     audit = canary.index('"$PYTHON" "$AUDITOR" --generate-expected')
     assert switch < audit
     assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" in canary
+    assert "--peft.method_type=LORA" in canary
+    assert "--peft.full_training_modules='[]'" in canary
