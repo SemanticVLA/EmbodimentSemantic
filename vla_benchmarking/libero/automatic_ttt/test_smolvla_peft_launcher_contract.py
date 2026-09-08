@@ -98,3 +98,10 @@ def test_launchers_switch_from_arrow_cache_to_pinned_smolvlm_cache_before_traini
     assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots" in canary
     assert "--peft.method_type=LORA" in canary
     assert "--peft.full_training_modules='[]'" in canary
+
+
+def test_canary_uses_short_tmpdir_for_torch_multiprocessing_sockets():
+    canary = CANARY.read_text(encoding="utf-8")
+    assert 'TMP_ROOT="/tmp/peft-canary-${SLURM_JOB_ID}"' in canary
+    assert 'export TMPDIR="$TMP_ROOT"' in canary
+    assert 'TMPDIR="$RUN_ROOT/tmp"' not in canary
