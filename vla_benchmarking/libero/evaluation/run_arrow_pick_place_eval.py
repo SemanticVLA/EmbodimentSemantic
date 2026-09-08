@@ -4458,6 +4458,13 @@ def build_libero_env(
         camera_depths=True,
         controller=variant.controller,
     )
+    # LIBERO's OffScreenRenderEnv returns robosuite's normalized depth map
+    # through the observation keys (``*_depth``).  Arrow may receive this
+    # environment through the privileged takeover proxy, so the producer
+    # contract must live on the raw object instead of relying on a wrapper
+    # class-name heuristic.  Without this declaration the RGB-D capture seam
+    # correctly fails closed as "unknown" before the first Arrow attempt.
+    setattr(env, "_arrow_depth_encoding", "normalized")
     # Match render_visual_arrow_pair.py's seed/init-state setup while avoiding
     # LeRobot's terminal autoreset.  The direct wrapper owns the same init-state
     # files and lets us preserve the terminal observation through retreat.
