@@ -10,7 +10,7 @@ reported as unsupported instead of being silently ignored.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import copy
 import random
 from typing import Any, Callable, Mapping
@@ -42,6 +42,14 @@ _INFRASTRUCTURE_FIELDS = frozenset({
     "model", "data", "observables", "_observables", "action_dim", "_action_dim",
     "control_freq", "_control_freq", "camera_names", "_camera_names", "camera_heights",
     "camera_widths", "camera_depths", "controller_configs", "_controller_configs",
+})
+# LIBERO attaches these values to the wrapper as episode/task metadata.  They
+# identify the task that was constructed and are not simulator bookkeeping
+# that can change as actions are applied.  They therefore do not belong in
+# the rollback payload, but we still record them so an unexpected change is
+# detected instead of silently accepted.
+_IMMUTABLE_METADATA_FIELDS = frozenset({
+    "problem_name", "domain_name", "language_instruction",
 })
 
 
@@ -165,6 +173,7 @@ class OffScreenRenderSnapshot:
     component_states: Mapping[str, Any]
     rng_state: Mapping[str, Any]
     observation_digest: str
+    immutable_metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 class OffScreenRenderState:
@@ -208,7 +217,7 @@ class OffScreenRenderState:
         # under a new name.  Large simulator ownership references are handled
         # by ``sim_state`` or explicit component hooks and are not copied here.
         for name, value in vars(self.environment).items():
-            if name in fields or name in _INFRASTRUCTURE_FIELDS:
+            if name in fields or name in _INFRASTRUCTURE_FIELDS or name in _IMMUTABLE_METADATA_FIELDS:
                 continue
             if name.startswith("__"):
                 continue
@@ -218,6 +227,14 @@ class OffScreenRenderState:
         if unsupported and self.strict:
             raise LiberoRollbackUnavailable(f"unsupported mutable environment fields: {unsupported}")
         return fields
+
+    def _immutable_metadata(self) -> dict[str, Any]:
+        """Capture task metadata without treating it as rollbackable state."""
+        return {
+            name: _safe_copy(getattr(self.environment, name), f"environment.{name}")
+            for name in _IMMUTABLE_METADATA_FIELDS
+            if hasattr(self.environment, name)
+        }
 
     def _observable_fields(self) -> dict[str, dict[str, Any]]:
         observables = getattr(self.environment, "observables", None)
@@ -257,11 +274,20 @@ class OffScreenRenderState:
         return OffScreenRenderSnapshot(
             mode, state, self._wrapper_fields(), self._observable_fields(),
             self._component_states(), _capture_rng(), digest(observation),
+            self._immutable_metadata(),
         )
 
     def restore(self, snapshot: OffScreenRenderSnapshot) -> None:
         if not isinstance(snapshot, OffScreenRenderSnapshot):
             raise LiberoRollbackUnavailable("restore requires OffScreenRenderSnapshot")
+        # These fields identify the constructed LIBERO task and are not
+        # rollbackable.  If they changed, the environment is no longer the
+        # same episode and restoring simulator state cannot be trusted.
+        current_metadata = self._immutable_metadata()
+        if current_metadata != snapshot.immutable_metadata:
+            changed = sorted(set(current_metadata) | set(snapshot.immutable_metadata))
+            changed = [name for name in changed if current_metadata.get(name) != snapshot.immutable_metadata.get(name)]
+            raise LiberoRollbackUnavailable(f"immutable environment metadata changed: {changed}")
         _restore_sim(self.sim, snapshot.sim_mode, snapshot.sim_state)
         _restore_attrs(self.environment, snapshot.wrapper_fields)
         observables = getattr(self.environment, "observables", None)

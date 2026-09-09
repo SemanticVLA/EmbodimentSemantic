@@ -27,6 +27,9 @@ class _Sim:
 class _Env:
     def __init__(self):
         self.sim = _Sim()
+        self.problem_name = "pick_place"
+        self.domain_name = "libero"
+        self.language_instruction = "pick up the object"
         self._elapsed_steps = 0
         self._done = False
         self._observation = None
@@ -67,6 +70,24 @@ def test_offscreen_snapshot_fails_closed_without_sim_state_contract():
 
     with pytest.raises(LiberoRollbackUnavailable, match="sim"):
         OffScreenRenderState(NoState())
+
+
+def test_offscreen_snapshot_treats_libero_task_metadata_as_immutable():
+    env = _Env()
+    provider = OffScreenRenderState(env)
+    snapshot = provider.snapshot()
+
+    assert snapshot.immutable_metadata == {
+        "problem_name": "pick_place",
+        "domain_name": "libero",
+        "language_instruction": "pick up the object",
+    }
+
+    # Metadata is not rollback payload: changing it invalidates the episode
+    # rather than being silently copied over during simulator restore.
+    env.language_instruction = "place the object"
+    with pytest.raises(LiberoRollbackUnavailable, match="immutable environment metadata changed"):
+        provider.restore(snapshot)
 
 
 def test_offscreen_restore_rejects_hidden_state_mismatch():

@@ -120,7 +120,9 @@ def _parquet_files(dataset_dir: str | Path) -> tuple[Path, ...]:
     return files
 
 
-def _read_parquet_rows(files: Sequence[Path]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
+def _read_parquet_rows(
+    files: Sequence[Path],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], dict[str, Any]]:
     try:
         import pyarrow.parquet as pq
     except ImportError as exc:  # pragma: no cover - CI tests inject pyarrow
@@ -128,6 +130,7 @@ def _read_parquet_rows(files: Sequence[Path]) -> tuple[list[dict[str, Any]], lis
     rows: list[dict[str, Any]] = []
     audits: list[dict[str, Any]] = []
     rejection_counts: dict[str, int] = {}
+    skipped_reasons: dict[str, int] = {}
     for path in files:
         try:
             parquet = pq.ParquetFile(path)
@@ -140,17 +143,43 @@ def _read_parquet_rows(files: Sequence[Path]) -> tuple[list[dict[str, Any]], lis
             if logical_schema is None:
                 logical_schema = parquet.schema
             columns = tuple(str(name) for name in logical_schema.names)
-            task_column = _find_column(columns, _TASK_COLUMNS, "task")
-            episode_column = _find_column(columns, _EPISODE_COLUMNS, "episode")
-            state_column = _find_column(columns, _STATE_COLUMNS, "state")
+            task_column = next((name for name in _TASK_COLUMNS if name in columns), None)
+            episode_column = next((name for name in _EPISODE_COLUMNS if name in columns), None)
+            state_column = next((name for name in _STATE_COLUMNS if name in columns), None)
+            missing = [
+                name for name, column in (
+                    ("task", task_column), ("episode", episode_column), ("state", state_column)
+                ) if column is None
+            ]
+            relative = str(path).replace("\\", "/")
+            metadata = getattr(parquet, "metadata", None)
+            row_count = None if metadata is None else int(metadata.num_rows)
+            if missing:
+                # LeRobot stores metadata tables (for example tasks.parquet and
+                # episodes.parquet) beside the frame table.  They are valid
+                # parquet inputs but not Trace data inputs.  Record them
+                # explicitly so a successful artifact remains auditable.
+                reason = "missing_required_columns"
+                skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+                audits.append({
+                    "path": relative,
+                    "sha256": _sha256(path),
+                    "bytes": int(path.stat().st_size),
+                    "row_count": row_count,
+                    "selected_row_count": 0,
+                    "status": "skipped",
+                    "skip_reason": reason,
+                    "missing_columns": missing,
+                    "available_columns": list(columns),
+                    "columns_read": [],
+                })
+                continue
             frame_column = next((name for name in _FRAME_COLUMNS if name in columns), None)
             requested_columns = [task_column, episode_column, state_column]
             if frame_column is not None:
                 requested_columns.append(frame_column)
             table = parquet.read(columns=requested_columns)
             file_rows = table.to_pylist()
-        except ContractError:
-            raise
         except Exception as exc:
             raise ContractError(f"cannot read LeRobot parquet {path}") from exc
         relative = str(path).replace("\\", "/")
@@ -160,6 +189,7 @@ def _read_parquet_rows(files: Sequence[Path]) -> tuple[list[dict[str, Any]], lis
             "bytes": int(path.stat().st_size),
             "row_count": int(parquet.metadata.num_rows),
             "selected_row_count": 0,
+            "status": "data",
             "columns_read": [task_column, episode_column, state_column] + ([frame_column] if frame_column else []),
         })
         for row_index, raw in enumerate(file_rows):
@@ -169,7 +199,21 @@ def _read_parquet_rows(files: Sequence[Path]) -> tuple[list[dict[str, Any]], lis
                 "frame": row_index if frame_column is None else raw.get(frame_column),
                 "source_file": relative, "source_row": row_index,
             })
-    return rows, audits, rejection_counts
+    data_file_count = sum(1 for audit in audits if audit["status"] == "data")
+    if data_file_count == 0:
+        reason_summary = ", ".join(
+            f"{reason}={count}" for reason, count in sorted(skipped_reasons.items())
+        ) or "none"
+        raise ContractError(
+            "no parquet file with required task, episode, and state column(s); "
+            f"scanned={len(files)}, skipped_reasons={reason_summary}"
+        )
+    return rows, audits, rejection_counts, {
+        "scanned_parquet_files": len(files),
+        "data_parquet_files": data_file_count,
+        "skipped_non_data_parquet_files": len(audits) - data_file_count,
+        "skipped_non_data_reasons": dict(sorted(skipped_reasons.items())),
+    }
 
 
 def _state_from_row(value: Any) -> tuple[float, ...]:
@@ -246,7 +290,7 @@ def derive_trace_artifact(
     override_destination = None if destination_anchor is None else _finite_point(destination_anchor, "destination_anchor")
     cfg = milestone_config or GripperMilestoneConfig()
     files = _parquet_files(dataset_dir)
-    rows, file_audits, rejection_counts = _read_parquet_rows(files)
+    rows, file_audits, rejection_counts, parquet_audit = _read_parquet_rows(files)
     parent_hash, parent_path = _load_parent_manifest(parent_collection_manifest)
     requested = {str(value) for value in selected_episodes}
     selected_rows = [row for row in rows if _matches(row["task"], task_id) and str(row["episode"]) in requested]
@@ -321,6 +365,7 @@ def derive_trace_artifact(
         "input": {
             "dataset_directory": str(Path(dataset_dir).expanduser().resolve()),
             "parquet_file_count": len(file_audits), "files": file_audits,
+            "parquet_audit": parquet_audit,
             "row_count": len(rows), "selected_row_count": len(selected_rows),
         },
         "counts": {
@@ -404,6 +449,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "transformation_revision": result.artifact["transformation_revision"],
         "counts": result.artifact["counts"],
         "input": {"parquet_file_count": result.artifact["input"]["parquet_file_count"],
+                  "parquet_audit": result.artifact["input"]["parquet_audit"],
                   "row_count": result.artifact["input"]["row_count"],
                   "selected_row_count": result.artifact["input"]["selected_row_count"]},
     }

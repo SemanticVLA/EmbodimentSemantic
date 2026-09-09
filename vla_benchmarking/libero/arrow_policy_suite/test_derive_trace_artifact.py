@@ -22,14 +22,20 @@ class _FakeParquetFile:
     rows = []
     columns = ()
     physical_columns = None
+    records = {}
 
-    def __init__(self, _path):
-        self.schema = SimpleNamespace(names=list(self.physical_columns or self.columns))
-        self.schema_arrow = SimpleNamespace(names=list(self.columns))
-        self.metadata = SimpleNamespace(num_rows=len(self.rows))
+    def __init__(self, path):
+        record = self.records.get(__import__("pathlib").Path(path).name, {})
+        rows = record.get("rows", self.rows)
+        columns = record.get("columns", self.columns)
+        physical_columns = record.get("physical_columns", self.physical_columns)
+        self._rows = rows
+        self.schema = SimpleNamespace(names=list(physical_columns or columns))
+        self.schema_arrow = SimpleNamespace(names=list(columns))
+        self.metadata = SimpleNamespace(num_rows=len(rows))
 
     def read(self, columns):
-        return _FakeTable([{key: row.get(key) for key in columns} for row in self.rows])
+        return _FakeTable([{key: row.get(key) for key in columns} for row in self._rows])
 
 
 @pytest.fixture()
@@ -50,6 +56,7 @@ def _dataset(tmp_path, rows, columns=None):
     _FakeParquetFile.rows = rows
     _FakeParquetFile.columns = columns or ("task_index", "episode_index", "frame_index", "observation.state", "action", "agentview_image")
     _FakeParquetFile.physical_columns = None
+    _FakeParquetFile.records = {}
     return root
 
 
@@ -143,6 +150,60 @@ def test_derivation_uses_logical_arrow_schema_for_fixed_size_list_state(tmp_path
         parent_collection_manifest="f" * 64,
     )
     assert result.artifact["counts"]["accepted_routes"] == 1
+
+
+def test_derivation_skips_metadata_parquets_and_audits_the_selection(tmp_path, fake_pyarrow):
+    dataset = _dataset(tmp_path, _rows())
+    metadata = dataset / "meta"
+    metadata.mkdir()
+    (metadata / "episodes.parquet").write_bytes(b"fake-episodes-metadata")
+    (metadata / "tasks.parquet").write_bytes(b"fake-tasks-metadata")
+    _FakeParquetFile.records = {
+        "episodes.parquet": {
+            "rows": [{"episode_index": 9, "length": 4}],
+            "columns": ("episode_index", "length"),
+        },
+        "tasks.parquet": {
+            "rows": [{"task_index": 2, "task": "pick"}],
+            "columns": ("task_index", "task"),
+        },
+    }
+    result = derive_trace_artifact(
+        dataset, tmp_path / "metadata-audited.json", task_id=2, episode_ids=[9],
+        graph_triplet=("cup", "inside", "bowl"), coordinate_frame="world",
+        parent_collection_manifest="a" * 64,
+    )
+    artifact = result.artifact
+    assert artifact["input"]["parquet_file_count"] == 3
+    assert artifact["input"]["parquet_audit"] == {
+        "scanned_parquet_files": 3,
+        "data_parquet_files": 1,
+        "skipped_non_data_parquet_files": 2,
+        "skipped_non_data_reasons": {"missing_required_columns": 2},
+    }
+    audits = {entry["path"].split("/")[-1]: entry for entry in artifact["input"]["files"]}
+    assert audits["data-000.parquet"]["status"] == "data"
+    assert audits["episodes.parquet"]["status"] == "skipped"
+    assert audits["tasks.parquet"]["skip_reason"] == "missing_required_columns"
+    assert artifact["counts"]["accepted_routes"] == 1
+
+
+def test_derivation_fails_closed_when_only_metadata_parquets_exist(tmp_path, fake_pyarrow):
+    dataset = tmp_path / "metadata-only"
+    dataset.mkdir()
+    (dataset / "episodes.parquet").write_bytes(b"fake-episodes-metadata")
+    _FakeParquetFile.records = {
+        "episodes.parquet": {
+            "rows": [{"episode_index": 9, "length": 4}],
+            "columns": ("episode_index", "length"),
+        },
+    }
+    with pytest.raises(ContractError, match="no parquet file with required task, episode, and state column"):
+        derive_trace_artifact(
+            dataset, tmp_path / "metadata-only.json", task_id=2, episode_ids=[9],
+            graph_triplet=("cup", "inside", "bowl"), coordinate_frame="world",
+            parent_collection_manifest="a" * 64,
+        )
 
 
 def test_cli_emits_reproducible_completion_receipt(tmp_path, fake_pyarrow, capsys):
