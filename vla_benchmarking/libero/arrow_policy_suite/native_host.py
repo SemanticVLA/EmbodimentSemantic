@@ -96,11 +96,33 @@ def _restore_state(pair: Any, state: Any, name: str) -> None:
         ) from exc
 
 
+def _is_pinned_mj_sim_state(value: Any) -> bool:
+    """Recognize robosuite's pinned value-only ``MjSimState`` contract.
+
+    The pinned robosuite class is a plain object with no value equality
+    implementation.  Keep this check deliberately type- and field-specific;
+    arbitrary ``__dict__`` comparisons would make unknown simulator objects
+    appear rollback-safe without an explicit contract.
+    """
+    value_type = type(value)
+    return (
+        value_type.__module__ == "robosuite.utils.binding_utils"
+        and value_type.__name__ == "MjSimState"
+        and all(hasattr(value, name) for name in ("time", "qpos", "qvel"))
+    )
+
+
 def _equal(left: Any, right: Any) -> bool:
     if left is right:
         return True
     if left is None or right is None or type(left) is not type(right):
         return False
+    if _is_pinned_mj_sim_state(left) and _is_pinned_mj_sim_state(right):
+        return (
+            _equal(left.time, right.time)
+            and _equal(left.qpos, right.qpos)
+            and _equal(left.qvel, right.qvel)
+        )
     # Snapshot payloads may contain NumPy arrays (MuJoCo qpos/qvel, RGB
     # caches) or Torch tensors.  Their ``==`` operators return elementwise
     # values and cannot be used as a Python boolean.
@@ -209,6 +231,16 @@ def _proposal_mismatch(
         return None
     if left is None or right is None or type(left) is not type(right):
         return path, _type_name(left), _type_name(right)
+    if _is_pinned_mj_sim_state(left) and _is_pinned_mj_sim_state(right):
+        for name in ("time", "qpos", "qvel"):
+            mismatch = _proposal_mismatch(
+                getattr(left, name),
+                getattr(right, name),
+                path=f"{path}.{name}",
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
     if is_dataclass(left) and is_dataclass(right):
         for item in fields(left):
             if item.metadata.get("proposal_purity", True) is False:

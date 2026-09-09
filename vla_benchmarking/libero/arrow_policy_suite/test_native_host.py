@@ -241,6 +241,32 @@ def test_proposal_mismatch_honors_purity_excluded_dataclass_field():
     assert _proposal_mismatch(left, right) is None
 
 
+def test_pinned_mj_sim_state_compares_value_fields_not_object_identity():
+    class MjSimState:
+        __module__ = "robosuite.utils.binding_utils"
+
+        def __init__(self, time, qpos, qvel):
+            self.time = time
+            self.qpos = qpos
+            self.qvel = qvel
+
+    left_state = MjSimState(0.25, np.array([1.0, 2.0]), np.array([0.1, 0.2]))
+    equal_state = MjSimState(0.25, np.array([1.0, 2.0]), np.array([0.1, 0.2]))
+    changed_state = MjSimState(0.25, np.array([1.0, 3.0]), np.array([0.1, 0.2]))
+
+    assert left_state is not equal_state
+    assert _equal(left_state, equal_state)
+    assert not _equal(left_state, changed_state)
+    assert _proposal_equal(left_state, equal_state)
+    assert not _proposal_equal(left_state, changed_state)
+    mismatch = _proposal_mismatch(left_state, changed_state, path="environment.payload.sim_state")
+    assert mismatch == (
+        "environment.payload.sim_state.qpos",
+        "numpy.ndarray",
+        "numpy.ndarray",
+    )
+
+
 def test_native_host_accepts_rng_only_environment_snapshot_change_during_proposal():
     import random
 
