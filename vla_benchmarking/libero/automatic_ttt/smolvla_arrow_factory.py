@@ -42,6 +42,27 @@ DEFAULT_MAX_ATTEMPTS = 500
 DEFAULT_CONTROLLER_CONFIG = "canonical_molmo_rgbd_grasp.json"
 
 
+def _python_bool(value: Any) -> bool | None:
+    """Normalize Python and NumPy boolean scalars without accepting integers."""
+
+    if isinstance(value, bool):
+        return value
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - NumPy is required by LIBERO
+        return None
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return None
+
+
+def _success_from_mapping(value: Mapping[str, Any]) -> bool:
+    return any(
+        _python_bool(value.get(key)) is True
+        for key in ("success", "task_success", "is_success", "task")
+    )
+
+
 def _resolved_arrow_action_budget(resolved: Mapping[str, Any]) -> int:
     """Resolve the controller budget from the hashed canonical config."""
     grasp = resolved.get("grasp_search")
@@ -262,11 +283,15 @@ class _DirectLiberoEnvironment:
         if not callable(method):
             raise RuntimeError("SmolVLA Arrow environment has no evaluator check_success method")
         value = method()
-        if not isinstance(value, (bool, Mapping)):
-            raise RuntimeError("LIBERO check_success returned an unsupported value")
         if isinstance(value, Mapping):
-            return any(value.get(key) is True for key in ("success", "task_success", "is_success", "task"))
-        return bool(value)
+            return _success_from_mapping(value)
+        normalized = _python_bool(value)
+        if normalized is None:
+            raise RuntimeError(
+                "LIBERO check_success returned an unsupported value "
+                f"of type {type(value).__module__}.{type(value).__name__}"
+            )
+        return normalized
 
     def close(self) -> None:
         close = getattr(self._raw, "close", None)
@@ -483,10 +508,11 @@ class _ArrowSession:
             raise ContractError("Arrow evaluator requires environment.check_success()")
         value = method()
         if isinstance(value, Mapping):
-            return any(value.get(key) is True for key in ("success", "task_success", "is_success", "task"))
-        if not isinstance(value, bool):
-            raise ContractError("Arrow evaluator check_success() must return bool or mapping")
-        return value
+            return _success_from_mapping(value)
+        normalized = _python_bool(value)
+        if normalized is None:
+            raise ContractError("Arrow evaluator check_success() must return a boolean scalar or mapping")
+        return normalized
 
     def episode_runner(self, *, env: Any, context: Any, evaluator: Callable[[Any], bool] | None,
                        retreat_completed_callback: Callable[[], None] | None = None) -> Mapping[str, Any]:
