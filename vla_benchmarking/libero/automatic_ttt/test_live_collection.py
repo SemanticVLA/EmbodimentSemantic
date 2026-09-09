@@ -323,3 +323,82 @@ def test_fresh_collection_resets_each_attempt_and_discards_failed_trace(tmp_path
     assert not (tmp_path / "failed_episodes.jsonl").exists()
     assert not (tmp_path / ".accepted_episode_cache" / "seed-3000.json").exists()
     assert (tmp_path / ".accepted_episode_cache" / "seed-3001.json").is_file()
+
+
+def test_fresh_collection_discards_controller_timeout_and_tries_next_seed(tmp_path):
+    environments = []
+
+    class FreshEnv(_LiveEnv):
+        def reset(self, *, seed, task_id, episode_index):
+            self.seed = seed
+            self.reset_count += 1
+            return _observation(0)
+
+        def step(self, action):
+            self.step_count += 1
+            success = self.seed == 3001
+            return _observation(self.step_count), 0.0, success, {"success": success}
+
+    def make(_episode):
+        env = FreshEnv()
+        environments.append(env)
+        return env
+
+    def teacher_factory(episode, _output):
+        def recover(view, _request):
+            view.step((0.0,) * 7)
+            if episode.seed == 3000:
+                raise TimeoutError("phase descend_place exceeded 160 steps")
+            return {
+                "transitions": list(view.executed_transitions),
+                "success": True,
+                "status": "teacher_success",
+                "metadata": {"evaluator_success": True, "evaluator_phase": "post_retreat"},
+            }
+
+        return ArrowGraspControllerTeacher(recover)
+
+    def export(accepted, dataset_root):
+        (dataset_root / "meta").mkdir(parents=True)
+        info = dataset_root / "meta" / "info.json"
+        info.write_text('{"total_frames": 1}\n', encoding="utf-8")
+        manifest = dataset_root.parent / "dataset_manifest.json"
+        manifest.write_text(json.dumps({
+            "dataset_root": str(dataset_root),
+            "source_accepted_episodes": str(accepted),
+            "source_accepted_episodes_sha256": hashlib.sha256(accepted.read_bytes()).hexdigest(),
+            "files": [{"path": "meta/info.json", "sha256": hashlib.sha256(info.read_bytes()).hexdigest()}],
+        }) + "\n", encoding="utf-8")
+        return {
+            "dataset_root": str(dataset_root),
+            "dataset_manifest_path": str(manifest),
+            "dataset_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        }
+
+    result = collect_fresh_arrow_demonstrations(
+        task_id=0, task_description="pick up the bowl", policy_id="smolvla",
+        environment_factory=make,
+        reset_environment=lambda env, ep: env.reset(seed=ep.seed, task_id=ep.task_id, episode_index=0),
+        close_environment=lambda env: env.close(), teacher_factory=teacher_factory,
+        output_root=tmp_path, accepted_target=1, adaptation_seed_start=3000,
+        max_attempts=2, teacher_step_budget=2,
+        source_state_fn=lambda _env, _obs: SourceState.SOURCE_UNHELD,
+        controller_config_hash="a" * 64, dataset_exporter=export,
+        reset_identity_fn=lambda env, task_id: {
+            "task_id": task_id,
+            "selected_init_state_index": 10 + (env.seed - 3000),
+            "init_state_sha256": f"{env.seed:064x}",
+        },
+    )
+
+    assert result.accepted_count == 1
+    assert result.attempted_count == 2
+    assert len(environments) == 2
+    assert all(env.reset_count == 1 and env.close_count == 1 for env in environments)
+    accepted = json.loads(result.accepted_path.read_text(encoding="utf-8"))
+    assert accepted["seed"] == 3001
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["discarded_failure_count"] == 1
+    assert manifest["discarded_failure_categories"] == {"controller_motion_timeout": 1}
+    assert not (tmp_path / "failed_episodes.jsonl").exists()
+    assert not (tmp_path / ".accepted_episode_cache" / "seed-3000.json").exists()

@@ -755,7 +755,16 @@ def collect_fresh_arrow_demonstrations(
                 episode=episode, source_state=source_state, observation=environment.observe(),
                 vla_history=(), remaining_budget=teacher_step_budget,
             )
-            result = teacher.recover_from_reset(view, request)
+            try:
+                result = teacher.recover_from_reset(view, request)
+            except TimeoutError:
+                # Motion-phase timeouts are ordinary controller failures for a
+                # particular randomized reset, not collection-job failures.
+                # Discard the partial trace and advance to the next seeded
+                # fresh environment; contract/integrity exceptions still
+                # propagate and fail closed.
+                cache.record_failure("controller_motion_timeout")
+                continue
             if not result.success or result.status is not EpisodeStatus.TEACHER_SUCCESS:
                 category = str(result.status.value)
                 cache.record_failure(category)
