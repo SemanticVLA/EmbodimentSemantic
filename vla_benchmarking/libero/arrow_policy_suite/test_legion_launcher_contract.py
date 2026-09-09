@@ -102,7 +102,9 @@ def test_batch_validates_explicit_runtime_and_pinned_offline_molmo_cache():
     assert "ARROW_SUITE_PYTHON must be a safe absolute Linux path" in SBATCH
     assert 'ARROW_SUITE_PYTHON_RESOLVED="$(realpath -e -- "$ARROW_SUITE_PYTHON")"' in SBATCH
     assert 'ARROW_SUITE_PYTHON target is not a safe executable regular path' in SBATCH
-    assert 'PYTHON="${ARROW_SUITE_PYTHON_RESOLVED:-' in SBATCH
+    assert 'PYTHON="${ARROW_SUITE_PYTHON:-' in SBATCH
+    assert 'PYTHON="${ARROW_SUITE_PYTHON_RESOLVED:-' not in SBATCH
+    assert 'explicit Arrow teacher runtime must retain its virtual-environment context' in SBATCH
     assert "ARROW_SUITE_HF_CACHE must be a safe absolute Linux path" in SBATCH
     assert "teacher-dependent policies require explicit ARROW_SUITE_PYTHON and ARROW_SUITE_HF_CACHE" in SBATCH
     assert "models--allenai--MolmoPoint-8B" in SBATCH

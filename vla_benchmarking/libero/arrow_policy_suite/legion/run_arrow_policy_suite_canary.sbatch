@@ -165,7 +165,7 @@ trap archive_on_exit EXIT
 module purge
 module load miniforge/24.3.0-0
 source "$(conda info --base)/etc/profile.d/conda.sh"
-PYTHON="${ARROW_SUITE_PYTHON_RESOLVED:-${ARROW_SUITE_PYTHON:-$HOME/.conda/envs/embodiment-smolvla-py312/bin/python}}"
+PYTHON="${ARROW_SUITE_PYTHON:-$HOME/.conda/envs/embodiment-smolvla-py312/bin/python}"
 [[ -x "$PYTHON" ]] || die "Python is missing: $PYTHON"
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
@@ -190,7 +190,10 @@ nvidia-smi -L >/dev/null || die 'CUDA device is unavailable'
 if [[ -n "${ARROW_SUITE_PYTHON:-}" ]]; then
   "$PYTHON" - <<'PY'
 from importlib.metadata import version
+import sys
 expected = {"transformers": "4.57.1"}
+if sys.prefix == sys.base_prefix:
+    raise SystemExit("explicit Arrow teacher runtime must retain its virtual-environment context")
 for package, wanted in expected.items():
     observed = version(package)
     if observed != wanted:
