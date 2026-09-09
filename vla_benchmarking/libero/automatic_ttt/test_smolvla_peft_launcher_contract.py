@@ -1,4 +1,6 @@
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 import re
 import sys
 from pathlib import Path
@@ -169,6 +171,8 @@ def test_launcher_uses_matching_sealed_evaluation_seeds():
     assert "SCHEDULER_DECAY_LR=2.5e-6" in text
     assert '--save_freq="$SAVE_FREQ"' in text
     assert 'print(min(2000, int(sys.argv[1])))' in text
+    assert 'print(repr(int(sys.argv[1])*int(sys.argv[2])/int(sys.argv[3])))' in text
+    assert 'format(int(sys.argv[1])*int(sys.argv[2])/int(sys.argv[3]), ".8f")' not in text
     assert 'task_id = int(sys.argv[3])' in text
     assert 'eval_info, output, task_id = map(pathlib.Path, sys.argv[1:])' not in text
     assert "REQUESTED_EPOCHS=5" in text
@@ -184,6 +188,27 @@ def test_launcher_uses_matching_sealed_evaluation_seeds():
     assert '(("--env.episode_length",), episode_length)' in evaluator
     assert '(("--env.observation_height",), resolution)' in evaluator
     assert '(("--env.observation_width",), resolution)' in evaluator
+
+
+def test_epoch_equivalent_heredoc_preserves_full_round_trip_precision():
+    """The artifact validator must receive the exact integer-derived float."""
+    text = LAUNCHER.read_text(encoding="utf-8")
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", text, flags=re.DOTALL)
+    block = next(
+        block for block in blocks
+        if "print(repr(int(sys.argv[1])*int(sys.argv[2])/int(sys.argv[3])))" in block
+    )
+    output = StringIO()
+    old_argv = sys.argv
+    try:
+        sys.argv = [str(LAUNCHER), "54", "8", "86"]
+        with redirect_stdout(output):
+            exec(compile(block, f"{LAUNCHER}:epoch-equivalent", "exec"), {})
+    finally:
+        sys.argv = old_argv
+    value = output.getvalue().strip()
+    assert value == "5.023255813953488"
+    assert float(value) == 54 * 8 / 86
 
 
 def test_live_run_order_is_baseline_then_collection_then_training_then_eval():

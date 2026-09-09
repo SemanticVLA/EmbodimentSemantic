@@ -322,7 +322,11 @@ PY
 )"
 EPOCH_EQUIVALENT="$($PYTHON - "$STEPS" "$PEFT_BATCH_SIZE" "$DATASET_FRAMES" <<'PY'
 import sys
-print(format(int(sys.argv[1])*int(sys.argv[2])/int(sys.argv[3]), ".8f"))
+# Preserve Python's shortest round-trip representation.  The artifact
+# contract validates this value against the exact integer-derived float with
+# a 1e-10 tolerance; formatting to eight decimal places can reject valid
+# runs (for example 5.023255813953488 becomes 5.02325581).
+print(repr(int(sys.argv[1])*int(sys.argv[2])/int(sys.argv[3])))
 PY
 )"
 SCHEDULER_WARMUP_STEPS="$($PYTHON - "$STEPS" <<'PY'
