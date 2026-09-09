@@ -74,6 +74,42 @@ def test_archive_inventory_rejects_parseable_bit_flip(tmp_path):
         resume._validate_archive_integrity(archive)
 
 
+def test_archive_allows_only_expected_last_checkpoint_symlink(tmp_path):
+    archive = tmp_path / "archive" / "task_0"
+    checkpoints = archive / "run" / "training" / "checkpoints"
+    checkpoint = checkpoints / "000081"
+    checkpoint.mkdir(parents=True)
+    payload = checkpoint / "adapter_model.safetensors"
+    payload.write_bytes(b"valid adapter bytes")
+    status = archive / "archive_status.env"
+    status.write_bytes(b"status=PRESERVED_FAILURE\n")
+    inventory = archive / "inventory.sha256"
+    inventory.write_bytes(f"{resume.sha256_file(payload)}  {payload.resolve()}\n".encode("ascii"))
+    (archive / "tree_sha256").write_bytes((resume.sha256_file(inventory) + "\n").encode("ascii"))
+    link = checkpoints / "last"
+    try:
+        link.symlink_to("000081", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable on this host")
+    resume._validate_archive_integrity(
+        archive, allowed_symlink=link, allowed_target="000081", validated_checkpoint=checkpoint
+    )
+    link.unlink()
+    link.symlink_to("000080", target_is_directory=True)
+    with pytest.raises(resume.ResumeError, match="symlink target"):
+        resume._validate_archive_integrity(
+            archive, allowed_symlink=link, allowed_target="000081", validated_checkpoint=checkpoint
+        )
+    link.unlink()
+    link.symlink_to("000081", target_is_directory=True)
+    extra = checkpoints / "unexpected"
+    extra.symlink_to("000081", target_is_directory=True)
+    with pytest.raises(resume.ResumeError, match="unexpected symlink"):
+        resume._validate_archive_integrity(
+            archive, allowed_symlink=link, allowed_target="000081", validated_checkpoint=checkpoint
+        )
+
+
 def test_resume_module_has_no_collector_trainer_or_evaluator_execution_path():
     text = Path(resume.__file__).read_text(encoding="utf-8")
     assert "collect_smolvla_arrow_corrections" not in text

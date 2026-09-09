@@ -141,7 +141,13 @@ def _parse_env(path: Path) -> dict[str, str]:
     return values
 
 
-def _validate_archive_integrity(archive_root: Path) -> None:
+def _validate_archive_integrity(
+    archive_root: Path,
+    *,
+    allowed_symlink: Path | None = None,
+    allowed_target: str | None = None,
+    validated_checkpoint: Path | None = None,
+) -> None:
     """Validate the archive's byte inventory before reusing any stage.
 
     The inventory is intentionally checked as a streaming text file and each
@@ -158,6 +164,20 @@ def _validate_archive_integrity(archive_root: Path) -> None:
     if tree_text != expected_tree + "\n":
         raise ResumeError("source archive tree digest does not match inventory.sha256")
     reserved_names = {"archive_status.env", "inventory.sha256", "tree_sha256"}
+    # ``resolve()`` would follow the link and lose the link's own identity.
+    allowed_symlink = Path(os.path.abspath(allowed_symlink)) if allowed_symlink is not None else None
+    if (allowed_symlink is None) != (allowed_target is None) or (allowed_symlink is None) != (validated_checkpoint is None):
+        raise ResumeError("archive symlink allowance requires link, raw target, and validated checkpoint")
+    allowed_checkpoint = validated_checkpoint.resolve() if validated_checkpoint is not None else None
+    checkpoints_root = (archive_root / "run" / "training" / "checkpoints").resolve()
+    if allowed_symlink is not None:
+        try:
+            allowed_symlink.relative_to(checkpoints_root)
+            allowed_checkpoint.relative_to(checkpoints_root)
+        except ValueError as exc:
+            raise ResumeError("allowed checkpoint symlink is outside source checkpoints") from exc
+        if allowed_symlink.name != "last" or allowed_checkpoint.name != str(allowed_target):
+            raise ResumeError("allowed checkpoint symlink identity is invalid")
     listed: set[Path] = set()
     digest_re = re.compile(r"^([0-9a-fA-F]{64})  (.+)$")
     try:
@@ -187,7 +207,20 @@ def _validate_archive_integrity(archive_root: Path) -> None:
     actual: set[Path] = set()
     for candidate in archive_root.rglob("*"):
         if candidate.is_symlink():
-            raise ResumeError(f"source archive contains a symlink: {candidate}")
+            normalized = Path(os.path.abspath(candidate))
+            if allowed_symlink is None or normalized != allowed_symlink:
+                raise ResumeError(f"source archive contains an unexpected symlink: {candidate}")
+            raw_target = os.readlink(candidate)
+            if raw_target != allowed_target or Path(raw_target).is_absolute():
+                raise ResumeError(f"source archive checkpoint symlink target is unsafe: {candidate}")
+            resolved_target = (candidate.parent / raw_target).resolve(strict=False)
+            if resolved_target != allowed_checkpoint or not resolved_target.is_dir() or resolved_target.is_symlink():
+                raise ResumeError(f"source archive checkpoint symlink target is not the validated checkpoint: {candidate}")
+            try:
+                resolved_target.relative_to(checkpoints_root)
+            except ValueError as exc:
+                raise ResumeError(f"source archive checkpoint symlink escapes checkpoints: {candidate}") from exc
+            continue
         if candidate.is_file() and candidate.name not in reserved_names:
             actual.add(candidate.resolve())
     if listed != actual:
@@ -274,7 +307,20 @@ def validate_resume_source(
         raise ResumeError("resume source must contain exactly one accepted Arrow demonstration")
     if not expected_controller_config_hash or status.get("workload_exit_code") in (None, "0"):
         raise ResumeError("source archive does not identify a failed publication-only run")
-    _validate_archive_integrity(source.parent)
+    source_step = status.get("steps")
+    try:
+        source_step_int = int(source_step)
+    except (TypeError, ValueError) as exc:
+        raise ResumeError("source archive steps must be a positive integer") from exc
+    if source_step_int <= 0:
+        raise ResumeError("source archive steps must be a positive integer")
+    source_checkpoint = source / "training" / "checkpoints" / f"{source_step_int:06d}"
+    _validate_archive_integrity(
+        source.parent,
+        allowed_symlink=source / "training" / "checkpoints" / "last",
+        allowed_target=f"{source_step_int:06d}",
+        validated_checkpoint=source_checkpoint,
+    )
 
     collection_manifest = _require_file(source / "collection" / "collection_manifest.json", "collection manifest")
     try:
