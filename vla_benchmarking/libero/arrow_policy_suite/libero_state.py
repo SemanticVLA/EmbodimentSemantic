@@ -51,6 +51,15 @@ _INFRASTRUCTURE_FIELDS = frozenset({
 _IMMUTABLE_METADATA_FIELDS = frozenset({
     "problem_name", "domain_name", "language_instruction",
 })
+_RENDERED_CACHE_FIELDS = frozenset({
+    "_observation", "observation", "_obs", "obs", "_last_obs",
+    "_last_observation", "last_observation", "_cached_obs",
+    "_observation_cache",
+})
+_RENDERED_OBSERVATION_KEY_FRAGMENTS = (
+    "image", "rgb", "depth", "segmentation", "mask",
+)
+_RENDERED_OBSERVATION_KEY_NAMES = frozenset({"agentview", "wrist", "pixels"})
 
 
 def _pair(value: Any) -> tuple[Callable[[], Any], Callable[[Any], None]] | None:
@@ -110,6 +119,101 @@ def _restore_attrs(owner: Any, values: Mapping[str, Any]) -> None:
             setattr(owner, name, _safe_copy(value, name))
         except Exception as exc:
             raise LiberoRollbackUnavailable(f"cannot restore environment field {name}") from exc
+
+
+def _looks_like_rendered_value(value: Any) -> bool:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return True
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        try:
+            return len(shape) >= 2
+        except TypeError:
+            return False
+    return (
+        isinstance(value, (list, tuple))
+        and bool(value)
+        and isinstance(value[0], (list, tuple))
+    )
+
+
+def _is_rendered_observation_key(key: Any, value: Any) -> bool:
+    if not isinstance(key, str):
+        return False
+    normalized = key.lower()
+    if normalized in {"agentview", "wrist"}:
+        return True
+    if normalized == "pixels":
+        return not isinstance(value, Mapping) and _looks_like_rendered_value(value)
+    return any(fragment in normalized for fragment in _RENDERED_OBSERVATION_KEY_FRAGMENTS) and _looks_like_rendered_value(value)
+
+
+def _without_rendered_observations(value: Any) -> Any:
+    """Remove renderer outputs while retaining deterministic observation state."""
+    if isinstance(value, Mapping):
+        return {
+            key: _without_rendered_observations(item)
+            for key, item in value.items()
+            if not _is_rendered_observation_key(key, item)
+        }
+    if isinstance(value, list):
+        return [_without_rendered_observations(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_without_rendered_observations(item) for item in value)
+    return value
+
+
+def _observation_state_digest(observation: Any) -> str:
+    return digest(_without_rendered_observations(observation))
+
+
+def _state_equal(left: Any, right: Any) -> bool:
+    """Compare simulator state without importing the NativeHost comparator."""
+    if left is right:
+        return True
+    if left is None or right is None or type(left) is not type(right):
+        return False
+    if hasattr(left, "shape") and hasattr(right, "shape"):
+        try:
+            import numpy as np
+            return bool(np.array_equal(left, right))
+        except (ImportError, TypeError, ValueError):
+            pass
+        equal = getattr(left, "equal", None)
+        if callable(equal):
+            try:
+                return bool(equal(right))
+            except Exception:
+                pass
+    if isinstance(left, Mapping):
+        return set(left) == set(right) and all(_state_equal(left[key], right[key]) for key in left)
+    if isinstance(left, (list, tuple)):
+        return len(left) == len(right) and all(_state_equal(a, b) for a, b in zip(left, right))
+    if isinstance(left, (set, frozenset)):
+        return left == right
+    # ``mujoco_py.MjSimState`` is a C-extension value object without a useful
+    # ``__dict__`` or value equality.  Compare its authoritative state fields
+    # explicitly so a legitimate set_state/restore remains verifiable.
+    state_fields = tuple(
+        name for name in ("time", "qpos", "qvel", "act", "udd_state", "plugin_state")
+        if hasattr(left, name) and hasattr(right, name)
+    )
+    if state_fields:
+        return all(_state_equal(getattr(left, name), getattr(right, name)) for name in state_fields)
+    if hasattr(left, "__dict__") and hasattr(right, "__dict__"):
+        return _state_equal(vars(left), vars(right))
+    try:
+        result = left == right
+        if isinstance(result, bool):
+            return result
+        item = getattr(result, "item", None)
+        if callable(item):
+            value = item()
+            if isinstance(value, bool):
+                return value
+    except Exception:
+        pass
+    return False
 
 
 def _read_observation(environment: Any) -> Any:
@@ -178,6 +282,19 @@ class OffScreenRenderSnapshot:
     rng_state: Mapping[str, Any] = field(metadata={"proposal_purity": False})
     observation_digest: str
     immutable_metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Rendered image bytes are retained for restoration, but excluded from
+    # proposal-purity comparisons because MuJoCo/OpenGL can redraw identical
+    # state with different bytes after a force-refresh.
+    render_observation_digest: str | None = field(
+        default=None, metadata={"proposal_purity": False}
+    )
+    rendered_wrapper_fields: Mapping[str, Any] = field(
+        default_factory=dict, metadata={"proposal_purity": False}
+    )
+    # A renderer-free projection of the cache is still proposal-relevant:
+    # state/bookkeeping mutations must be detected even when image bytes are
+    # redrawn differently.
+    proposal_wrapper_fields: Mapping[str, Any] = field(default_factory=dict)
 
 
 class OffScreenRenderState:
@@ -232,6 +349,21 @@ class OffScreenRenderState:
             raise LiberoRollbackUnavailable(f"unsupported mutable environment fields: {unsupported}")
         return fields
 
+    @staticmethod
+    def _split_rendered_wrapper_fields(
+        fields: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        rendered = {
+            name: fields.pop(name)
+            for name in tuple(fields)
+            if name in _RENDERED_CACHE_FIELDS
+        }
+        proposal = {
+            name: _without_rendered_observations(value)
+            for name, value in rendered.items()
+        }
+        return fields, rendered, proposal
+
     def _immutable_metadata(self) -> dict[str, Any]:
         """Capture task metadata without treating it as rollbackable state."""
         return {
@@ -275,10 +407,16 @@ class OffScreenRenderState:
     def snapshot(self) -> OffScreenRenderSnapshot:
         mode, state = _sim_state(self.sim)
         observation = self.observation_fn(self.environment)
+        wrapper_fields, rendered_wrapper_fields, proposal_wrapper_fields = self._split_rendered_wrapper_fields(
+            self._wrapper_fields()
+        )
         return OffScreenRenderSnapshot(
-            mode, state, self._wrapper_fields(), self._observable_fields(),
-            self._component_states(), _capture_rng(), digest(observation),
-            self._immutable_metadata(),
+            mode, state, wrapper_fields, self._observable_fields(),
+            self._component_states(), _capture_rng(),
+            _observation_state_digest(observation), self._immutable_metadata(),
+            render_observation_digest=digest(observation),
+            rendered_wrapper_fields=rendered_wrapper_fields,
+            proposal_wrapper_fields=proposal_wrapper_fields,
         )
 
     def restore(self, snapshot: OffScreenRenderSnapshot) -> None:
@@ -293,7 +431,11 @@ class OffScreenRenderState:
             changed = [name for name in changed if current_metadata.get(name) != snapshot.immutable_metadata.get(name)]
             raise LiberoRollbackUnavailable(f"immutable environment metadata changed: {changed}")
         _restore_sim(self.sim, snapshot.sim_mode, snapshot.sim_state)
+        restored_mode, restored_state = _sim_state(self.sim)
+        if restored_mode != snapshot.sim_mode or not _state_equal(restored_state, snapshot.sim_state):
+            raise LiberoRollbackUnavailable("restored LIBERO simulator state differs from snapshot")
         _restore_attrs(self.environment, snapshot.wrapper_fields)
+        _restore_attrs(self.environment, snapshot.rendered_wrapper_fields)
         observables = getattr(self.environment, "observables", None)
         if isinstance(observables, Mapping):
             for key, values in snapshot.observable_fields.items():
@@ -312,12 +454,18 @@ class OffScreenRenderState:
         if callable(refresh):
             refresh(force_update=True)
         current = self.observation_fn(self.environment)
-        current_digest = digest(current)
+        current_digest = _observation_state_digest(current)
         if current_digest != snapshot.observation_digest:
             raise LiberoRollbackUnavailable(
-                "restored LIBERO observation digest differs from snapshot "
+                "restored LIBERO deterministic observation digest differs from snapshot "
                 f"({current_digest} != {snapshot.observation_digest})"
             )
+        # Component/task hooks run after simulator restoration and may touch
+        # MuJoCo state.  The final check is authoritative for the complete
+        # rollback transaction, not merely for the initial set_state call.
+        restored_mode, restored_state = _sim_state(self.sim)
+        if restored_mode != snapshot.sim_mode or not _state_equal(restored_state, snapshot.sim_state):
+            raise LiberoRollbackUnavailable("restored LIBERO simulator state differs from snapshot")
 
 
 def make_offscreen_snapshot_hooks(environment: Any, *, strict: bool = True, observation_fn: Callable[[Any], Any] | None = None) -> tuple[Callable[[], OffScreenRenderSnapshot], Callable[[OffScreenRenderSnapshot], None]]:

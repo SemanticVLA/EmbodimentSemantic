@@ -564,8 +564,26 @@ class NativeHost:
             # Never allow a proposal to mutate the environment.  The one
             # actual step above is the sole environment transition.
             return NativeStep(frame, base, teacher, action, result, next_frame, self.last_teacher_status, executed_by, proposal_unchanged, success, terminal)
-        except BaseException:
-            self._restore(transaction)
+        except BaseException as original_error:
+            try:
+                self._restore(transaction)
+            except BaseException as rollback_error:
+                # The action/proposal exception is the causal failure.  Keep
+                # it as the primary exception while retaining rollback failure
+                # evidence; otherwise a nondeterministic restore check can
+                # mask the actual producer or environment error.
+                rollback_summary = (
+                    f"rollback failed: {type(rollback_error).__name__}: {rollback_error}"
+                )
+                original_error.add_note(
+                    rollback_summary
+                )
+                if original_error.args:
+                    original_error.args = (
+                        f"{original_error.args[0]}; {rollback_summary}",
+                        *original_error.args[1:],
+                    )
+                raise original_error from rollback_error
             raise
 
     def run(self, *, max_steps: int = 3, reset_environment: bool = False, **reset_kwargs: Any) -> tuple[NativeStep, ...]:

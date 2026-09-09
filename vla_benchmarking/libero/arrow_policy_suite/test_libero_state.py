@@ -5,10 +5,11 @@ import random
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from arrow_policy_suite.libero_state import LiberoRollbackUnavailable, OffScreenRenderState
+from arrow_policy_suite.libero_state import LiberoRollbackUnavailable, OffScreenRenderState, _state_equal
 
 
 class _Sim:
@@ -116,3 +117,68 @@ def test_offscreen_restore_retains_rng_state():
         assert random.random() == expected_next
     finally:
         random.setstate(state)
+
+
+def test_offscreen_restore_ignores_nondeterministic_render_bytes_but_checks_state():
+    env = _Env()
+    render_counter = {"value": 0}
+
+    def observation_with_redraw(_environment):
+        render_counter["value"] += 1
+        return {
+            "state": [env.sim.value] + [0.0] * 7,
+            "agentview": np.array([render_counter["value"]], dtype=np.uint8),
+        }
+
+    provider = OffScreenRenderState(env, observation_fn=observation_with_redraw)
+    snapshot = provider.snapshot()
+    env.step([0.4] + [0.0] * 6)
+    provider.restore(snapshot)
+    assert env.sim.value == 0.0
+
+
+def test_offscreen_restore_rejects_simulator_state_corruption_even_when_observation_is_stable():
+    class CorruptSim(_Sim):
+        def set_state(self, state):
+            self.value = float(state) + 1.0
+
+    env = _Env()
+    env.sim = CorruptSim()
+    provider = OffScreenRenderState(env)
+    snapshot = provider.snapshot()
+    env.step([0.4] + [0.0] * 6)
+    with pytest.raises(LiberoRollbackUnavailable, match="simulator state differs"):
+        provider.restore(snapshot)
+
+
+def test_simulator_state_value_objects_compare_authoritative_fields():
+    class SimState:
+        __slots__ = ("time", "qpos", "qvel")
+
+        def __init__(self, time, qpos, qvel):
+            self.time = time
+            self.qpos = qpos
+            self.qvel = qvel
+
+    left = SimState(0.5, np.array([1.0, 2.0]), np.array([0.1, 0.2]))
+    right = SimState(0.5, np.array([1.0, 2.0]), np.array([0.1, 0.2]))
+    changed = SimState(0.5, np.array([1.0, 3.0]), np.array([0.1, 0.2]))
+    assert _state_equal(left, right)
+    assert not _state_equal(left, changed)
+
+
+def test_offscreen_restore_rejects_component_hook_mutating_simulator_after_restore():
+    class MutatingComponent:
+        def snapshot_state(self):
+            return "component-state"
+
+        def restore_state(self, _state):
+            env.sim.value += 1.0
+
+    env = _Env()
+    env.controller = MutatingComponent()
+    provider = OffScreenRenderState(env, observation_fn=lambda _environment: {"state": [0.0] * 8})
+    snapshot = provider.snapshot()
+    env.step([0.4] + [0.0] * 6)
+    with pytest.raises(LiberoRollbackUnavailable, match="simulator state differs"):
+        provider.restore(snapshot)

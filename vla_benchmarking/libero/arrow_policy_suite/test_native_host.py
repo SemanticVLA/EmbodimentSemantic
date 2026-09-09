@@ -227,6 +227,39 @@ def test_proposal_mismatch_reports_exact_sim_and_wrapper_paths_without_values():
     assert wrapper_mismatch[1:] == ("int", "int")
 
 
+def test_render_cache_projection_detects_state_mutation_but_ignores_image_redraw():
+    left = OffScreenRenderSnapshot(
+        "get_state", {}, {}, {}, {}, {}, "digest",
+        rendered_wrapper_fields={
+            "_last_obs": {
+                "state": np.array([0.0, 1.0]),
+                "agentview": np.array([1, 2], dtype=np.uint8),
+            },
+        },
+        proposal_wrapper_fields={"_last_obs": {"state": np.array([0.0, 1.0])}},
+    )
+    image_redrawn = OffScreenRenderSnapshot(
+        "get_state", {}, {}, {}, {}, {}, "digest",
+        rendered_wrapper_fields={
+            "_last_obs": {
+                "state": np.array([0.0, 1.0]),
+                "agentview": np.array([9, 8], dtype=np.uint8),
+            },
+        },
+        proposal_wrapper_fields={"_last_obs": {"state": np.array([0.0, 1.0])}},
+    )
+    state_mutated = OffScreenRenderSnapshot(
+        "get_state", {}, {}, {}, {}, {}, "digest",
+        rendered_wrapper_fields=image_redrawn.rendered_wrapper_fields,
+        proposal_wrapper_fields={"_last_obs": {"state": np.array([0.0, 2.0])}},
+    )
+    assert _proposal_equal(left, image_redrawn)
+    assert not _proposal_equal(left, state_mutated)
+    mismatch = _proposal_mismatch(left, state_mutated)
+    assert mismatch is not None
+    assert mismatch[0] == "$.proposal_wrapper_fields._last_obs.state"
+
+
 def test_proposal_mismatch_honors_purity_excluded_dataclass_field():
     from dataclasses import dataclass, field
 
@@ -365,6 +398,26 @@ def test_native_host_rejects_producer_that_mutates_environment_before_step():
         NativeHost(env, MutatingVLA()).step()
     assert env.value == 0.0
     assert env.steps == 0
+
+
+def test_native_host_preserves_original_failure_when_rollback_also_fails():
+    class RestoreFailEnv(Env):
+        def restore_state(self, _state):
+            raise RuntimeError("restore failure")
+
+    class ProposalFailVLA:
+        def snapshot_state(self):
+            return None
+
+        def restore_state(self, _state):
+            return None
+
+        def propose(self, _frame):
+            raise ValueError("original proposal failure")
+
+    with pytest.raises(ValueError, match="original proposal failure") as error:
+        NativeHost(RestoreFailEnv(), ProposalFailVLA()).step()
+    assert any("rollback failed" in note and "restore failure" in note for note in error.value.__notes__)
 
 
 def test_live_adapter_binds_reset_identity_and_checks_digest():
