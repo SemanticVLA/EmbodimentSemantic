@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('preflight', 'dry-run', 'submit')]
+    [ValidateSet('preflight', 'dry-run', 'submit', 'resume-submit')]
     [string]$Mode = 'preflight',
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9a-f]{40}$')]
@@ -13,6 +13,8 @@ param(
     [string]$RemoteArchiveRoot = '',
     [string]$CanaryRunRoot = '',
     [string]$CanaryArchiveRoot = '',
+    [string]$ResumeSourceRunRoot = '',
+    [string]$ResumeRunnerRelative = 'vla_benchmarking/libero/automatic_ttt/legion/run_smolvla_peft_arrow_resume.sbatch',
     [ValidatePattern('^[A-Za-z0-9_.-]{1,72}$')]
     [string]$Label = 'smolvla_task_specific_arrow_peft',
     [ValidatePattern('^[A-Za-z0-9_.-]{1,96}$')]
@@ -43,11 +45,27 @@ foreach ($item in @(
     @('RemoteArchiveRoot', $archiveRoot), @('CanaryRunRoot', $canaryRunRoot),
     @('CanaryArchiveRoot', $canaryArchiveRoot)
 )) { Assert-RemotePath $item[0] $item[1] }
+if ($ResumeSourceRunRoot) { Assert-RemotePath 'ResumeSourceRunRoot' $ResumeSourceRunRoot }
+if ([IO.Path]::IsPathRooted($ResumeRunnerRelative) -or $ResumeRunnerRelative -match '(^|/)\.\.?(/|$)' -or $ResumeRunnerRelative -match '[\r\n\s''"]') {
+    throw 'ResumeRunnerRelative must be a relative shell-safe path.'
+}
+if ($Mode -eq 'resume-submit' -and -not $ResumeSourceRunRoot) {
+    throw 'resume-submit requires -ResumeSourceRunRoot pointing at the preserved failed task-0 run.'
+}
 if ($repo -notmatch "/EmbodimentSemantic_releases/$ExpectedCommit$") {
     throw "RemoteRepoRoot must end in exact immutable release $ExpectedCommit"
 }
 if ($runRoot -eq $archiveRoot -or $runRoot.StartsWith("$archiveRoot/") -or $archiveRoot.StartsWith("$runRoot/")) {
     throw 'RemoteRunRoot and RemoteArchiveRoot must be disjoint.'
+}
+if ($ResumeSourceRunRoot -and (
+        $ResumeSourceRunRoot -eq $runRoot -or
+        $ResumeSourceRunRoot.StartsWith("$runRoot/") -or
+        $runRoot.StartsWith("$ResumeSourceRunRoot/") -or
+        $ResumeSourceRunRoot -eq $archiveRoot -or
+        $ResumeSourceRunRoot.StartsWith("$archiveRoot/") -or
+        $archiveRoot.StartsWith("$ResumeSourceRunRoot/"))) {
+    throw 'ResumeSourceRunRoot must be disjoint from RemoteRunRoot and RemoteArchiveRoot.'
 }
 if ($canaryRunRoot.StartsWith("$repo/") -or $canaryArchiveRoot.StartsWith("$repo/") -or
     $canaryRunRoot.StartsWith("$archiveRoot/") -or $canaryArchiveRoot.StartsWith("$runRoot/") -or
@@ -72,6 +90,8 @@ $hashQ = Quote-Bash $ControllerConfigHash
 $expectedQ = Quote-Bash $ExpectedCommit
 $runnerQ = Quote-Bash $runnerRelative
 $canaryQ = Quote-Bash $canaryRelative
+$resumeSourceQ = if ($ResumeSourceRunRoot) { Quote-Bash $ResumeSourceRunRoot } else { "''" }
+$resumeRunnerQ = Quote-Bash $ResumeRunnerRelative
 
 # The canary is submitted first. One dependent job then runs all ten tasks
 # sequentially on a single GPU allocation and saves one adapter per task.
@@ -86,6 +106,8 @@ expected_commit=__EXPECTED_COMMIT__
 controller_hash=__CONTROLLER_HASH__
 runner_rel=__RUNNER_REL__
 canary_rel=__CANARY_REL__
+resume_source=__RESUME_SOURCE__
+resume_runner_rel=__RESUME_RUNNER_REL__
 test -d "$repo/.git"
 test "$(git -C "$repo" rev-parse HEAD)" = "$expected_commit"
 test -z "$(git -C "$repo" status --porcelain --untracked-files=all)"
@@ -108,6 +130,30 @@ if [[ '__MODE__' == 'submit' ]]; then
   all_task_id="$(sbatch --parsable --dependency=afterok:"$canary_id" --job-name=__JOB_NAME__ --partition=gpu_a40_ext --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=5-00:00:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.err" --export=ALL "$repo/$runner_rel")"
   [[ "$all_task_id" =~ ^[0-9]+$ ]] || { printf 'invalid all-task job id: %s\n' "$all_task_id" >&2; exit 2; }
   printf 'collector_canary_job=%s\nall_task_job=%s\ndependency=afterok:%s\n' "$canary_id" "$all_task_id" "$canary_id"
+elif [[ '__MODE__' == 'resume-submit' ]]; then
+  test -n "$resume_source"
+  test -d "$resume_source"
+  resume_source="$(realpath -m -- "$resume_source")"
+  normalized_run_root="$(realpath -m -- "$run_root")"
+  normalized_archive_root="$(realpath -m -- "$archive_root")"
+  case "$resume_source" in
+    "$normalized_run_root"|"$normalized_run_root"/*|"$normalized_archive_root"|"$normalized_archive_root"/*)
+      printf 'resume source overlaps new run/archive roots\n' >&2
+      exit 2
+      ;;
+  esac
+  case "$normalized_run_root" in
+    "$resume_source"/*) printf 'new run root is inside resume source\n' >&2; exit 2 ;;
+  esac
+  case "$normalized_archive_root" in
+    "$resume_source"/*) printf 'new archive root is inside resume source\n' >&2; exit 2 ;;
+  esac
+  export REPO_ROOT="$repo" PEFT_EXPECTED_COMMIT="$expected_commit" PEFT_EXPECTED_CONTROLLER_HASH="$controller_hash" PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1
+  export PEFT_ALL_TASK_RUN_ROOT="$run_root" PEFT_ALL_TASK_ARCHIVE_ROOT="$archive_root" PEFT_ALL_TASK_LABEL=__LABEL__
+  export PEFT_START_TASK_ID=0 PEFT_RESUME_SOURCE_RUN_ROOT="$resume_source" PEFT_RESUME_RUNNER_RELATIVE="$resume_runner_rel"
+  all_task_id="$(sbatch --parsable --job-name=__JOB_NAME___resume --partition=gpu_a40_ext --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=5-00:00:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.err" --export=ALL "$repo/$runner_rel")"
+  [[ "$all_task_id" =~ ^[0-9]+$ ]] || { printf 'invalid resume all-task job id: %s\n' "$all_task_id" >&2; exit 2; }
+  printf 'collector_canary_job=REUSED\nall_task_job=%s\ndependency=none\nresume_source=%s\n' "$all_task_id" "$resume_source"
 fi
 '@
 $remoteScript = $remoteScript.Replace('__REPO__', $repoQ)
@@ -119,6 +165,8 @@ $remoteScript = $remoteScript.Replace('__EXPECTED_COMMIT__', $expectedQ)
 $remoteScript = $remoteScript.Replace('__CONTROLLER_HASH__', $hashQ)
 $remoteScript = $remoteScript.Replace('__RUNNER_REL__', $runnerQ)
 $remoteScript = $remoteScript.Replace('__CANARY_REL__', $canaryQ)
+$remoteScript = $remoteScript.Replace('__RESUME_SOURCE__', $resumeSourceQ)
+$remoteScript = $remoteScript.Replace('__RESUME_RUNNER_REL__', $resumeRunnerQ)
 $remoteScript = $remoteScript.Replace('__LABEL__', (Quote-Bash $Label))
 $remoteScript = $remoteScript.Replace('__JOB_NAME__', (Quote-Bash $JobName))
 $remoteScript = $remoteScript.Replace('__MODE__', $Mode)

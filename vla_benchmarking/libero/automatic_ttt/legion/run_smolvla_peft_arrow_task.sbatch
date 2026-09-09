@@ -123,9 +123,20 @@ case "$RUN_ROOT" in "$ARCHIVE_ROOT"|"$ARCHIVE_ROOT"/*) die 'RUN_ROOT is inside A
 [[ ! -e "$RUN_ROOT" && ! -e "$ARCHIVE_ROOT" ]] || die 'output path already exists'
 TMP_ROOT="${PEFT_TMP_ROOT:-/tmp/peft-${SLURM_JOB_ID}}"
 [[ "$TMP_ROOT" == "/tmp/peft-${SLURM_JOB_ID}" && ! -e "$TMP_ROOT" && ! -L "$TMP_ROOT" ]] || die 'unsafe/stale TMP_ROOT'
-mkdir -p "$RUN_ROOT" "$TMP_ROOT"; export TMPDIR="$TMP_ROOT" XDG_CACHE_HOME="$RUN_ROOT/xdg"; mkdir -p "$XDG_CACHE_HOME"
+mkdir -p "$RUN_ROOT" "$TMP_ROOT"
+if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]; then
+  # The publication-only path requires an empty run root until the resume
+  # writer creates its receipts.  Keep all import/runtime cache writes in the
+  # per-job temporary directory so preflight cannot dirty the receipt root.
+  export TMPDIR="$TMP_ROOT" XDG_CACHE_HOME="$TMP_ROOT/xdg"
+else
+  export TMPDIR="$TMP_ROOT" XDG_CACHE_HOME="$RUN_ROOT/xdg"
+fi
+mkdir -p "$XDG_CACHE_HOME"
 DATA_ROOT="$RUN_ROOT/dataset"; BASELINE_EVAL_ROOT="$RUN_ROOT/eval_baseline"; TRAIN_ROOT="$RUN_ROOT/training"; TRAIN_META_ROOT="$RUN_ROOT/training_metadata"; ADAPTED_EVAL_ROOT="$RUN_ROOT/eval_adapted"
-mkdir -p "$DATA_ROOT" "$BASELINE_EVAL_ROOT" "$TRAIN_META_ROOT" "$ADAPTED_EVAL_ROOT"
+if [[ -z "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]; then
+  mkdir -p "$DATA_ROOT" "$BASELINE_EVAL_ROOT" "$TRAIN_META_ROOT" "$ADAPTED_EVAL_ROOT"
+fi
 LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$(dirname "$LIBERO_CONFIG")}"
 LIBERO_CONFIG="$LIBERO_CONFIG_PATH/config.yaml"
 [[ -d "$LIBERO_CONFIG_PATH" && -f "$LIBERO_CONFIG" ]] || die 'LIBERO_CONFIG_PATH/config.yaml is missing'
@@ -176,6 +187,25 @@ export TRAIN_META_ROOT
 printf '[%s] preflight task %s\n' "$(date +'%F %T')" "$TASK_ID"
 "$PYTHON" -c 'import torch, lerobot, peft, accelerate, h5py, cv2, PIL, numpy, robosuite; from importlib.metadata import version; from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig; assert version("lerobot") == "0.5.2", version("lerobot"); assert version("peft") == "0.18.0", version("peft"); c=SmolVLAConfig(); required=("optimizer_lr","optimizer_betas","optimizer_eps","optimizer_weight_decay","optimizer_grad_clip_norm","scheduler_warmup_steps","scheduler_decay_steps","scheduler_decay_lr","chunk_size","n_action_steps","num_steps"); assert all(hasattr(c,n) for n in required); print("imports/native optimizer fields OK", torch.__version__, lerobot.__version__, peft.__version__)'
 "$PYTHON" -c 'import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)' || die 'CUDA is unavailable on allocated node'
+
+# A failed run may have completed collection, training, and evaluation before
+# failing while publishing its immutable artifact.  When an explicit source
+# is provided, resume is publication-only and must return before any baseline,
+# Arrow collector, trainer, or evaluator command below can execute.
+if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]; then
+  [[ "$PEFT_SKIP_BASELINE" == 1 ]] || die 'resume requires PEFT_SKIP_BASELINE=1'
+  [[ "$ARROW_DEMOS" == 1 ]] || die 'resume requires PEFT_ARROW_DEMOS=1'
+  printf '[%s] publication-only resume from %s\n' "$(date +'%F %T')" "$PEFT_RESUME_SOURCE_RUN_ROOT"
+  "$PYTHON" -m vla_benchmarking.libero.automatic_ttt.smolvla_peft_resume \
+    --source-run-root "$PEFT_RESUME_SOURCE_RUN_ROOT" \
+    --output-run-root "$RUN_ROOT" --output-archive-root "$ARCHIVE_ROOT" \
+    --current-commit "$ACTUAL_COMMIT" --base-policy "$BASE_POLICY" \
+    --base-policy-revision "$BASE_POLICY_REVISION" \
+    --controller-config-hash "$CONTROLLER_CONFIG_HASH"
+  printf '[%s] publication-only resume completed for task %s\n' "$(date +'%F %T')" "$TASK_ID"
+  exit 0
+fi
+
 BASELINE_EVAL_FILE=""
 if [[ "$PEFT_SKIP_BASELINE" == 0 ]]; then
   printf '[%s] baseline evaluation task %s, sealed seeds 1000..1009\n' "$(date +'%F %T')" "$TASK_ID"

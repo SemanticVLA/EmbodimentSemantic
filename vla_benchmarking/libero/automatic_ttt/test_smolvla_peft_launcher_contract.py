@@ -147,8 +147,49 @@ def test_all_task_wrapper_seals_one_demo_and_skips_baseline():
     assert 'export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1' in text
     assert '${PEFT_ARROW_DEMOS:-}" != 1' in text
     assert '${PEFT_SKIP_BASELINE:-}" != 1' in text
-    assert 'for task_id in 0 1 2 3 4 5 6 7 8 9; do' in text
+    assert 'VALIDATION_PYTHON="${PEFT_PYTHON:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/venv-py312-eacdc54a9663db0a/bin/python}"' in text
+    assert '[[ -x "$VALIDATION_PYTHON" ]]' in text
+    assert 'PEFT_START_TASK_ID="${PEFT_START_TASK_ID:-0}"' in text
+    assert '(( PEFT_START_TASK_ID <= 9 ))' in text
+    assert '(( PEFT_START_TASK_ID == 0 ))' in text
+    assert 'for task_id in $(seq "$PEFT_START_TASK_ID" 9); do' in text
     assert 'bash "$RUNNER"' in text
+
+
+def test_all_task_wrapper_resumes_task_zero_then_starts_fresh_at_task_one():
+    text = (LAUNCHER.parent / "run_smolvla_peft_arrow_all_tasks.sbatch").read_text(encoding="utf-8")
+    resume_branch = text.index('if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]; then')
+    task_loop = text.index('for task_id in $(seq "$PEFT_START_TASK_ID" 9); do')
+    resume_section = text[resume_branch:task_loop]
+
+    assert 'PEFT_RESUME_SOURCE_RUN_ROOT is permitted only when PEFT_START_TASK_ID=0' in text
+    assert 'bash "$RESUME_RUNNER"' in resume_section
+    assert '[[ -f "$PEFT_RUN_ROOT/COMPLETED" ]]' in resume_section
+    assert 'publication_recovery_receipt.json' in resume_section
+    assert 'expected an object' in resume_section
+    assert '"$VALIDATION_PYTHON" - "$RECOVERY_RECEIPT" <<\'PY\'' in resume_section
+    assert 'python "$RECOVERY_RECEIPT" <<\'PY\'' not in resume_section
+    assert 'does not point to an existing absolute artifact' in resume_section
+    assert 'unset PEFT_RESUME_SOURCE_RUN_ROOT PEFT_RESUME_RUNNER' in resume_section
+    assert 'PEFT_START_TASK_ID=1' in resume_section
+    assert task_loop > resume_branch
+
+
+def test_resume_submit_mode_reuses_canary_and_passes_source_to_single_job():
+    submitter = (LAUNCHER.parent / "submit_smolvla_task_specific_array.ps1").read_text(encoding="utf-8")
+    assert "'resume-submit'" in submitter
+    assert '$ResumeSourceRunRoot' in submitter
+    assert "resume-submit requires -ResumeSourceRunRoot" in submitter
+    assert 'ResumeSourceRunRoot must be disjoint from RemoteRunRoot and RemoteArchiveRoot.' in submitter
+    resume_branch = submitter.index("elif [[ '__MODE__' == 'resume-submit' ]]; then")
+    resume_section = submitter[resume_branch:]
+    assert 'collector_canary_job=REUSED' in resume_section
+    assert 'PEFT_START_TASK_ID=0' in resume_section
+    assert 'PEFT_RESUME_SOURCE_RUN_ROOT="$resume_source"' in resume_section
+    assert '--partition=gpu_a40_ext' in resume_section
+    assert '--dependency=' not in resume_section
+    assert 'resume_source="$(realpath -m -- "$resume_source")"' in resume_section
+    assert 'resume source overlaps new run/archive roots' in resume_section
 
 
 def test_canary_is_adapted_only_and_uses_shared_reset_contract():
