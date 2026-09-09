@@ -190,6 +190,8 @@ def test_publication_records_training_commit_and_recovery_commit_separately(tmp_
     assert str(artifact).endswith("recovery")
     assert captured["git_commit"] == resume.TRAINING_COMMIT
     assert captured["runtime_versions"] == source.training_runtime_versions
+    assert captured["runtime_evidence"] == str(source.runtime_evidence)
+    assert isinstance(captured["runtime_evidence"], str)
     adapter_pointer = json.loads((tmp_path / "new" / "run" / "ADAPTER_ARTIFACT_PATH.json").read_text())
     assert adapter_pointer == str(Path("/tmp/published/smolvla/task_0/peft_adapter/recovery").resolve())
     receipt = json.loads((tmp_path / "new" / "run" / "publication_recovery_receipt.json").read_text())

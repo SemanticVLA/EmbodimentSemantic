@@ -538,7 +538,7 @@ def publish_resume(
         train_counts=train_counts,
         eval_counts=eval_counts,
         optimizer=optimizer,
-        runtime_evidence=source.runtime_evidence,
+        runtime_evidence=str(source.runtime_evidence),
         # The adapter was trained by the source job.  The recovery checkout is
         # publication code only and must never be recorded as the trainer.
         git_commit=source.training_commit,
