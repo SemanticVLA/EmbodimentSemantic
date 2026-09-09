@@ -62,10 +62,10 @@ def _dataset(tmp_path, rows, columns=None):
 
 def _rows():
     return [
-        {"task_index": 2, "episode_index": 9, "frame_index": 0, "observation.state": [0.0, 0.0, 0.2, 0, 0, 0, 0.1, 0.1], "action": [1] * 7, "agentview_image": b"image"},
-        {"task_index": 2, "episode_index": 9, "frame_index": 1, "observation.state": [0.2, 0.0, 0.2, 0, 0, 0, 0.0, 0.0], "action": [1] * 7, "agentview_image": b"image"},
-        {"task_index": 2, "episode_index": 9, "frame_index": 2, "observation.state": [0.3, 0.0, 0.2, 0, 0, 0, 0.0, 0.0], "action": [1] * 7, "agentview_image": b"image"},
-        {"task_index": 2, "episode_index": 9, "frame_index": 3, "observation.state": [0.8, 0.0, 0.2, 0, 0, 0, 0.1, 0.1], "action": [1] * 7, "agentview_image": b"image"},
+        {"task_index": 2, "episode_index": 9, "frame_index": 0, "observation.state": [0.0, 0.0, 0.2, 0, 0, 0, 0.03917, -0.03918], "action": [1] * 7, "agentview_image": b"image"},
+        {"task_index": 2, "episode_index": 9, "frame_index": 1, "observation.state": [0.2, 0.0, 0.2, 0, 0, 0, 0.00220, -0.00245], "action": [1] * 7, "agentview_image": b"image"},
+        {"task_index": 2, "episode_index": 9, "frame_index": 2, "observation.state": [0.3, 0.0, 0.2, 0, 0, 0, 0.00210, -0.00230], "action": [1] * 7, "agentview_image": b"image"},
+        {"task_index": 2, "episode_index": 9, "frame_index": 3, "observation.state": [0.8, 0.0, 0.2, 0, 0, 0, 0.03800, -0.03820], "action": [1] * 7, "agentview_image": b"image"},
     ]
 
 
@@ -131,7 +131,7 @@ def test_derivation_fails_closed_without_close_reopen_or_required_columns(tmp_pa
     (missing / "bad.parquet").write_bytes(b"bad")
     _FakeParquetFile.rows = []
     _FakeParquetFile.columns = ("task_index", "episode_index", "frame_index", "action")
-    with pytest.raises(ContractError, match="state column"):
+    with pytest.raises(ContractError, match="data parquet bad.parquet is missing required column.*state"):
         derive_trace_artifact(
             missing, tmp_path / "missing.json", task_id=2, episode_ids=[9],
             graph_triplet=("cup", "inside", "bowl"), coordinate_frame="world",
@@ -190,8 +190,9 @@ def test_derivation_skips_metadata_parquets_and_audits_the_selection(tmp_path, f
 
 def test_derivation_fails_closed_when_only_metadata_parquets_exist(tmp_path, fake_pyarrow):
     dataset = tmp_path / "metadata-only"
-    dataset.mkdir()
-    (dataset / "episodes.parquet").write_bytes(b"fake-episodes-metadata")
+    metadata = dataset / "meta"
+    metadata.mkdir(parents=True)
+    (metadata / "episodes.parquet").write_bytes(b"fake-episodes-metadata")
     _FakeParquetFile.records = {
         "episodes.parquet": {
             "rows": [{"episode_index": 9, "length": 4}],
@@ -204,6 +205,46 @@ def test_derivation_fails_closed_when_only_metadata_parquets_exist(tmp_path, fak
             graph_triplet=("cup", "inside", "bowl"), coordinate_frame="world",
             parent_collection_manifest="a" * 64,
         )
+
+
+def test_derivation_fails_closed_on_malformed_data_shard(tmp_path, fake_pyarrow):
+    dataset = _dataset(tmp_path, _rows())
+    data = dataset / "data"
+    data.mkdir()
+    (data / "broken-000.parquet").write_bytes(b"fake-malformed-data-schema")
+    _FakeParquetFile.records = {
+        "broken-000.parquet": {
+            "rows": [{"task_index": 2, "episode_index": 9, "action": [1] * 7}],
+            "columns": ("task_index", "episode_index", "action"),
+        },
+    }
+    with pytest.raises(ContractError, match="data parquet data/broken-000.parquet is missing required column.*state"):
+        derive_trace_artifact(
+            dataset, tmp_path / "malformed-data.json", task_id=2, episode_ids=[9],
+            graph_triplet=("cup", "inside", "bowl"), coordinate_frame="world",
+            parent_collection_manifest="a" * 64,
+        )
+
+
+def test_derivation_detects_gradual_signed_finger_excursions(tmp_path, fake_pyarrow):
+    widths = (0.0390, 0.0340, 0.0289, 0.0239, 0.0189, 0.0139, 0.0089, 0.0040,
+              0.0090, 0.0141, 0.0191)
+    rows = [
+        {
+            "task_index": 2, "episode_index": 9, "frame_index": index,
+            "observation.state": [float(index), 0.0, 0.2, 0, 0, 0, width, -width],
+            "action": [1] * 7, "agentview_image": b"image",
+        }
+        for index, width in enumerate(widths)
+    ]
+    result = derive_trace_artifact(
+        _dataset(tmp_path, rows), tmp_path / "gradual.json", task_id=2, episode_ids=[9],
+        graph_triplet=("cup", "inside", "bowl"), coordinate_frame="world",
+        parent_collection_manifest="a" * 64,
+    )
+    route = result.artifact["routes"][0]
+    assert route["milestones"]["close_frame_index"] == 2
+    assert route["milestones"]["reopen_frame_index"] == 9
 
 
 def test_cli_emits_reproducible_completion_receipt(tmp_path, fake_pyarrow, capsys):

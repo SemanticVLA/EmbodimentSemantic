@@ -111,7 +111,7 @@ def _load_parent_manifest(value: str | Path) -> tuple[str, str | None]:
 
 
 def _parquet_files(dataset_dir: str | Path) -> tuple[Path, ...]:
-    root = Path(dataset_dir).expanduser()
+    root = Path(dataset_dir).expanduser().resolve()
     if not root.is_dir():
         raise ContractError(f"LeRobot dataset directory does not exist: {root}")
     files = tuple(sorted(path for path in root.rglob("*.parquet") if path.is_file() and not path.is_symlink()))
@@ -122,6 +122,8 @@ def _parquet_files(dataset_dir: str | Path) -> tuple[Path, ...]:
 
 def _read_parquet_rows(
     files: Sequence[Path],
+    *,
+    dataset_root: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], dict[str, Any]]:
     try:
         import pyarrow.parquet as pq
@@ -151,10 +153,22 @@ def _read_parquet_rows(
                     ("task", task_column), ("episode", episode_column), ("state", state_column)
                 ) if column is None
             ]
-            relative = str(path).replace("\\", "/")
+            try:
+                relative_path = path.resolve().relative_to(dataset_root)
+            except ValueError as exc:
+                raise ContractError(f"parquet path is outside dataset root: {path}") from exc
+            relative = relative_path.as_posix()
+            # Only the dataset's conventional metadata tree is allowed to
+            # contain parquet tables without frame columns. A malformed data
+            # shard (or an unexpected parquet elsewhere) must fail closed.
+            is_metadata = len(relative_path.parts) > 1 and relative_path.parts[0].lower() == "meta"
             metadata = getattr(parquet, "metadata", None)
             row_count = None if metadata is None else int(metadata.num_rows)
             if missing:
+                if not is_metadata:
+                    raise ContractError(
+                        f"data parquet {relative} is missing required column(s): {', '.join(missing)}"
+                    )
                 # LeRobot stores metadata tables (for example tasks.parquet and
                 # episodes.parquet) beside the frame table.  They are valid
                 # parquet inputs but not Trace data inputs.  Record them
@@ -180,9 +194,10 @@ def _read_parquet_rows(
                 requested_columns.append(frame_column)
             table = parquet.read(columns=requested_columns)
             file_rows = table.to_pylist()
+        except ContractError:
+            raise
         except Exception as exc:
             raise ContractError(f"cannot read LeRobot parquet {path}") from exc
-        relative = str(path).replace("\\", "/")
         audits.append({
             "path": relative,
             "sha256": _sha256(path),
@@ -223,16 +238,30 @@ def _state_from_row(value: Any) -> tuple[float, ...]:
 
 
 def _episode_events(states: Sequence[tuple[float, ...]], cfg: GripperMilestoneConfig) -> tuple[int, int]:
-    """Find first close then first later reopen from finger-qpos widths."""
-    widths = [0.5 * (state[6] + state[7]) for state in states]
+    """Find first close then first later reopen from Panda finger separation.
+
+    LIBERO records the two finger qpos with opposite signs. Their sum
+    therefore cancels near zero; the physical opening/separation is the
+    signed difference (up to the symmetric 0.5 factor).  The threshold is a
+    cumulative excursion rather than an adjacent-frame velocity: close is
+    detected after the running open reference falls by ``close_delta`` and
+    reopen after the post-close minimum rises by ``reopen_delta``.
+    """
+    widths = [0.5 * (state[6] - state[7]) for state in states]
     close_index: int | None = None
     reopen_index: int | None = None
+    open_reference = widths[0]
+    post_close_minimum: float | None = None
     for index in range(1, len(widths)):
-        delta = widths[index] - widths[index - 1]
-        if close_index is None and delta <= -float(cfg.close_delta):
-            close_index = index
+        width = widths[index]
+        if close_index is None:
+            open_reference = max(open_reference, width)
+            if open_reference - width >= float(cfg.close_delta):
+                close_index = index
+                post_close_minimum = width
             continue
-        if close_index is not None and index - close_index >= int(cfg.min_dwell_frames) and delta >= float(cfg.reopen_delta):
+        post_close_minimum = min(float(post_close_minimum), width)
+        if index - close_index >= int(cfg.min_dwell_frames) and width - post_close_minimum >= float(cfg.reopen_delta):
             reopen_index = index
             break
     if close_index is None or reopen_index is None:
@@ -289,8 +318,11 @@ def derive_trace_artifact(
     override_source = None if source_anchor is None else _finite_point(source_anchor, "source_anchor")
     override_destination = None if destination_anchor is None else _finite_point(destination_anchor, "destination_anchor")
     cfg = milestone_config or GripperMilestoneConfig()
-    files = _parquet_files(dataset_dir)
-    rows, file_audits, rejection_counts, parquet_audit = _read_parquet_rows(files)
+    dataset_root = Path(dataset_dir).expanduser().resolve()
+    files = _parquet_files(dataset_root)
+    rows, file_audits, rejection_counts, parquet_audit = _read_parquet_rows(
+        files, dataset_root=dataset_root
+    )
     parent_hash, parent_path = _load_parent_manifest(parent_collection_manifest)
     requested = {str(value) for value in selected_episodes}
     selected_rows = [row for row in rows if _matches(row["task"], task_id) and str(row["episode"]) in requested]
