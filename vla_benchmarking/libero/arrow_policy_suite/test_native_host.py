@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from arrow_policy_suite.contracts import ActionProposal, ObservationFrame, digest
 from arrow_policy_suite.interruptible_arrow import ArrowPerceptionUnavailable, InterruptibleArrow
 from arrow_policy_suite.libero_adapter import LiberoEnvironmentAdapter
-from arrow_policy_suite.native_host import NativeHost, _equal
+from arrow_policy_suite.native_host import NativeHost, _equal, _proposal_equal
 from arrow_policy_suite.libero_state import OffScreenRenderSnapshot
 from arrow_policy_suite.native_arrow_teacher import PerFrameArrowTeacher
 from arrow_policy_suite.policies import OnCallPolicy
@@ -185,6 +185,67 @@ def test_snapshot_structural_equality_handles_mujoco_arrays():
                                       {}, {}, {}, {}, "digest")
     assert _equal(left, right)
     assert not _equal(left, changed)
+
+
+def test_proposal_equality_ignores_only_rng_but_full_equality_does_not():
+    left = OffScreenRenderSnapshot(
+        "get_state", {"qpos": np.array([1.0, 2.0])}, {}, {}, {}, {"draw": 1}, "digest"
+    )
+    rng_changed = OffScreenRenderSnapshot(
+        "get_state", {"qpos": np.array([1.0, 2.0])}, {}, {}, {}, {"draw": 2}, "digest"
+    )
+    sim_changed = OffScreenRenderSnapshot(
+        "get_state", {"qpos": np.array([1.0, 3.0])}, {}, {}, {}, {"draw": 2}, "digest"
+    )
+
+    # Proposal purity ignores the explicitly rollback-only RNG field, while
+    # the complete comparator still treats it as a snapshot difference.
+    assert _proposal_equal(left, rng_changed)
+    assert not _equal(left, rng_changed)
+    assert not _proposal_equal(left, sim_changed)
+
+
+def test_native_host_accepts_rng_only_environment_snapshot_change_during_proposal():
+    import random
+
+    class RngSnapshotEnv(Env):
+        def snapshot_state(self):
+            return OffScreenRenderSnapshot(
+                "get_state",
+                {"value": self.value},
+                {"steps": self.steps},
+                {},
+                {},
+                {"python": random.getstate()},
+                "digest",
+            )
+
+        def restore_state(self, state):
+            self.value = float(state.sim_state["value"])
+            self.steps = int(state.wrapper_fields["steps"])
+
+    class RngConsumingVLA:
+        def propose(self, frame):
+            random.random()
+            return ActionProposal(
+                (0.0,) * 7, "vla", frame.timestep, observation_digest=frame.digest
+            )
+
+        def snapshot_state(self):
+            return 0
+
+        def restore_state(self, _state):
+            return None
+
+    state = random.getstate()
+    try:
+        env = RngSnapshotEnv()
+        host = NativeHost(env, RngConsumingVLA())
+        record = host.step()
+        assert record.proposal_state_unchanged
+        assert env.steps == 1
+    finally:
+        random.setstate(state)
 
 
 def test_interruptible_arrow_distinguishes_unavailable_from_fault():

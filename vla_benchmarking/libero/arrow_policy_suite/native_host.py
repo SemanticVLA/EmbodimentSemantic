@@ -138,6 +138,39 @@ def _equal(left: Any, right: Any) -> bool:
     return False
 
 
+def _proposal_equal(left: Any, right: Any) -> bool:
+    """Compare state relevant to proposal purity.
+
+    This is deliberately separate from ``_equal``.  Full snapshot equality
+    must continue to include every rollback field, including RNG state.  A
+    proposal, however, is allowed to consume a process RNG stream as long as
+    it does not advance the simulator or wrapper state.  Dataclass fields may
+    opt out of this narrower comparison with explicit
+    ``proposal_purity=False`` metadata; all other fields are compared using
+    the same recursive structural rules as ``_equal``.
+    """
+    if left is right:
+        return True
+    if left is None or right is None or type(left) is not type(right):
+        return False
+    if is_dataclass(left) and is_dataclass(right):
+        return all(
+            item.metadata.get("proposal_purity", True) is False
+            or _proposal_equal(getattr(left, item.name), getattr(right, item.name))
+            for item in fields(left)
+        )
+    if isinstance(left, Mapping):
+        return set(left) == set(right) and all(_proposal_equal(left[key], right[key]) for key in left)
+    if isinstance(left, (list, tuple)):
+        return len(left) == len(right) and all(_proposal_equal(a, b) for a, b in zip(left, right))
+    if isinstance(left, (set, frozenset)):
+        return left == right
+    # Arrays, tensors, and scalar leaves retain the exact semantics of the
+    # full comparator.  There are no proposal-purity annotations on these
+    # non-dataclass values, so none are skipped here.
+    return _equal(left, right)
+
+
 @dataclass(frozen=True)
 class TeacherStatus:
     available: bool
@@ -360,7 +393,7 @@ class NativeHost:
                         raise ContractError("Arrow proposal must match the current frame")
                     self.last_teacher_status = TeacherStatus(True)
             after_proposals = _copy_state(self._env_hooks[0], "environment")
-            proposal_unchanged = _equal(transaction.environment_state, after_proposals)
+            proposal_unchanged = _proposal_equal(transaction.environment_state, after_proposals)
             if not proposal_unchanged:
                 raise ContractError("proposal producers advanced environment state")
             action, executed_by = self._select_action(frame, base, teacher)

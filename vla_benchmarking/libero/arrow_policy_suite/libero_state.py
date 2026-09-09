@@ -171,7 +171,11 @@ class OffScreenRenderSnapshot:
     wrapper_fields: Mapping[str, Any]
     observable_fields: Mapping[str, Mapping[str, Any]]
     component_states: Mapping[str, Any]
-    rng_state: Mapping[str, Any]
+    # RNG is part of the complete rollback contract, but proposal purity is
+    # about simulator/wrapper state.  NativeHost's proposal comparator uses
+    # this field's metadata to ignore incidental RNG consumption while still
+    # restoring it on a transaction rollback.
+    rng_state: Mapping[str, Any] = field(metadata={"proposal_purity": False})
     observation_digest: str
     immutable_metadata: Mapping[str, Any] = field(default_factory=dict)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import random
 from pathlib import Path
 
 import pytest
@@ -98,3 +99,20 @@ def test_offscreen_restore_rejects_hidden_state_mismatch():
     # construction fails before a native host can issue an action.
     with pytest.raises(LiberoRollbackUnavailable, match="hidden"):
         provider.snapshot()
+
+
+def test_offscreen_restore_retains_rng_state():
+    env = _Env()
+    provider = OffScreenRenderState(env)
+    state = random.getstate()
+    try:
+        random.seed(12345)
+        snapshot = provider.snapshot()
+        expected_next = random.random()
+        random.random()
+
+        provider.restore(snapshot)
+
+        assert random.random() == expected_next
+    finally:
+        random.setstate(state)
