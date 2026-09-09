@@ -36,8 +36,15 @@ TASK_ID="$PEFT_TASK_ID"; TASK_IDS_JSON="[$TASK_ID]"; TASK_SCOPE="task_${TASK_ID}
 [[ "${PEFT_VLA:-smolvla}" == smolvla ]] || die 'this launcher supports PEFT_VLA=smolvla only'
 VLA_NAME=smolvla
 
-# Explicit sealed condition: 50 demos, 10 paired evaluation episodes, 5 epochs.
-ARROW_DEMOS=50; EVAL_EPISODES=10; EVAL_SEED=1000; REQUESTED_EPOCHS=5; STEPS=0
+# Keep the historical 50-demo protocol as the default.  The one-shot pilot
+# selects one complete Arrow trajectory at runtime without deleting baseline
+# code or changing the default behavior of this scalar runner.
+PEFT_ARROW_DEMOS="${PEFT_ARROW_DEMOS:-50}"
+[[ "$PEFT_ARROW_DEMOS" =~ ^[1-9][0-9]*$ ]] || die 'PEFT_ARROW_DEMOS must be a positive integer'
+ARROW_DEMOS="$PEFT_ARROW_DEMOS"
+PEFT_SKIP_BASELINE="${PEFT_SKIP_BASELINE:-0}"
+[[ "$PEFT_SKIP_BASELINE" == 0 || "$PEFT_SKIP_BASELINE" == 1 ]] || die 'PEFT_SKIP_BASELINE must be 0 or 1'
+EVAL_EPISODES=10; EVAL_SEED=1000; REQUESTED_EPOCHS=5; STEPS=0
 MAX_ATTEMPTS=500; VLA_STEP_BUDGET=280; ARROW_STEP_BUDGET=1200
 EPISODE_HORIZON=280; RESOLUTION=256; EVAL_CAMERAS='agentview_image,robot0_eye_in_hand_image'
 [[ -z "${PEFT_BATCH_SIZE+x}" || "$PEFT_BATCH_SIZE" == 8 ]] || die 'PEFT_BATCH_SIZE is sealed to the paper-equivalent global batch 8'
@@ -51,7 +58,8 @@ SAVE_FREQ=1; NUM_WORKERS=4; PREFETCH_FACTOR=4; PERSISTENT_WORKERS=true; LOG_FREQ
 [[ -z "${PEFT_EPOCHS+x}" ]] || die 'PEFT_EPOCHS is forbidden; the budget is optimizer steps'
 [[ -z "${PEFT_STEPS+x}" ]] || die 'PEFT_STEPS override is forbidden; steps are derived from five epochs'
 # Optional replay input. If absent, this job collects fresh-reset successful
-# Arrow demonstrations after the baseline evaluation.
+# Arrow demonstrations after the baseline evaluation, unless explicit
+# skip-baseline mode is selected.
 COLLECTION_MANIFEST="${PEFT_ARROW_COLLECTION_MANIFEST:-}"
 
 BASE_POLICY_REVISION="${PEFT_BASE_POLICY_REVISION:-6721902bc4d61e50a3bfdb11dfb4cb626f05d102}"
@@ -163,15 +171,17 @@ archive_on_exit() {
 }
 trap archive_on_exit EXIT
 
-export RUN_ROOT VLA_NAME TASK_ID TASK_IDS_JSON TASK_SCOPE ARROW_DEMOS EVAL_EPISODES EVAL_SEED STEPS MAX_ATTEMPTS VLA_STEP_BUDGET ARROW_STEP_BUDGET EPISODE_HORIZON RESOLUTION EVAL_CAMERAS PEFT_BATCH_SIZE PEFT_R LORA_ALPHA LORA_DROPOUT LORA_BIAS LORA_INIT LORA_RSLORA LORA_FAN_IN_FAN_OUT ACTION_SIDE_TARGET_REGEX OPTIMIZER_NAME WEIGHT_DECAY PEAK_LR OPTIMIZER_BETAS OPTIMIZER_EPS GRAD_CLIP SCHEDULER_NAME SCHEDULER_WARMUP_STEPS SCHEDULER_DECAY_STEPS SCHEDULER_DECAY_LR SAVE_FREQ NUM_WORKERS PREFETCH_FACTOR PERSISTENT_WORKERS LOG_FREQ TOLERANCE_S BASE_POLICY BASE_POLICY_REVISION ACTUAL_COMMIT LIBERO_COMMIT COLLECTION_MANIFEST
+export RUN_ROOT VLA_NAME TASK_ID TASK_IDS_JSON TASK_SCOPE ARROW_DEMOS PEFT_ARROW_DEMOS PEFT_SKIP_BASELINE EVAL_EPISODES EVAL_SEED STEPS MAX_ATTEMPTS VLA_STEP_BUDGET ARROW_STEP_BUDGET EPISODE_HORIZON RESOLUTION EVAL_CAMERAS PEFT_BATCH_SIZE PEFT_R LORA_ALPHA LORA_DROPOUT LORA_BIAS LORA_INIT LORA_RSLORA LORA_FAN_IN_FAN_OUT ACTION_SIDE_TARGET_REGEX OPTIMIZER_NAME WEIGHT_DECAY PEAK_LR OPTIMIZER_BETAS OPTIMIZER_EPS GRAD_CLIP SCHEDULER_NAME SCHEDULER_WARMUP_STEPS SCHEDULER_DECAY_STEPS SCHEDULER_DECAY_LR SAVE_FREQ NUM_WORKERS PREFETCH_FACTOR PERSISTENT_WORKERS LOG_FREQ TOLERANCE_S BASE_POLICY BASE_POLICY_REVISION ACTUAL_COMMIT LIBERO_COMMIT COLLECTION_MANIFEST
 export TRAIN_META_ROOT
 printf '[%s] preflight task %s\n' "$(date +'%F %T')" "$TASK_ID"
 "$PYTHON" -c 'import torch, lerobot, peft, accelerate, h5py, cv2, PIL, numpy, robosuite; from importlib.metadata import version; from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig; assert version("lerobot") == "0.5.2", version("lerobot"); assert version("peft") == "0.18.0", version("peft"); c=SmolVLAConfig(); required=("optimizer_lr","optimizer_betas","optimizer_eps","optimizer_weight_decay","optimizer_grad_clip_norm","scheduler_warmup_steps","scheduler_decay_steps","scheduler_decay_lr","chunk_size","n_action_steps","num_steps"); assert all(hasattr(c,n) for n in required); print("imports/native optimizer fields OK", torch.__version__, lerobot.__version__, peft.__version__)'
 "$PYTHON" -c 'import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)' || die 'CUDA is unavailable on allocated node'
-printf '[%s] baseline evaluation task %s, sealed seeds 1000..1009\n' "$(date +'%F %T')" "$TASK_ID"
-PEFT_PAIRED_EVAL=1 N_ACTION_STEPS=checkpoint LIBERO_EPISODE_LENGTH="$EPISODE_HORIZON" EVAL_RESOLUTION="$RESOLUTION" EVAL_CAMERAS="$EVAL_CAMERAS" MODELS="$BASE_POLICY" CONTEXT_MODE=standard TASK_IDS="$TASK_IDS_JSON" N_EPISODES="$EVAL_EPISODES" BATCH_SIZE=1 DEVICE=cuda SEED="$EVAL_SEED" SUITE_MODE=sealed_randomized OUTPUT_DIR="$BASELINE_EVAL_ROOT" "$PYTHON" "$EVALUATOR" --eval.use_async_envs=false
+BASELINE_EVAL_FILE=""
+if [[ "$PEFT_SKIP_BASELINE" == 0 ]]; then
+  printf '[%s] baseline evaluation task %s, sealed seeds 1000..1009\n' "$(date +'%F %T')" "$TASK_ID"
+  PEFT_PAIRED_EVAL=1 N_ACTION_STEPS=checkpoint LIBERO_EPISODE_LENGTH="$EPISODE_HORIZON" EVAL_RESOLUTION="$RESOLUTION" EVAL_CAMERAS="$EVAL_CAMERAS" MODELS="$BASE_POLICY" CONTEXT_MODE=standard TASK_IDS="$TASK_IDS_JSON" N_EPISODES="$EVAL_EPISODES" BATCH_SIZE=1 DEVICE=cuda SEED="$EVAL_SEED" SUITE_MODE=sealed_randomized OUTPUT_DIR="$BASELINE_EVAL_ROOT" "$PYTHON" "$EVALUATOR" --eval.use_async_envs=false
 
-BASELINE_EVAL_FILE="$($PYTHON - "$BASELINE_EVAL_ROOT" <<'PY'
+  BASELINE_EVAL_FILE="$($PYTHON - "$BASELINE_EVAL_ROOT" <<'PY'
 import pathlib,sys
 from vla_benchmarking.libero.evaluation.randomization_contract import randomization_config_payload
 from vla_benchmarking.libero.shared.config import task_randomization_dimensions
@@ -184,15 +194,58 @@ validate_eval_info(items[0], manifest)
 validate_randomization_audit(items[0].parent, manifest)
 print(items[0])
 PY
-)"
-export BASELINE_EVAL_FILE
+  )"
+  export BASELINE_EVAL_FILE
+else
+  printf '[%s] baseline evaluation SKIPPED by PEFT_SKIP_BASELINE=1\n' "$(date +'%F %T')"
+fi
 
 # Freeze the exact ten init-state identities used by baseline evaluation. A
 # different numeric seed namespace is not enough: LIBERO can map both seeds to
 # the same init-state row. Fresh Arrow collection is allowed only on rows
 # outside this sealed contract.
 EVAL_RESET_CONTRACT="$RUN_ROOT/eval_reset_contract.json"
-"$PYTHON" - "$BASELINE_EVAL_FILE" "$EVAL_RESET_CONTRACT" "$TASK_ID" <<'PY'
+if [[ "$PEFT_SKIP_BASELINE" == 1 ]]; then
+  # The shared helper reserves the exact ten sealed LIBERO reset identities
+  # without running a policy.  The helper owns environment construction and
+  # reset provenance; this runner only validates its resulting receipt.
+  "$PYTHON" - "$EVAL_RESET_CONTRACT" "$TASK_ID" "$RESOLUTION" <<'PY'
+import pathlib, sys
+from vla_benchmarking.libero.automatic_ttt.eval_reset_contract import probe_libero_eval_resets
+probe_libero_eval_resets(int(sys.argv[2]), pathlib.Path(sys.argv[1]), resolution=int(sys.argv[3]))
+PY
+  "$PYTHON" - "$EVAL_RESET_CONTRACT" "$TASK_ID" <<'PY'
+import json, pathlib, sys
+value=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if value.get("task_id") != int(sys.argv[2]): raise SystemExit("reserved reset task mismatch")
+if value.get("reserved_eval_init_state_indices") != list(range(10)): raise SystemExit("reset reservation must contain indices 0..9")
+if len(value.get("reserved_eval_init_state_hashes", [])) != 10: raise SystemExit("reset reservation must contain ten hashes")
+print("VERIFIED sealed reset reservation without policy actions")
+PY
+  "$PYTHON" - "$RUN_ROOT/baseline_stage.json" "$EVAL_RESET_CONTRACT" <<'PY'
+import json, os, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+contract = pathlib.Path(sys.argv[2]).resolve()
+payload = {
+    "schema": "smolvla_peft_baseline_stage.v1",
+    "status": "SKIPPED",
+    "reason": "PEFT_SKIP_BASELINE=1",
+    "evaluation_mode": "adapted_only",
+    "task_id": int(os.environ["TASK_ID"]),
+    "base_policy_revision": os.environ["BASE_POLICY_REVISION"],
+    "eval_seeds_reserved": list(range(1000, 1010)),
+    "reset_contract": str(contract),
+    "reset_contract_sha256": __import__("hashlib").sha256(contract.read_bytes()).hexdigest(),
+}
+temporary = path.with_name("." + path.name + ".partial")
+with temporary.open("x", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.link(temporary, path)
+temporary.unlink()
+PY
+else
+  "$PYTHON" - "$BASELINE_EVAL_FILE" "$EVAL_RESET_CONTRACT" "$TASK_ID" <<'PY'
 import json, pathlib, sys
 eval_info = pathlib.Path(sys.argv[1])
 output = pathlib.Path(sys.argv[2])
@@ -220,6 +273,7 @@ tmp = output.with_name("." + output.name + ".partial")
 tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 tmp.replace(output)
 PY
+fi
 export EVAL_RESET_CONTRACT
 
 # Live collection is the normal path. A supplied manifest is a replay mode
@@ -228,7 +282,7 @@ if [[ -z "$COLLECTION_MANIFEST" ]]; then
   use_arrow_cache
   COLLECTION_ROOT="$RUN_ROOT/collection"
   mkdir -p "$COLLECTION_ROOT"
-  printf '[%s] collecting 50 fresh Arrow demonstrations for task %s\n' "$(date +'%F %T')" "$TASK_ID"
+  printf '[%s] collecting %s fresh Arrow demonstrations for task %s\n' "$(date +'%F %T')" "$ARROW_DEMOS" "$TASK_ID"
   "$PYTHON" -m vla_benchmarking.libero.automatic_ttt.collect_smolvla_arrow_corrections \
     --task-id "$TASK_ID" --task-description "$TASK_DESCRIPTION" --output-root "$COLLECTION_ROOT" \
     --accepted-target "$ARROW_DEMOS" --adaptation-seed-start 3000 --max-attempts "$MAX_ATTEMPTS" \
@@ -241,10 +295,10 @@ fi
 use_smolvla_cache
 COLLECTION_MANIFEST="$(realpath -e -- "$COLLECTION_MANIFEST")" || die 'cannot resolve collection manifest after collection'
 export COLLECTION_MANIFEST COLLECTION_INFO="$RUN_ROOT/collection_normalized.json"
-"$PYTHON" - "$COLLECTION_MANIFEST" "$TASK_ID" "$COLLECTION_INFO" "$CONTROLLER_CONFIG_HASH" <<'PY'
+"$PYTHON" - "$COLLECTION_MANIFEST" "$TASK_ID" "$COLLECTION_INFO" "$CONTROLLER_CONFIG_HASH" "$ARROW_DEMOS" <<'PY'
 import json, pathlib, sys
 from vla_benchmarking.libero.automatic_ttt.peft_artifacts import load_arrow_collection_manifest
-value = load_arrow_collection_manifest(sys.argv[1], task_id=int(sys.argv[2]), expected_successes=50)
+value = load_arrow_collection_manifest(sys.argv[1], task_id=int(sys.argv[2]), expected_successes=int(sys.argv[5]))
 if value["controller_config_hash"] != sys.argv[4].lower(): raise SystemExit("collection controller hash differs from active config")
 pathlib.Path(sys.argv[3]).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -283,7 +337,7 @@ print(min(2000, int(sys.argv[1])))
 PY
 )"
 export TRAIN_EXPECTED_UPDATES="$STEPS" TRAIN_EXPECTED_BASE_LR="$PEAK_LR" TRAIN_EXPECTED_WEIGHT_DECAY="$WEIGHT_DECAY" TRAIN_EXPECTED_BETAS="$OPTIMIZER_BETAS" TRAIN_EXPECTED_EPS="$OPTIMIZER_EPS" TRAIN_EXPECTED_GRAD_CLIP="$GRAD_CLIP" TRAIN_EXPECTED_SCHEDULER="$SCHEDULER_NAME" TRAIN_EXPECTED_WARMUP="$SCHEDULER_WARMUP_STEPS" TRAIN_EXPECTED_DECAY_STEPS="$SCHEDULER_DECAY_STEPS" TRAIN_EXPECTED_DECAY_LR="$SCHEDULER_DECAY_LR"
-COLLECTION_SUCCESS_COUNT=50
+COLLECTION_SUCCESS_COUNT="$ARROW_DEMOS"
 export DATASET_ROOT DATASET_FRAMES EPOCH_EQUIVALENT COLLECTION_SUCCESS_COUNT REQUESTED_EPOCHS
 
 "$PYTHON" - "$RUN_ROOT/run_context.json" <<'PY'
@@ -294,10 +348,11 @@ def pkg(name):
     except PackageNotFoundError: return None
 collection = json.loads(pathlib.Path(os.environ["COLLECTION_INFO"]).read_text(encoding="utf-8"))
 payload = {
-    "schema":"smolvla_peft_arrow_task.v4", "method":"fresh_arrow_behavior_cloning_peft",
+    "schema":"smolvla_peft_arrow_task.v5", "method":"fresh_arrow_behavior_cloning_peft",
     "vla":"smolvla", "task_id":int(os.environ["TASK_ID"]), "task_ids":[int(os.environ["TASK_ID"])],
-    "training_scope":"task_specific", "arrow_demos":50, "collection_mode":"fresh_arrow", "collection_manifest":os.environ["COLLECTION_MANIFEST"],
-    "collection_success_count":50, "controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],
+    "training_scope":"task_specific", "arrow_demos":int(os.environ["ARROW_DEMOS"]), "collection_mode":"fresh_arrow", "collection_manifest":os.environ["COLLECTION_MANIFEST"],
+    "evaluation_mode":"adapted_only" if os.environ["PEFT_SKIP_BASELINE"] == "1" else "paired",
+    "collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]), "controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],
     "source_kind":"arrow_grasp_controller_fresh_demonstration", "adaptation_seeds":collection["adaptation_seeds"],
     "eval_seeds":list(range(1000,1010)), "base_policy":os.environ["BASE_POLICY"],
     "base_policy_revision":os.environ["BASE_POLICY_REVISION"], "repo_commit":os.environ["ACTUAL_COMMIT"],
@@ -319,7 +374,7 @@ PY
 
 "$PYTHON" - "$TRAIN_META_ROOT/training_plan.json" <<'PY'
 import hashlib, json, os, pathlib
-payload={"schema":"smolvla_peft_arrow_task_training.v6","method":"fresh_arrow_behavior_cloning_peft","training_scope":"task_specific","vla":"smolvla","task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])],"base_policy":os.environ["BASE_POLICY"],"base_policy_revision":os.environ["BASE_POLICY_REVISION"],"collection_manifest":os.environ["COLLECTION_MANIFEST"],"collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"collection_success_count":50,"dataset_root":os.environ["DATASET_ROOT"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"peft": {"r":16,"lora_alpha":8,"lora_dropout":0.0,"bias":"none","init_lora_weights":True,"use_rslora":False,"fan_in_fan_out":False,"target_modules":os.environ["ACTION_SIDE_TARGET_REGEX"],"modules_to_save":[]},"action_semantics":{"chunk_size":50,"n_action_steps":1,"n_obs_steps":1,"num_steps":10},"dataloader":{"num_workers":4,"prefetch_factor":4,"persistent_workers":True,"tolerance_s":0.0001},"precision":{"use_amp":False,"accelerate_mixed_precision":"no"},"episode_horizon":280,"resolution":256,"eval_cameras":os.environ["EVAL_CAMERAS"].split(","),"optimizer":{"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,"scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},"eval_seeds":list(range(1000,1010)),"repo_commit":os.environ["ACTUAL_COMMIT"]}
+payload={"schema":"smolvla_peft_arrow_task_training.v6","method":"fresh_arrow_behavior_cloning_peft","training_scope":"task_specific","vla":"smolvla","task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])],"base_policy":os.environ["BASE_POLICY"],"base_policy_revision":os.environ["BASE_POLICY_REVISION"],"collection_manifest":os.environ["COLLECTION_MANIFEST"],"collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"dataset_root":os.environ["DATASET_ROOT"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"peft": {"r":16,"lora_alpha":8,"lora_dropout":0.0,"bias":"none","init_lora_weights":True,"use_rslora":False,"fan_in_fan_out":False,"target_modules":os.environ["ACTION_SIDE_TARGET_REGEX"],"modules_to_save":[]},"action_semantics":{"chunk_size":50,"n_action_steps":1,"n_obs_steps":1,"num_steps":10},"dataloader":{"num_workers":4,"prefetch_factor":4,"persistent_workers":True,"tolerance_s":0.0001},"precision":{"use_amp":False,"accelerate_mixed_precision":"no"},"episode_horizon":280,"resolution":256,"eval_cameras":os.environ["EVAL_CAMERAS"].split(","),"optimizer":{"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,"scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},"eval_seeds":list(range(1000,1010)),"repo_commit":os.environ["ACTUAL_COMMIT"]}
 pathlib.Path(os.sys.argv[1]).write_text(json.dumps(payload,indent=2,sort_keys=True)+"\n",encoding="utf-8")
 PY
 "$PYTHON" "$AUDITOR" --generate-expected --base-policy "$BASE_POLICY" --output "$TRAIN_META_ROOT/expected_adapter_inventory.json"
@@ -390,7 +445,7 @@ PY
 cp -p "$TRAIN_META_ROOT/expected_adapter_inventory.json" "$TRAIN_ROOT/expected_adapter_inventory.json"
 cp -p "$TRAIN_META_ROOT/training_plan.json" "$TRAIN_ROOT/training_plan.json"
 "$PYTHON" "$AUDITOR" --checkpoint "$CHECKPOINT_DIR" --expected-inventory "$TRAIN_ROOT/expected_adapter_inventory.json"
-printf 'adapter_checkpoint=%s\ncheckpoint_step=%s\n' "$CHECKPOINT_DIR" "$STEPS" >> "$RUN_ROOT/run_context.env"
+printf 'adapter_checkpoint=%s\ncheckpoint_step=%s\nevaluation_mode=%s\n' "$CHECKPOINT_DIR" "$STEPS" "$([[ "$PEFT_SKIP_BASELINE" == 1 ]] && echo adapted_only || echo paired)" >> "$RUN_ROOT/run_context.env"
 
 printf '[%s] adapted evaluation task %s on same sealed seeds\n' "$(date +'%F %T')" "$TASK_ID"
 PEFT_PAIRED_EVAL=1 N_ACTION_STEPS=checkpoint LIBERO_EPISODE_LENGTH="$EPISODE_HORIZON" EVAL_RESOLUTION="$RESOLUTION" EVAL_CAMERAS="$EVAL_CAMERAS" MODELS="$CHECKPOINT_DIR" CONTEXT_MODE=standard TASK_IDS="$TASK_IDS_JSON" N_EPISODES="$EVAL_EPISODES" BATCH_SIZE=1 DEVICE=cuda SEED="$EVAL_SEED" SUITE_MODE=sealed_randomized OUTPUT_DIR="$ADAPTED_EVAL_ROOT" "$PYTHON" "$EVALUATOR" --eval.use_async_envs=false
@@ -410,7 +465,12 @@ PY
 )"
 export CHECKPOINT_DIR BASELINE_EVAL_FILE ADAPTED_EVAL_FILE ARCHIVE_ROOT
 
-"$PYTHON" - "$BASELINE_EVAL_FILE" "$ADAPTED_EVAL_FILE" <<'PY'
+if [[ "$PEFT_SKIP_BASELINE" == 1 ]]; then
+  "$PYTHON" -m vla_benchmarking.libero.automatic_ttt.eval_reset_contract validate-audit \
+    --contract "$EVAL_RESET_CONTRACT" \
+    --audit "$(dirname "$ADAPTED_EVAL_FILE")/randomization_audit.jsonl"
+else
+  "$PYTHON" - "$BASELINE_EVAL_FILE" "$ADAPTED_EVAL_FILE" <<'PY'
 import json, pathlib, sys
 def identities(eval_info):
     audit = pathlib.Path(eval_info).parent / "randomization_audit.jsonl"
@@ -429,6 +489,7 @@ if baseline != adapted:
     raise SystemExit("baseline/adapted evaluations did not use identical sealed reset identities")
 print("VERIFIED paired sealed reset identities", len(baseline))
 PY
+fi
 
 "$PYTHON" - <<'PY'
 import hashlib, json, os, pathlib
@@ -444,18 +505,28 @@ def stats(path):
     if successes is None: successes=sum(bool(v) for t in data.get("per_task",[]) for v in t.get("metrics",{}).get("successes",[]))
     if episodes is None: episodes=sum(len(t.get("metrics",{}).get("successes",[])) for t in data.get("per_task",[]))
     return {"successes":int(successes),"episodes":int(episodes),"success_rate":float(successes)/float(episodes) if episodes else None,"seeds":list(range(1000,1010)),"path":str(pathlib.Path(path).resolve())}
-baseline=stats(os.environ["BASELINE_EVAL_FILE"]); adapted=stats(os.environ["ADAPTED_EVAL_FILE"])
+baseline=stats(os.environ["BASELINE_EVAL_FILE"]) if os.environ.get("PEFT_SKIP_BASELINE") != "1" else None
+adapted=stats(os.environ["ADAPTED_EVAL_FILE"])
+if baseline is None:
+    eval_counts={
+        "mode":"adapted_only",
+        "seeds":list(range(1000,1010)),
+        "baseline":{"status":"SKIPPED","reason":"PEFT_SKIP_BASELINE=1"},
+        "adapted":{**adapted,"status":"COMPLETED"},
+    }
+else:
+    eval_counts={"mode":"paired","baseline":baseline,"adapted":adapted,"seeds":list(range(1000,1010))}
 manifest=save_peft_adapter(
     os.environ["CHECKPOINT_DIR"],os.environ["ARCHIVE_ROOT"],vla="smolvla",task_id=int(os.environ["TASK_ID"]),
-    run_id=f"smolvla_task{os.environ['TASK_ID']}_arrow50_steps{os.environ['STEPS']}_job{os.environ.get('SLURM_JOB_ID','unknown')}",
+    run_id=f"smolvla_task{os.environ['TASK_ID']}_arrow{os.environ['COLLECTION_SUCCESS_COUNT']}_steps{os.environ['STEPS']}_job{os.environ.get('SLURM_JOB_ID','unknown')}",
     base_checkpoint=os.environ["BASE_POLICY"],base_checkpoint_revision=os.environ["BASE_POLICY_REVISION"],
-    collection_manifest=os.environ["COLLECTION_MANIFEST"],collection_success_count=50,controller_config_hash=os.environ["CONTROLLER_CONFIG_HASH"],checkpoint_step=int(os.environ["STEPS"]),seed=1000,
-    train_counts={"successful_trajectories":50,"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"training_scope":"task_specific","runtime_evidence_source_path":os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json","runtime_evidence_source_sha256":os.environ["RUNTIME_EVIDENCE_SHA256"]},
-    eval_counts={"baseline":baseline,"adapted":adapted,"seeds":list(range(1000,1010))},
+    collection_manifest=os.environ["COLLECTION_MANIFEST"],collection_success_count=int(os.environ["COLLECTION_SUCCESS_COUNT"]),controller_config_hash=os.environ["CONTROLLER_CONFIG_HASH"],checkpoint_step=int(os.environ["STEPS"]),seed=1000,
+    train_counts={"successful_trajectories":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"training_scope":"task_specific","runtime_evidence_source_path":os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json","runtime_evidence_source_sha256":os.environ["RUNTIME_EVIDENCE_SHA256"]},
+    eval_counts=eval_counts,
     optimizer={"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,"scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},
     runtime_evidence=os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json",
     git_commit=os.environ["ACTUAL_COMMIT"],runtime_versions={n:pkg(n) for n in ("python","torch","lerobot","peft","accelerate")})
-summary={"schema":"smolvla_peft_arrow_task_summary.v4","training_scope":"task_specific","vla":"smolvla","task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])] ,"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"optimizer_steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"global_batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"baseline":baseline,"adapted":adapted,"success_delta":adapted["success_rate"]-baseline["success_rate"],"adapter_artifact":asdict(manifest)}
+summary={"schema":"smolvla_peft_arrow_task_summary.v5","training_scope":"task_specific","vla":"smolvla","task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])] ,"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","evaluation_mode":"adapted_only" if baseline is None else "paired","collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"optimizer_steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"global_batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"baseline":baseline if baseline is not None else {"status":"SKIPPED","reason":"PEFT_SKIP_BASELINE=1"},"adapted":adapted,"comparison_available":baseline is not None,"improvement_claim_supported":False,"success_delta":(adapted["success_rate"]-baseline["success_rate"] if baseline is not None else None),"adapter_artifact":asdict(manifest)}
 root=pathlib.Path(os.environ["RUN_ROOT"]); (root/"experiment_summary.json").write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n",encoding="utf-8"); (root/"ADAPTER_ARTIFACT_PATH.json").write_text(json.dumps(manifest.artifact_path)+"\n",encoding="utf-8")
 PY
 touch "$RUN_ROOT/COMPLETED"

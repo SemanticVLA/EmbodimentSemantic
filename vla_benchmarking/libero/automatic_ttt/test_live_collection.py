@@ -9,6 +9,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
+from . import live_collection as live_collection_module
 from .contracts import SourceState
 from .live_collection import (
     canonical_student_observation,
@@ -178,7 +179,7 @@ def test_collection_uses_one_live_episode_for_vla_prefix_and_arrow_suffix(tmp_pa
     assert normalized["dataset_root"].endswith("lerobot_dataset")
 
 
-def test_fresh_collection_never_calls_vla_and_admits_arrow_only_success(tmp_path):
+def test_fresh_collection_never_calls_vla_and_admits_arrow_only_success(tmp_path, monkeypatch):
     class FreshEnv(_LiveEnv):
         def reset(self, *, seed, task_id, episode_index):
             self.reset_count += 1
@@ -211,6 +212,16 @@ def test_fresh_collection_never_calls_vla_and_admits_arrow_only_success(tmp_path
                     "metadata": {"evaluator_success": True}}
         return ArrowGraspControllerTeacher(recover)
 
+    original_write = live_collection_module._write_jsonl_immutable
+
+    def assert_cached_before_final_write(path, rows):
+        cached = tmp_path / ".accepted_episode_cache" / "seed-3000.json"
+        assert cached.is_file()
+        assert json.loads(cached.read_text(encoding="utf-8"))["seed"] == 3000
+        return original_write(path, rows)
+
+    monkeypatch.setattr(live_collection_module, "_write_jsonl_immutable", assert_cached_before_final_write)
+
     result = collect_fresh_arrow_demonstrations(
         task_id=0, task_description="pick up the bowl", policy_id="smolvla", environment_factory=make,
         reset_environment=lambda env, ep: env.reset(seed=ep.seed, task_id=ep.task_id, episode_index=0),
@@ -232,6 +243,8 @@ def test_fresh_collection_never_calls_vla_and_admits_arrow_only_success(tmp_path
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_kind"] == "arrow_grasp_controller_fresh_demonstration"
     assert manifest["vla_called"] is False
+    cached = json.loads((tmp_path / ".accepted_episode_cache" / "seed-3000.json").read_text(encoding="utf-8"))
+    assert cached == accepted
 
 
 def test_fresh_collection_resets_each_attempt_and_discards_failed_trace(tmp_path):
@@ -308,3 +321,5 @@ def test_fresh_collection_resets_each_attempt_and_discards_failed_trace(tmp_path
     assert manifest["discarded_failure_count"] == 1
     assert manifest["discarded_failure_categories"] == {"teacher_failed": 1}
     assert not (tmp_path / "failed_episodes.jsonl").exists()
+    assert not (tmp_path / ".accepted_episode_cache" / "seed-3000.json").exists()
+    assert (tmp_path / ".accepted_episode_cache" / "seed-3001.json").is_file()

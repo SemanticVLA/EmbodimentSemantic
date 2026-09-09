@@ -92,18 +92,18 @@ test -z "$(git -C "$repo" status --porcelain --untracked-files=all)"
 test -f "$repo/$runner_rel"
 test -f "$repo/$canary_rel"
 test -f "$repo/vla_benchmarking/libero/arrow_grasp_controller/configs/canonical_molmo_rgbd_grasp.json"
-printf 'preflight=PASS\nexecution=single_sequential_job\ntasks=0-9\nexpected_commit=%s\ncontroller_config_hash=%s\ncollection_mode=fresh_arrow\narrow_demos=50\nrequested_epochs=5\noptimizer_steps=derived_from_dataset\ncanary_run_root=%s\ncanary_archive_root=%s\n' "$expected_commit" "$controller_hash" "$canary_run_root" "$canary_archive_root"
+printf 'preflight=PASS\nexecution=single_sequential_job\ntasks=0-9\nexpected_commit=%s\ncontroller_config_hash=%s\ncollection_mode=fresh_arrow\narrow_demos=1\nskip_baseline=1\nadapted_eval_episodes=10\nrequested_epochs=5\noptimizer_steps=derived_from_dataset\ncanary_run_root=%s\ncanary_archive_root=%s\n' "$expected_commit" "$controller_hash" "$canary_run_root" "$canary_archive_root"
 for task_id in 0 1 2 3 4 5 6 7 8 9; do
   printf 'task=%s run_root=%s/task_%s/run dataset_root=%s/task_%s/run/dataset training_root=%s/task_%s/run/training archive_root=%s/task_%s\n' \
     "$task_id" "$run_root" "$task_id" "$run_root" "$task_id" "$run_root" "$task_id" "$archive_root" "$task_id"
 done
 if [[ '__MODE__' == 'submit' ]]; then
-  export REPO_ROOT="$repo" PEFT_EXPECTED_COMMIT="$expected_commit"
+  export REPO_ROOT="$repo" PEFT_EXPECTED_COMMIT="$expected_commit" PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1
   export PEFT_CANARY_RUN_ROOT="$canary_run_root" PEFT_CANARY_ARCHIVE_ROOT="$canary_archive_root"
   export PEFT_CANARY_CONTROLLER_HASH="$controller_hash"
-  canary_id="$(sbatch --parsable --export=ALL --job-name=__JOB_NAME___canary --partition=gpu_a40 --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=0-04:00:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.err" "$repo/$canary_rel")"
+  canary_id="$(sbatch --parsable --export=ALL --job-name=__JOB_NAME___canary --partition=gpu_a100 --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=0-04:00:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.err" "$repo/$canary_rel")"
   [[ "$canary_id" =~ ^[0-9]+$ ]] || { printf 'invalid canary job id: %s\n' "$canary_id" >&2; exit 2; }
-  export REPO_ROOT="$repo" PEFT_EXPECTED_CONTROLLER_HASH="$controller_hash"
+  export REPO_ROOT="$repo" PEFT_EXPECTED_CONTROLLER_HASH="$controller_hash" PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1
   export PEFT_ALL_TASK_RUN_ROOT="$run_root" PEFT_ALL_TASK_ARCHIVE_ROOT="$archive_root" PEFT_ALL_TASK_LABEL=__LABEL__
   all_task_id="$(sbatch --parsable --dependency=afterok:"$canary_id" --job-name=__JOB_NAME__ --partition=gpu_a40_ext --exclude=compute-4-13 --gres=gpu:1 --ntasks=1 --cpus-per-task=8 --mem=64G --time=5-00:00:00 --output="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.out" --error="$HOME/EmbodimentSemantic_runtime/operator/logs/%x_%j.err" --export=ALL "$repo/$runner_rel")"
   [[ "$all_task_id" =~ ^[0-9]+$ ]] || { printf 'invalid all-task job id: %s\n' "$all_task_id" >&2; exit 2; }

@@ -25,12 +25,25 @@ controller actions inside each trajectory; one trajectory can contain multiple
 interleaved robot and correction chunks, so “100 demonstrations” does not mean
 100 single actions.
 
-For this LIBERO study, collection is dynamic and task-specific. For each VLA
-and task, it keeps drawing disjoint adaptation seeds until it has exactly **50
-evaluator-confirmed successful Arrow demonstrations** (at most 500 attempts).
-Failed Arrow attempts are discarded from the training dataset and per-attempt
-trace; only aggregate failure counts remain. Fifty is a configurable pilot
-choice, not a number prescribed by RoboTTT.
+For this LIBERO study, collection is dynamic and task-specific. The standalone
+runner reads `PEFT_ARROW_DEMOS` (default `50`) and keeps drawing disjoint
+adaptation seeds until it has exactly that many evaluator-confirmed successful
+Arrow demonstrations (at most 500 attempts). One demonstration means one
+complete teacher trajectory from reset to success, not one frame or one
+controller action. Failed Arrow attempts are discarded from the training
+dataset and per-attempt trace; only aggregate failure counts remain. Fifty is a
+configurable pilot choice, not a number prescribed by RoboTTT.
+
+Collection is crash-safe and bounded-memory. After every evaluator-confirmed
+success, the complete JSON trace is written and fsynced atomically to
+`.accepted_episode_cache/seed-<seed>.json`; the mutable cache index retains
+only scalar identity/receipt metadata and the file path. The collector resumes
+from those files after a restart, but only when the exact task, policy,
+collection arguments, controller digest, and canonical provenance match the
+cache contract. A mismatch fails closed. The final `accepted_episodes.jsonl`
+is assembled by streaming cached files one at a time, and the LeRobot exporter
+also parses one JSONL episode at a time; accepted trajectories are never
+accumulated as an in-memory list.
 
 Every accepted demonstration passes `validate_and_build_demonstration` before
 training. In fresh mode it checks an Arrow-only trace beginning at timestep
@@ -103,14 +116,18 @@ default experiment.
 
 While the RoboTTT action-head runtime is unavailable, the Legion launcher
 `legion/run_smolvla_peft_arrow_task.sbatch` runs a clearly labelled native
-SmolVLA LoRA/PEFT control. For each task, Arrow runs from reset in fresh
-sealed-randomized environments until 50 evaluator-confirmed successes (max
-500 attempts). SmolVLA is never loaded or called during collection. Only
-Arrow-executed rows are exported to LeRobot; failed attempts and their
-per-attempt traces are discarded. The adapter is trained for
-`ceil(5*dataset_frames/8)` updates, then evaluated on the same ten held-out
-seeds as the frozen base. This measures successful Arrow behavior cloning,
-not RoboTTT TTT or DAgger failure recovery.
+SmolVLA LoRA/PEFT control. Its default standalone mode uses
+`PEFT_ARROW_DEMOS=50` and evaluates the frozen base before collection. The
+current all-task one-shot pilot keeps all of that baseline code but explicitly
+sets `PEFT_ARROW_DEMOS=1` and `PEFT_SKIP_BASELINE=1`: for each task, Arrow
+executes exactly one complete evaluator-verified successful trajectory from a
+fresh reset, SmolVLA is never loaded or called during collection, and only
+that Arrow trajectory is exported to LeRobot. The adapter is trained for
+`ceil(5*dataset_frames/8)` updates, then evaluated for ten episodes on sealed
+seeds `1000..1009`. The run writes a `baseline_stage.json` receipt marked
+`SKIPPED`; it creates no fake baseline `eval_info` or metrics. Therefore this
+adapted-only pilot measures one-shot Arrow behavior cloning, but cannot by
+itself claim improvement over the frozen VLA.
 
 Every adapter is published immutably under:
 

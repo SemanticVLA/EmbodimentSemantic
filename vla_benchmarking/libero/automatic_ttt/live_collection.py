@@ -21,7 +21,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .contracts import (
     ContractError,
@@ -37,6 +37,7 @@ from .contracts import (
 from .dataset import CANONICAL_OBSERVATION_SCHEMA, validate_student_observation_schema
 from .episode import EpisodeCoordinator
 from .teacher import ArrowGraspControllerTeacher, PrivilegedTakeoverEnvironmentView, TakeoverEnvironmentView
+from .collection_cache import DurableEpisodeCache
 
 
 COLLECTION_SCHEMA = "automatic_ttt.arrow_live_collection.v1"
@@ -267,18 +268,55 @@ def _write_immutable(path: Path, payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _write_jsonl_immutable(path: Path, rows: Sequence[Mapping[str, Any]]) -> str:
+def _write_jsonl_immutable(path: Path, rows: Iterable[Mapping[str, Any]]) -> str:
     if path.exists():
         raise FileExistsError(f"refusing to overwrite immutable collection artifact: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = ("\n".join(_canonical_json(row) for row in rows) + ("\n" if rows else "")).encode("utf-8")
     temporary = path.with_name(f".{path.name}.{os.getpid()}.partial")
+    digest = hashlib.sha256()
     with temporary.open("wb") as handle:
-        handle.write(encoded)
+        for row in rows:
+            encoded = (_canonical_json(row) + "\n").encode("utf-8")
+            handle.write(encoded)
+            digest.update(encoded)
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
-    return hashlib.sha256(encoded).hexdigest()
+    return digest.hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _collection_contract(
+    *, mode: str, task_id: int, task_description: str, policy_id: str,
+    accepted_target: int, adaptation_seed_start: int, max_attempts: int,
+    teacher_step_budget: int, controller_config_hash: str,
+    provenance: Mapping[str, Any] | None, vla_step_budget: int | None = None,
+    reserved_eval_init_state_indices: Sequence[int] | None = None,
+    reserved_eval_init_state_hashes: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Build the exact restart-binding contract from explicit inputs."""
+    contract: dict[str, Any] = {
+        "collection_mode": str(mode), "task_id": int(task_id),
+        "task_description": str(task_description), "policy_id": str(policy_id),
+        "accepted_target": int(accepted_target), "adaptation_seed_start": int(adaptation_seed_start),
+        "max_attempts": int(max_attempts), "teacher_step_budget": int(teacher_step_budget),
+        "controller_config_hash": str(controller_config_hash).lower(),
+        "provenance": _json_safe(dict(provenance or {})),
+    }
+    if vla_step_budget is not None:
+        contract["vla_step_budget"] = int(vla_step_budget)
+    if reserved_eval_init_state_indices is not None:
+        contract["reserved_eval_init_state_indices"] = [int(value) for value in reserved_eval_init_state_indices]
+    if reserved_eval_init_state_hashes is not None:
+        contract["reserved_eval_init_state_hashes"] = [str(value).lower() for value in reserved_eval_init_state_hashes]
+    return contract
 
 
 def export_correction_only_lerobot_dataset(
@@ -302,9 +340,8 @@ def export_correction_only_lerobot_dataset(
     except ImportError as exc:  # pragma: no cover - runtime dependency
         raise ContractError("native LeRobot is required for correction-only PEFT export") from exc
     source = Path(accepted_episodes_path)
-    rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if not rows:
-        raise ContractError("cannot create a LeRobot dataset from zero accepted episodes")
+    if not source.is_file():
+        raise ContractError(f"accepted episode trace does not exist: {source}")
     root = Path(dataset_root)
     if root.exists():
         raise FileExistsError(f"refusing to overwrite immutable dataset root: {root}")
@@ -321,26 +358,38 @@ def export_correction_only_lerobot_dataset(
         )
         episode_count = 0
         frame_count = 0
-        for item in rows:
-            current_episode = None
-            for transition in item.get("transitions", ()):
-                if transition.get("actor") != "arrow_grasp_controller":
+        with source.open("r", encoding="utf-8") as source_handle:
+            for line_number, line in enumerate(source_handle, 1):
+                if not line.strip():
                     continue
-                observation = transition["observation"]
-                frame = {
-                    "observation.images.image": np.asarray(observation["agentview"], dtype=np.uint8),
-                    "observation.images.image2": np.asarray(observation["wrist"], dtype=np.uint8),
-                    "observation.state": np.asarray(observation["state"], dtype=np.float32),
-                    "action": np.asarray(transition["action"], dtype=np.float32),
-                    "task": str(observation["instruction"]),
-                }
-                if current_episode is None:
-                    current_episode = str(item["episode_id"])
-                dataset.add_frame(frame)
-                frame_count += 1
-            if current_episode is not None:
-                dataset.save_episode()
-                episode_count += 1
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ContractError(f"accepted episode trace line {line_number} is invalid JSON") from exc
+                if not isinstance(item, Mapping):
+                    raise ContractError("accepted episode trace records must be JSON objects")
+                current_episode = None
+                for transition in item.get("transitions", ()):
+                    if transition.get("actor") != "arrow_grasp_controller":
+                        continue
+                    observation = transition["observation"]
+                    frame = {
+                        "observation.images.image": np.asarray(observation["agentview"], dtype=np.uint8),
+                        "observation.images.image2": np.asarray(observation["wrist"], dtype=np.uint8),
+                        "observation.state": np.asarray(observation["state"], dtype=np.float32),
+                        "action": np.asarray(transition["action"], dtype=np.float32),
+                        "task": str(observation["instruction"]),
+                    }
+                    if current_episode is None:
+                        current_episode = str(item["episode_id"])
+                    dataset.add_frame(frame)
+                    frame_count += 1
+                if current_episode is not None:
+                    dataset.save_episode()
+                    episode_count += 1
+                # Drop the full transition payload before reading the next
+                # line.  The cache and collector retain only scalar refs.
+                del item
         if frame_count == 0:
             raise ContractError("accepted episodes contain no Arrow correction rows")
         dataset.finalize()
@@ -353,12 +402,12 @@ def export_correction_only_lerobot_dataset(
     files = []
     for path in sorted(path for path in root.rglob("*") if path.is_file()):
         relative = path.relative_to(root).as_posix()
-        files.append({"path": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size})
+        files.append({"path": relative, "sha256": _sha256_file(path), "bytes": path.stat().st_size})
     payload = {
         "schema_version": 1,
         "dataset_root": str(root.resolve()),
         "source_accepted_episodes": str(source.resolve()),
-        "source_accepted_episodes_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "source_accepted_episodes_sha256": _sha256_file(source),
         "repo_id": repo_id,
         "fps": int(fps),
         "frames": frame_count,
@@ -371,7 +420,7 @@ def export_correction_only_lerobot_dataset(
     return {
         "dataset_root": str(root.resolve()),
         "dataset_manifest_path": str(dataset_manifest.resolve()),
-        "dataset_manifest_sha256": hashlib.sha256(dataset_manifest.read_bytes()).hexdigest(),
+        "dataset_manifest_sha256": _sha256_file(dataset_manifest),
         "frames": frame_count,
         "episodes": episode_count,
     }
@@ -398,6 +447,7 @@ def collect_task_corrections(
     terminal_fn: TerminalFn = _default_terminal,
     controller_config_hash: str,
     dataset_exporter: Callable[[Path, Path], Mapping[str, Any]] | None = None,
+    attempt_cleanup_fn: Callable[[], None] | None = None,
     provenance: Mapping[str, Any] | None = None,
 ) -> CollectionResult:
     """Collect exactly ``accepted_target`` evaluator-confirmed corrections.
@@ -422,16 +472,23 @@ def collect_task_corrections(
         raise ContractError("max_attempts must be at least accepted_target")
 
     root = Path(output_root)
-    accepted_rows: list[Mapping[str, Any]] = []
-    discarded_failure_categories: dict[str, int] = {}
-    attempted_count = 0
-    accepted_seeds: list[int] = []
+    cache = DurableEpisodeCache(
+        root,
+        contract=_collection_contract(
+            mode="same_episode_takeover", task_id=task_id, task_description=task_description,
+            policy_id=policy_id, accepted_target=accepted_target,
+            adaptation_seed_start=adaptation_seed_start, max_attempts=max_attempts,
+            teacher_step_budget=teacher_step_budget, vla_step_budget=vla_step_budget,
+            controller_config_hash=controller_config_hash, provenance=provenance,
+        ),
+        target=accepted_target,
+    )
 
-    for attempt_index in range(int(max_attempts)):
-        if len(accepted_rows) >= accepted_target:
+    for attempt_index in range(cache.next_attempt_index, int(max_attempts)):
+        if cache.accepted_count >= accepted_target:
             break
         seed = int(adaptation_seed_start + attempt_index)
-        attempted_count += 1
+        cache.begin_attempt(attempt_index)
         episode = EpisodeSpec(
             episode_id=f"arrow-live-task{task_id}-seed{seed}",
             task_id=int(task_id),
@@ -441,6 +498,8 @@ def collect_task_corrections(
             split="train",
         )
         raw_environment = None
+        environment = reset_observation = teacher = view = request = result = None
+        transitions = metadata = receipt = accepted_row = None
         try:
             raw_environment = environment_factory(episode)
             reset_observation = reset_environment(raw_environment, episode)
@@ -477,7 +536,7 @@ def collect_task_corrections(
                 and teacher_metadata.get("evaluator_success") is True
             )
             if result.success and result.status is EpisodeStatus.TEACHER_SUCCESS and evaluator_success and receipt:
-                accepted_rows.append({
+                cache.add_success({
                     "episode_id": episode.episode_id,
                     "task_id": int(task_id),
                     "seed": seed,
@@ -487,10 +546,12 @@ def collect_task_corrections(
                     "evaluator_receipt": receipt,
                     "metadata": _json_safe(result.metadata),
                 })
-                accepted_seeds.append(seed)
+                # The durable cache owns the only cross-attempt copy.  Do not
+                # retain this episode payload in the collector state.
+                del result
             else:
                 category = str(result.status.value)
-                discarded_failure_categories[category] = discarded_failure_categories.get(category, 0) + 1
+                cache.record_failure(category)
         except Exception:
             # Structured VLA/teacher failures are returned above and may be
             # discarded while collection continues. Exceptions mean the
@@ -498,17 +559,25 @@ def collect_task_corrections(
             # burning hundreds of GPU episodes or selecting around a bug.
             raise
         finally:
-            if raw_environment is not None:
-                close_environment(raw_environment)
+            try:
+                if raw_environment is not None:
+                    close_environment(raw_environment)
+            finally:
+                if attempt_cleanup_fn is not None:
+                    attempt_cleanup_fn()
+                print(
+                    f"accepted={cache.accepted_count}/{accepted_target} attempted={cache.attempted_count}",
+                    flush=True,
+                )
 
-    if len(accepted_rows) != accepted_target:
+    if cache.accepted_count != accepted_target:
         raise ContractError(
-            f"accepted target not reached: accepted={len(accepted_rows)} target={accepted_target}; "
-            f"attempted={attempted_count}"
+            f"accepted target not reached: accepted={cache.accepted_count} target={accepted_target}; "
+            f"attempted={cache.attempted_count}"
         )
 
     accepted_path = root / "accepted_episodes.jsonl"
-    accepted_digest = _write_jsonl_immutable(accepted_path, accepted_rows)
+    accepted_digest = _sha256_file(accepted_path) if accepted_path.exists() else _write_jsonl_immutable(accepted_path, cache.iter_rows())
     dataset_root = root / "lerobot_dataset"
     exporter = dataset_exporter or export_correction_only_lerobot_dataset
     dataset_info = dict(exporter(accepted_path, dataset_root))
@@ -519,11 +588,11 @@ def collect_task_corrections(
         )
     successful_trajectories = [
         {
-            "trajectory_id": str(row["episode_id"]),
-            "seed": int(row["seed"]),
+            "trajectory_id": ref.episode_id,
+            "seed": ref.seed,
             "evaluator_success": True,
         }
-        for row in accepted_rows
+        for ref in cache.refs
     ]
     manifest = {
         "schema": COLLECTION_SCHEMA,
@@ -534,16 +603,16 @@ def collect_task_corrections(
         "task_id": int(task_id),
         "policy_id": policy_id,
         "accepted_target": int(accepted_target),
-        "accepted_count": len(accepted_rows),
-        "evaluator_confirmed_successes": len(accepted_rows),
+        "accepted_count": cache.accepted_count,
+        "evaluator_confirmed_successes": cache.accepted_count,
         "successful_trajectories": successful_trajectories,
-        "attempted_count": attempted_count,
-        "discarded_failure_count": attempted_count - len(accepted_rows),
-        "discarded_failure_categories": dict(sorted(discarded_failure_categories.items())),
-        "accepted_seeds": accepted_seeds,
-        "adaptation_seeds": accepted_seeds,
+        "attempted_count": cache.attempted_count,
+        "discarded_failure_count": cache.attempted_count - cache.accepted_count,
+        "discarded_failure_categories": dict(sorted(cache.failure_categories.items())),
+        "accepted_seeds": [ref.seed for ref in cache.refs],
+        "adaptation_seeds": [ref.seed for ref in cache.refs],
         "adaptation_seed_namespace": int(adaptation_seed_start),
-        "evaluator_receipts": [row["evaluator_receipt"] for row in accepted_rows],
+        "evaluator_receipts": [ref.evaluator_receipt for ref in cache.refs],
         "controller_config_hash": controller_config_hash.lower(),
         "accepted_episodes_jsonl": str(accepted_path),
         "accepted_episodes_sha256": accepted_digest,
@@ -555,8 +624,8 @@ def collect_task_corrections(
     manifest_path = root / "collection_manifest.json"
     manifest_digest = _write_immutable(manifest_path, manifest)
     return CollectionResult(
-        task_id=int(task_id), accepted_target=int(accepted_target), accepted_count=len(accepted_rows),
-        attempted_count=attempted_count, accepted_path=accepted_path, failed_path=None,
+        task_id=int(task_id), accepted_target=int(accepted_target), accepted_count=cache.accepted_count,
+        attempted_count=cache.attempted_count, accepted_path=accepted_path, failed_path=None,
         manifest_path=manifest_path, manifest_sha256=manifest_digest,
     )
 
@@ -578,6 +647,7 @@ def collect_fresh_arrow_demonstrations(
     source_state_fn: SourceStateFn,
     controller_config_hash: str,
     dataset_exporter: Callable[[Path, Path], Mapping[str, Any]] | None = None,
+    attempt_cleanup_fn: Callable[[], None] | None = None,
     provenance: Mapping[str, Any] | None = None,
     reserved_eval_init_state_indices: Sequence[int] | None = None,
     reserved_eval_init_state_hashes: Sequence[str] | None = None,
@@ -615,17 +685,25 @@ def collect_fresh_arrow_demonstrations(
             raise ContractError("reserved evaluation init-state hashes must be unique")
 
     root = Path(output_root)
-    accepted_rows: list[Mapping[str, Any]] = []
-    discarded_failure_categories: dict[str, int] = {}
-    attempted_count = 0
-    accepted_seeds: list[int] = []
-    accepted_reset_identities: list[Mapping[str, Any]] = []
+    cache = DurableEpisodeCache(
+        root,
+        contract=_collection_contract(
+            mode="fresh_arrow", task_id=task_id, task_description=task_description,
+            policy_id=policy_id, accepted_target=accepted_target,
+            adaptation_seed_start=adaptation_seed_start, max_attempts=max_attempts,
+            teacher_step_budget=teacher_step_budget,
+            controller_config_hash=controller_config_hash, provenance=provenance,
+            reserved_eval_init_state_indices=reserved_indices,
+            reserved_eval_init_state_hashes=reserved_hashes,
+        ),
+        target=accepted_target,
+    )
 
-    for attempt_index in range(max_attempts):
-        if len(accepted_rows) >= accepted_target:
+    for attempt_index in range(cache.next_attempt_index, max_attempts):
+        if cache.accepted_count >= accepted_target:
             break
         seed = int(adaptation_seed_start + attempt_index)
-        attempted_count += 1
+        cache.begin_attempt(attempt_index)
         episode = EpisodeSpec(
             episode_id=f"arrow-fresh-task{task_id}-seed{seed}", task_id=int(task_id), seed=seed,
             task_description=task_description, policy_id=policy_id, split="train",
@@ -660,7 +738,7 @@ def collect_fresh_arrow_demonstrations(
             source_state = source_state_fn(environment, environment.observe())
             if source_state not in {SourceState.SOURCE_UNHELD, SourceState.SOURCE_HELD}:
                 category = str(source_state.value)
-                discarded_failure_categories[category] = discarded_failure_categories.get(category, 0) + 1
+                cache.record_failure(category)
                 continue
             teacher = teacher_factory(episode, attempt_output)
             if not callable(getattr(teacher, "recover_from_reset", None)):
@@ -680,11 +758,11 @@ def collect_fresh_arrow_demonstrations(
             result = teacher.recover_from_reset(view, request)
             if not result.success or result.status is not EpisodeStatus.TEACHER_SUCCESS:
                 category = str(result.status.value)
-                discarded_failure_categories[category] = discarded_failure_categories.get(category, 0) + 1
+                cache.record_failure(category)
                 continue
             metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
             if metadata.get("evaluator_success") is not True:
-                discarded_failure_categories["evaluator_not_confirmed"] = discarded_failure_categories.get("evaluator_not_confirmed", 0) + 1
+                cache.record_failure("evaluator_not_confirmed")
                 continue
             receipt = metadata.get("demonstration_receipt")
             if not receipt:
@@ -692,28 +770,40 @@ def collect_fresh_arrow_demonstrations(
             transitions = list(result.transitions)
             if not transitions or any(row.actor.value != "arrow_grasp_controller" for row in transitions):
                 raise ContractError("fresh Arrow accepted trace contains a non-Arrow transition")
-            accepted_rows.append({
+            accepted_row = {
                 "episode_id": episode.episode_id, "task_id": int(task_id), "seed": seed,
                 "source_kind": FRESH_SOURCE_KIND, "method_label": FRESH_PEFT_METHOD_LABEL,
                 "collection_mode": "fresh_arrow", "transitions": [row.to_json() for row in transitions],
                 "evaluator_receipt": receipt,
                 "reset_identity": reset_identity,
                 "metadata": _json_safe({**dict(metadata), "collection_mode": "fresh_arrow", "vla_called": False}),
-            })
-            accepted_seeds.append(seed)
-            accepted_reset_identities.append(reset_identity)
+            }
+            cache.add_success(accepted_row)
         finally:
-            if raw_environment is not None:
-                close_environment(raw_environment)
-            shutil.rmtree(attempt_output, ignore_errors=True)
+            try:
+                if raw_environment is not None:
+                    close_environment(raw_environment)
+            finally:
+                if attempt_cleanup_fn is not None:
+                    attempt_cleanup_fn()
+                # Do not carry image-heavy episode objects into the next
+                # rollout. Cache files are plain CPU JSON; no CUDA tensor is
+                # retained here.
+                accepted_row = transitions = result = request = view = teacher = None
+                metadata = receipt = environment = reset_observation = raw_environment = None
+                shutil.rmtree(attempt_output, ignore_errors=True)
+                print(
+                    f"accepted={cache.accepted_count}/{accepted_target} attempted={cache.attempted_count}",
+                    flush=True,
+                )
 
-    if len(accepted_rows) != accepted_target:
+    if cache.accepted_count != accepted_target:
         raise ContractError(
-            f"accepted target not reached: accepted={len(accepted_rows)} target={accepted_target}; attempted={attempted_count}"
+            f"accepted target not reached: accepted={cache.accepted_count} target={accepted_target}; attempted={cache.attempted_count}"
         )
     root.mkdir(parents=True, exist_ok=True)
     accepted_path = root / "accepted_episodes.jsonl"
-    accepted_digest = _write_jsonl_immutable(accepted_path, accepted_rows)
+    accepted_digest = _sha256_file(accepted_path) if accepted_path.exists() else _write_jsonl_immutable(accepted_path, cache.iter_rows())
     dataset_root = root / "lerobot_dataset"
     exporter = dataset_exporter or export_correction_only_lerobot_dataset
     dataset_info = dict(exporter(accepted_path, dataset_root))
@@ -721,25 +811,25 @@ def collect_fresh_arrow_demonstrations(
     if not required_dataset_info.issubset(dataset_info):
         raise ContractError("dataset_exporter must return dataset_root, dataset_manifest_path, and dataset_manifest_sha256")
     successful_trajectories = [
-        {"trajectory_id": str(row["episode_id"]), "seed": int(row["seed"]), "evaluator_success": True,
-         "reset_identity": dict(row["reset_identity"])}
-        for row in accepted_rows
+        {"trajectory_id": ref.episode_id, "seed": ref.seed, "evaluator_success": True,
+         "reset_identity": dict(ref.reset_identity or {})}
+        for ref in cache.refs
     ]
     manifest = {
         "schema": FRESH_COLLECTION_SCHEMA, "schema_version": COLLECTION_MANIFEST_VERSION,
         "source_kind": FRESH_SOURCE_KIND, "method_label": FRESH_PEFT_METHOD_LABEL,
         "collection_mode": "fresh_arrow", "starts_from_reset": True, "vla_called": False,
         "task_ids": [int(task_id)], "task_id": int(task_id), "policy_id": policy_id,
-        "accepted_target": int(accepted_target), "accepted_count": len(accepted_rows),
-        "evaluator_confirmed_successes": len(accepted_rows), "successful_trajectories": successful_trajectories,
-        "attempted_count": attempted_count, "discarded_failure_count": attempted_count - len(accepted_rows),
-        "discarded_failure_categories": dict(sorted(discarded_failure_categories.items())),
-        "accepted_seeds": accepted_seeds, "adaptation_seeds": accepted_seeds,
-        "accepted_reset_identities": accepted_reset_identities,
+        "accepted_target": int(accepted_target), "accepted_count": cache.accepted_count,
+        "evaluator_confirmed_successes": cache.accepted_count, "successful_trajectories": successful_trajectories,
+        "attempted_count": cache.attempted_count, "discarded_failure_count": cache.attempted_count - cache.accepted_count,
+        "discarded_failure_categories": dict(sorted(cache.failure_categories.items())),
+        "accepted_seeds": [ref.seed for ref in cache.refs], "adaptation_seeds": [ref.seed for ref in cache.refs],
+        "accepted_reset_identities": [dict(ref.reset_identity or {}) for ref in cache.refs],
         "reserved_eval_init_state_indices": reserved_indices,
         "reserved_eval_init_state_hashes": [value.lower() for value in reserved_hashes],
         "adaptation_seed_namespace": int(adaptation_seed_start),
-        "evaluator_receipts": [row["evaluator_receipt"] for row in accepted_rows],
+        "evaluator_receipts": [ref.evaluator_receipt for ref in cache.refs],
         "controller_config_hash": controller_config_hash.lower(),
         "accepted_episodes_jsonl": str(accepted_path), "accepted_episodes_sha256": accepted_digest,
         "dataset_root": str(dataset_info["dataset_root"]),
@@ -750,8 +840,8 @@ def collect_fresh_arrow_demonstrations(
     manifest_path = root / "collection_manifest.json"
     manifest_digest = _write_immutable(manifest_path, manifest)
     return CollectionResult(
-        task_id=int(task_id), accepted_target=int(accepted_target), accepted_count=len(accepted_rows),
-        attempted_count=attempted_count, accepted_path=accepted_path, failed_path=None,
+        task_id=int(task_id), accepted_target=int(accepted_target), accepted_count=cache.accepted_count,
+        attempted_count=cache.attempted_count, accepted_path=accepted_path, failed_path=None,
         manifest_path=manifest_path, manifest_sha256=manifest_digest,
     )
 

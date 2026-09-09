@@ -22,6 +22,13 @@ die() { printf 'SmolVLA all-task PEFT job: %s\n' "$*" >&2; exit 2; }
 [[ "${PEFT_EXPECTED_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die 'PEFT_EXPECTED_COMMIT is invalid'
 [[ "${PEFT_EXPECTED_CONTROLLER_HASH:-}" =~ ^[0-9a-f]{64}$ ]] || die 'controller hash is invalid'
 [[ -n "${PEFT_ALL_TASK_RUN_ROOT:-}" && -n "${PEFT_ALL_TASK_ARCHIVE_ROOT:-}" ]] || die 'all-task roots are required'
+# This all-task pilot is intentionally sealed to one Arrow demonstration and
+# adapted-only evaluation.  Reject inherited values that would silently make
+# the ten task adapters use a different protocol; the task runner's baseline
+# branch remains available for standalone/default runs.
+if [[ -n "${PEFT_ARROW_DEMOS:-}" && "${PEFT_ARROW_DEMOS:-}" != 1 ]]; then die 'PEFT_ARROW_DEMOS must be 1 for this all-task pilot'; fi
+if [[ -n "${PEFT_SKIP_BASELINE:-}" && "${PEFT_SKIP_BASELINE:-}" != 1 ]]; then die 'PEFT_SKIP_BASELINE must be 1 for this all-task pilot'; fi
+export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1
 
 REPO_ROOT="$(realpath -e -- "$REPO_ROOT")"
 [[ -d "$REPO_ROOT/.git" ]] || die 'REPO_ROOT is not a Git checkout'

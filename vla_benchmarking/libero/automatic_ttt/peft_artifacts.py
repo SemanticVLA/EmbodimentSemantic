@@ -54,6 +54,16 @@ class PEFTArtifactError(ValueError):
     """Raised when an artifact or its training lineage is invalid."""
 
 
+def _require_positive_count(value: Any, label: str) -> int:
+    """Return a strict positive integer count used by collection contracts."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PEFTArtifactError(f"{label} must be a positive integer")
+    count = value
+    if count <= 0:
+        raise PEFTArtifactError(f"{label} must be a positive integer")
+    return count
+
+
 def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -199,25 +209,6 @@ def _validate_accepted_trace(
     dataset contains only Arrow suffix frames, while this trace is the proof
     that each accepted example was a real VLA-prefix/Arrow-suffix takeover.
     """
-    try:
-        lines = trace_path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        raise PEFTArtifactError(f"cannot read accepted episode trace: {trace_path}") from exc
-    rows: list[Mapping[str, Any]] = []
-    for line_number, line in enumerate(lines, 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise PEFTArtifactError(f"accepted episode trace line {line_number} is invalid JSON") from exc
-        if not isinstance(row, Mapping):
-            raise PEFTArtifactError("accepted episode trace records must be JSON objects")
-        rows.append(row)
-    if len(rows) != expected_successes:
-        raise PEFTArtifactError(
-            f"accepted episode trace must contain exactly {expected_successes} records"
-        )
     seen_ids: set[str] = set()
     seen_seeds: set[int] = set()
     expected_pairs = []
@@ -226,8 +217,28 @@ def _validate_accepted_trace(
             expected_pairs.append((item.get("trajectory_id"), int(item.get("seed"))))
         except (TypeError, ValueError) as exc:
             raise PEFTArtifactError("successful trajectory seed must be an integer") from exc
+    expected_by_id = {str(item.get("trajectory_id")): item for item in successful_trajectories}
     actual_pairs = []
-    for record in rows:
+    record_count = 0
+    try:
+        trace_handle = trace_path.open("r", encoding="utf-8")
+    except OSError as exc:
+        raise PEFTArtifactError(f"cannot read accepted episode trace: {trace_path}") from exc
+    with trace_handle:
+      for line_number, line in enumerate(trace_handle, 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise PEFTArtifactError(f"accepted episode trace line {line_number} is invalid JSON") from exc
+        if not isinstance(record, Mapping):
+            raise PEFTArtifactError("accepted episode trace records must be JSON objects")
+        record_count += 1
+        if record_count > expected_successes:
+            raise PEFTArtifactError(
+                f"accepted episode trace must contain exactly {expected_successes} records"
+            )
         trajectory_id = record.get("episode_id", record.get("trajectory_id"))
         if not isinstance(trajectory_id, str) or not trajectory_id or trajectory_id in seen_ids:
             raise PEFTArtifactError("accepted trace trajectory ids must be unique and non-empty")
@@ -266,7 +277,7 @@ def _validate_accepted_trace(
             if isinstance(selected_index, bool) or not isinstance(selected_index, int) or selected_index < 10:
                 raise PEFTArtifactError("fresh Arrow reset_identity selected index is invalid")
             _require_sha256(digest, "fresh Arrow reset_identity init_state_sha256")
-            expected_item = next((item for item in successful_trajectories if item.get("trajectory_id") == trajectory_id), None)
+            expected_item = expected_by_id.get(trajectory_id)
             if not isinstance(expected_item, Mapping) or expected_item.get("reset_identity") != dict(reset_identity):
                 raise PEFTArtifactError("accepted trace reset_identity does not match successful_trajectories")
         else:
@@ -288,6 +299,10 @@ def _validate_accepted_trace(
         seen_ids.add(trajectory_id)
         seen_seeds.add(seed)
         actual_pairs.append((trajectory_id, seed))
+    if record_count != expected_successes:
+        raise PEFTArtifactError(
+            f"accepted episode trace must contain exactly {expected_successes} records"
+        )
     if actual_pairs != expected_pairs:
         raise PEFTArtifactError("accepted trace records do not match successful_trajectories")
 
@@ -350,12 +365,17 @@ def load_arrow_collection_manifest(
     """Validate the Arrow collector-to-trainer handoff.
 
     The collector must provide: ``source_kind``, one ``task_id`` and
-    ``task_ids=[task_id]``, exactly 50 evaluator-confirmed successful
-    trajectories, 50 unique adaptation seeds disjoint from sealed evaluation
+    ``task_ids=[task_id]``, exactly ``expected_successes`` evaluator-confirmed
+    successful trajectories, unique adaptation seeds disjoint from sealed evaluation
     seeds 1000..1009, a controller SHA-256 hash, and a native LeRobot dataset
-    plus immutable dataset manifest.  Extra fields are allowed.  No HDF5
-    overlay conversion is accepted at this boundary.
+    plus immutable dataset manifest.  If the producer records ``accepted_target``
+    or ``accepted_count``, those fields must also equal ``expected_successes``.
+    Those two producer counters are optional for compatibility with legacy
+    manifests that predate them; ``evaluator_confirmed_successes`` is always
+    required.  Extra fields are allowed.  No HDF5 overlay conversion is
+    accepted at this boundary.
     """
+    expected_successes = _require_positive_count(expected_successes, "expected_successes")
     path = Path(manifest_path).expanduser().resolve()
     if not path.is_file():
         raise PEFTArtifactError(f"Arrow collection manifest does not exist: {path}")
@@ -384,10 +404,18 @@ def load_arrow_collection_manifest(
         raise PEFTArtifactError("collection manifest task_id does not equal the sole launcher task")
     if payload.get("task_ids") != [manifest_task]:
         raise PEFTArtifactError("collection manifest must contain exactly one task_id")
-    try:
-        successes = int(payload["evaluator_confirmed_successes"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise PEFTArtifactError("evaluator_confirmed_successes is required") from exc
+    if "evaluator_confirmed_successes" not in payload:
+        raise PEFTArtifactError("evaluator_confirmed_successes is required")
+    successes = _require_positive_count(
+        payload["evaluator_confirmed_successes"], "evaluator_confirmed_successes"
+    )
+    for field in ("accepted_target", "accepted_count"):
+        if field in payload:
+            producer_count = _require_positive_count(payload[field], field)
+            if producer_count != expected_successes:
+                raise PEFTArtifactError(
+                    f"{field} must equal expected_successes ({expected_successes})"
+                )
     successful = payload.get("successful_trajectories")
     if not isinstance(successful, list) or successes != expected_successes or len(successful) != expected_successes:
         raise PEFTArtifactError(f"collection must contain exactly {expected_successes} successful trajectories")
@@ -571,8 +599,9 @@ class PEFTArtifactManifest:
                 raise PEFTArtifactError(f"invalid digest record for artifact file: {relative!r}")
         if self.source_kind not in {COLLECTION_SOURCE_KIND, FRESH_COLLECTION_SOURCE_KIND}:
             raise PEFTArtifactError("artifact source_kind is not ArrowGraspController trajectory data")
-        if self.collection_success_count != 50:
-            raise PEFTArtifactError("artifact must record exactly 50 successful collection trajectories")
+        collection_success_count = _require_positive_count(
+            self.collection_success_count, "collection_success_count"
+        )
         for field in (
             "base_checkpoint_path", "collection_manifest_path", "dataset_manifest_path",
             "runtime_evidence_path",
@@ -608,8 +637,14 @@ class PEFTArtifactManifest:
         )
         if not isinstance(self.train_counts, Mapping) or any(key not in self.train_counts for key in required_train):
             raise PEFTArtifactError("train_counts is missing required paper/experiment fields")
-        if self.train_counts.get("successful_trajectories") != 50:
-            raise PEFTArtifactError("train_counts.successful_trajectories must be 50")
+        train_success_count = _require_positive_count(
+            self.train_counts.get("successful_trajectories"),
+            "train_counts.successful_trajectories",
+        )
+        if train_success_count != collection_success_count:
+            raise PEFTArtifactError(
+                "train_counts.successful_trajectories must match collection_success_count"
+            )
         if self.train_counts.get("steps") != self.checkpoint_step:
             raise PEFTArtifactError("train_counts.steps must equal checkpoint_step")
         if self.train_counts.get("batch_size") != PAPER_GLOBAL_BATCH_SIZE or self.train_counts.get("global_batch_size") != PAPER_GLOBAL_BATCH_SIZE:
@@ -656,12 +691,39 @@ class PEFTArtifactManifest:
         expected_eval_seeds = list(PAPER_EVAL_SEEDS)
         if self.eval_counts.get("seeds") != expected_eval_seeds:
             raise PEFTArtifactError("eval_counts.seeds must be exactly 1000..1009")
-        for phase in ("baseline", "adapted"):
-            phase_counts = self.eval_counts.get(phase)
-            if not isinstance(phase_counts, Mapping) or phase_counts.get("episodes") != len(expected_eval_seeds):
-                raise PEFTArtifactError(f"eval_counts.{phase}.episodes must be exactly 10")
-            if "seeds" in phase_counts and phase_counts["seeds"] != expected_eval_seeds:
-                raise PEFTArtifactError(f"eval_counts.{phase}.seeds must be exactly 1000..1009")
+        eval_mode = self.eval_counts.get("mode", "paired")
+        if eval_mode not in {"paired", "adapted_only"}:
+            raise PEFTArtifactError("eval_counts.mode must be paired or adapted_only")
+        if eval_mode == "adapted_only":
+            baseline = self.eval_counts.get("baseline")
+            if not isinstance(baseline, Mapping) or set(baseline) != {"status", "reason"}:
+                raise PEFTArtifactError(
+                    "adapted_only eval_counts.baseline must contain only status and reason"
+                )
+            if baseline.get("status") != "SKIPPED":
+                raise PEFTArtifactError(
+                    "adapted_only eval_counts.baseline.status must be SKIPPED"
+                )
+            if not isinstance(baseline.get("reason"), str) or not baseline["reason"].strip():
+                raise PEFTArtifactError(
+                    "adapted_only eval_counts.baseline.reason must be non-empty"
+                )
+            adapted = self.eval_counts.get("adapted")
+            if not isinstance(adapted, Mapping) or adapted.get("status") != "COMPLETED":
+                raise PEFTArtifactError(
+                    "adapted_only eval_counts.adapted.status must be COMPLETED"
+                )
+            if adapted.get("episodes") != len(expected_eval_seeds):
+                raise PEFTArtifactError("eval_counts.adapted.episodes must be exactly 10")
+            if adapted.get("seeds") != expected_eval_seeds:
+                raise PEFTArtifactError("eval_counts.adapted.seeds must be exactly 1000..1009")
+        else:
+            for phase in ("baseline", "adapted"):
+                phase_counts = self.eval_counts.get(phase)
+                if not isinstance(phase_counts, Mapping) or phase_counts.get("episodes") != len(expected_eval_seeds):
+                    raise PEFTArtifactError(f"eval_counts.{phase}.episodes must be exactly 10")
+                if "seeds" in phase_counts and phase_counts["seeds"] != expected_eval_seeds:
+                    raise PEFTArtifactError(f"eval_counts.{phase}.seeds must be exactly 1000..1009")
         if any(not isinstance(mapping, Mapping) or not mapping for mapping in (self.train_counts, self.eval_counts, self.runtime_versions)):
             raise PEFTArtifactError("train_counts, eval_counts, and runtime_versions must be non-empty mappings")
 
@@ -719,10 +781,13 @@ def save_peft_adapter(
         candidate = source / required
         if not candidate.is_file() or candidate.stat().st_size == 0:
             raise PEFTArtifactError(f"source adapter is missing required non-empty file: {candidate}")
+    collection_success_count = _require_positive_count(
+        collection_success_count, "collection_success_count"
+    )
     base_path, base_digest = _resolve_digest_input(base_checkpoint, "base checkpoint")
     collection_path, collection_digest = _resolve_digest_input(collection_manifest, "collection manifest")
     collection = load_arrow_collection_manifest(
-        collection_path, task_id=int(task_id), expected_successes=50
+        collection_path, task_id=int(task_id), expected_successes=collection_success_count
     )
     try:
         collection_payload = json.loads(Path(collection_path).read_text(encoding="utf-8"))
@@ -749,8 +814,8 @@ def save_peft_adapter(
         expected_decay=int(optimizer.get("decay_steps", checkpoint_step)) if isinstance(optimizer, Mapping) else int(checkpoint_step),
     )
     _require_sha256(controller_config_hash, "controller_config_hash")
-    if collection_success_count != 50 or checkpoint_step <= 0:
-        raise PEFTArtifactError("artifacts require 50 successes and a positive checkpoint step")
+    if checkpoint_step <= 0:
+        raise PEFTArtifactError("artifacts require a positive checkpoint step")
     if collection["controller_config_hash"] != controller_config_hash.lower():
         raise PEFTArtifactError("controller_config_hash differs from the collection manifest")
     if not base_checkpoint_revision or not git_commit or not isinstance(runtime_versions, Mapping) or not runtime_versions:
@@ -903,7 +968,10 @@ def _validate_bundled_lineage(path: Path, manifest: PEFTArtifactManifest) -> Non
     expected_method = FRESH_METHOD_LABEL if manifest.source_kind == FRESH_COLLECTION_SOURCE_KIND else "peft_lora"
     if collection.get("method_label") != expected_method or manifest.method != expected_method:
         raise PEFTArtifactError("bundled collection method does not match adapter method")
-    if collection.get("task_ids") != [manifest.task_id] or collection.get("evaluator_confirmed_successes") != 50:
+    expected_successes = _require_positive_count(
+        manifest.collection_success_count, "collection_success_count"
+    )
+    if collection.get("task_ids") != [manifest.task_id] or collection.get("evaluator_confirmed_successes") != expected_successes:
         raise PEFTArtifactError("bundled collection task/success contract does not match adapter")
     accepted_relative = _safe_relative_path(collection.get("accepted_episodes_jsonl"), "bundled accepted trace")
     accepted_path = collection_path.parent / accepted_relative
@@ -917,11 +985,13 @@ def _validate_bundled_lineage(path: Path, manifest: PEFTArtifactManifest) -> Non
         accepted_path,
         task_id=manifest.task_id,
         successful_trajectories=list(collection.get("successful_trajectories", [])),
-        expected_successes=50,
+        expected_successes=expected_successes,
         collection_mode=collection_mode,
     )
     if collection_mode == FRESH_COLLECTION_MODE:
-        _validate_fresh_reset_contract(collection, list(collection.get("successful_trajectories", [])), 50)
+        _validate_fresh_reset_contract(
+            collection, list(collection.get("successful_trajectories", [])), expected_successes
+        )
     if collection.get("dataset_root") != "dataset_tree":
         raise PEFTArtifactError("bundled collection dataset_root must be detached dataset_tree")
     dataset_relative = _safe_relative_path(collection.get("dataset_manifest_path"), "bundled dataset manifest reference")

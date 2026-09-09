@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # One-GPU task-0 end-to-end canary. It must complete one genuine fresh-reset
 # Arrow demonstration, two real PEFT updates, adapter audit/reload,
-# and a paired one-seed evaluation before the full array is released.
+# and one adapted-only sealed evaluation before the full ten-task job is
+# released.  Baseline code remains in the production runner; this canary
+# explicitly exercises its skip branch.
 
 # Required exports: REPO_ROOT, PEFT_EXPECTED_COMMIT, PEFT_CANARY_RUN_ROOT,
 # PEFT_CANARY_ARCHIVE_ROOT, PEFT_CANARY_CONTROLLER_HASH.
 
 #SBATCH --job-name=smolvla_arrow_canary
-#SBATCH --partition=gpu_a40
+#SBATCH --partition=gpu_a100
 #SBATCH --exclude=compute-4-13
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
@@ -20,6 +22,7 @@
 set -Eeuo pipefail
 umask 027
 export PYTHONDONTWRITEBYTECODE=1
+export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1
 die() { printf 'smolvla Arrow collector canary: %s\n' "$*" >&2; exit 2; }
 
 [[ -n "${SLURM_JOB_ID:-}" && "$SLURM_JOB_ID" =~ ^[0-9]+$ ]] || die 'submit with sbatch'
@@ -150,38 +153,9 @@ PY
  )"
 EVAL_RESET_CONTRACT="$RUN_ROOT/eval_reset_contract.json"
 "$PYTHON" - "$EVAL_RESET_CONTRACT" <<'PY'
-import json, pathlib, sys
-from vla_benchmarking.libero.evaluation.run_arrow_pick_place_eval import build_libero_env
-
-output = pathlib.Path(sys.argv[1])
-identities = []
-for index in range(10):
-    env = build_libero_env(
-        0, 1000 + index, 256, suite_mode="sealed_randomized",
-        extra_camera_names=("robot0_eye_in_hand",), init_state_index=index,
-    )
-    try:
-        diagnostics = getattr(env, "_arrow_init_state_diagnostics", None)
-        if not isinstance(diagnostics, dict):
-            raise SystemExit("canary reset-contract probe lacks init-state diagnostics")
-        digest = diagnostics.get("selected_row_sha256")
-        if diagnostics.get("selected_index") != index or not isinstance(digest, str) or len(digest) != 64:
-            raise SystemExit(f"invalid canary reset identity for index {index}: {diagnostics}")
-        identities.append(digest.lower())
-    finally:
-        close = getattr(env, "close", None)
-        if callable(close):
-            close()
-if len(set(identities)) != 10:
-    raise SystemExit("canary evaluation reset hashes are not unique")
-payload = {
-    "schema_version": 1, "task_id": 0,
-    "reserved_eval_init_state_indices": list(range(10)),
-    "reserved_eval_init_state_hashes": identities,
-}
-tmp = output.with_name("." + output.name + ".partial")
-tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-tmp.replace(output)
+import pathlib, sys
+from vla_benchmarking.libero.automatic_ttt.eval_reset_contract import probe_libero_eval_resets
+probe_libero_eval_resets(0, pathlib.Path(sys.argv[1]), resolution=256)
 PY
 "$PYTHON" -m vla_benchmarking.libero.automatic_ttt.collect_smolvla_arrow_corrections \
   --task-id 0 --task-description "$TASK_DESCRIPTION" --output-root "$COLLECTION_ROOT" \
@@ -274,17 +248,16 @@ if not v.get("optimizer_scheduler_objects_checked") or not v.get("lr_milestones_
     raise SystemExit("canary optimizer/scheduler attestation is incomplete")
 PY
 
-for phase in baseline adapted; do
-  policy="$BASE_POLICY"; [[ "$phase" == adapted ]] && policy="$CHECKPOINT_DIR"
-  out="$RUN_ROOT/eval_${phase}"
-  PEFT_PAIRED_EVAL=1 N_ACTION_STEPS=checkpoint LIBERO_EPISODE_LENGTH=280 EVAL_RESOLUTION=256 \
-    EVAL_CAMERAS=agentview_image,robot0_eye_in_hand_image MODELS="$policy" CONTEXT_MODE=standard \
-    TASK_IDS='[0]' N_EPISODES=1 BATCH_SIZE=1 DEVICE=cuda SEED=1000 SUITE_MODE=sealed_randomized \
-    OUTPUT_DIR="$out" "$PYTHON" "$EVALUATOR" --eval.use_async_envs=false
-  [[ "$(find "$out" -name eval_info.json -type f | wc -l)" -eq 1 ]] || die "${phase} canary evaluation did not emit one eval_info.json"
-done
+phase=adapted
+policy="$CHECKPOINT_DIR"
+out="$RUN_ROOT/eval_adapted"
+PEFT_PAIRED_EVAL=1 N_ACTION_STEPS=checkpoint LIBERO_EPISODE_LENGTH=280 EVAL_RESOLUTION=256 \
+  EVAL_CAMERAS=agentview_image,robot0_eye_in_hand_image MODELS="$policy" CONTEXT_MODE=standard \
+  TASK_IDS='[0]' N_EPISODES=1 BATCH_SIZE=1 DEVICE=cuda SEED=1000 SUITE_MODE=sealed_randomized \
+  OUTPUT_DIR="$out" "$PYTHON" "$EVALUATOR" --eval.use_async_envs=false
+[[ "$(find "$out" -name eval_info.json -type f | wc -l)" -eq 1 ]] || die "adapted canary evaluation did not emit one eval_info.json"
 
-"$PYTHON" - "$RUN_ROOT/eval_baseline" "$RUN_ROOT/eval_adapted" <<'PY'
+"$PYTHON" - "$RUN_ROOT/eval_adapted" "$EVAL_RESET_CONTRACT" <<'PY'
 import json, pathlib, sys
 from vla_benchmarking.libero.evaluation.randomization_contract import randomization_config_payload
 from vla_benchmarking.libero.shared.config import task_randomization_dimensions
@@ -308,11 +281,14 @@ def validate(root):
         raise SystemExit(f"canary evaluation lacks one reset_identity: {audit}")
     return identities
 
-baseline = validate(sys.argv[1])
-adapted = validate(sys.argv[2])
-if baseline != adapted:
-    raise SystemExit("canary baseline/adapted reset identities differ")
-print("VERIFIED canary paired sealed reset identity")
+adapted = validate(sys.argv[1])
+contract = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+identity = adapted[0]
+if identity.get("selected_init_state_index") != contract["reserved_eval_init_state_indices"][0]:
+    raise SystemExit("canary adapted reset index differs from reservation")
+if str(identity.get("init_state_sha256", "")).lower() != str(contract["reserved_eval_init_state_hashes"][0]).lower():
+    raise SystemExit("canary adapted reset hash differs from reservation")
+print("VERIFIED canary adapted sealed reset identity matches skip-mode reservation")
 PY
 
 "$PYTHON" - "$RUN_ROOT/collector_canary_marker.json" "$PEFT_EXPECTED_COMMIT" "$PEFT_CANARY_CONTROLLER_HASH" "$CHECKPOINT_DIR" <<'PY'
@@ -321,10 +297,11 @@ path,commit,controller,checkpoint=sys.argv[1:]
 payload={"schema":"smolvla_arrow_peft_e2e_canary.v1","status":"passed","repo_commit":commit,
          "controller_contract_sha256":controller,"task_id":0,"accepted_successes":1,
          "optimizer_updates":2,"adapter_checkpoint":str(pathlib.Path(checkpoint).resolve()),
-         "paired_eval_seeds":[1000],"production_requested_epochs":5}
+         "eval_mode":"adapted_only","comparison_available":False,"improvement_claim_supported":False,
+         "adapted_eval_seeds":[1000],"production_requested_epochs":5}
 target=pathlib.Path(path); tmp=target.with_name("."+target.name+".partial")
 tmp.write_text(json.dumps(payload,sort_keys=True,indent=2)+"\n",encoding="utf-8"); tmp.replace(target)
 PY
 
 touch "$RUN_ROOT/COMPLETED"
-printf '[%s] genuine Arrow + PEFT + paired-eval canary passed; marker written\n' "$(date +'%F %T')"
+printf '[%s] genuine Arrow + PEFT + adapted-only canary passed; marker written\n' "$(date +'%F %T')"

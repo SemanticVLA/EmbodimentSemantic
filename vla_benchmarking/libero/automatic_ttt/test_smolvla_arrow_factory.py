@@ -239,3 +239,31 @@ def test_arrow_session_forwards_current_rendered_arrow_to_motion_runner(
         evaluator=None,
     )
     assert seen["arrow_rgb"] is arrow_rgb
+
+
+def test_arrow_session_cleanup_releases_all_attempt_references(tmp_path):
+    """A completed attempt cannot retain env/images/calibration into retry 2."""
+    worker = SimpleNamespace(robot_calibration=object())
+    session = runtime._ArrowSession(
+        molmo=object(), resolution=8, output_root=tmp_path,
+        worker=worker, transform=np.eye(3), opening_m=0.04,
+        pending_capture=object(), pending_arrow=(np.zeros((8, 8, 3)), (1, 2), None),
+        current_arrow_rgb=np.ones((8, 8, 3)), current_view=object(), task_id=0, seed=3000,
+        action_budget=object(),
+    )
+
+    session.cleanup_attempt()
+
+    assert session.worker is None
+    assert worker.robot_calibration is None
+    assert session.transform is None
+    assert session.opening_m is None
+    assert session.pending_capture is None
+    assert session.pending_arrow is None
+    assert session.current_arrow_rgb is None
+    assert session.current_view is None
+    assert session.action_budget is None
+    assert session.task_id is None
+    assert session.seed is None
+    # Exception/retry cleanup is deliberately idempotent.
+    session.cleanup_attempt()

@@ -17,7 +17,7 @@ from .peft_artifacts import (
 )
 
 
-def _inputs(tmp_path):
+def _inputs(tmp_path, count=50):
     source = tmp_path / "source"
     source.mkdir(parents=True, exist_ok=True)
     (source / "adapter_config.json").write_text('{"r": 16}\n', encoding="utf-8")
@@ -30,7 +30,7 @@ def _inputs(tmp_path):
     (dataset / "meta" / "info.json").write_text('{"total_frames": 10}\n', encoding="utf-8")
     accepted = tmp_path / "accepted_episodes.jsonl"
     accepted_rows = []
-    for i in range(50):
+    for i in range(count):
         episode_id = f"t-{i}"
         accepted_rows.append({
             "episode_id": episode_id,
@@ -67,11 +67,11 @@ def _inputs(tmp_path):
         "method_label": "peft_lora",
         "task_id": 0,
         "task_ids": [0],
-        "evaluator_confirmed_successes": 50,
+        "evaluator_confirmed_successes": count,
         "successful_trajectories": [
-            {"trajectory_id": f"t-{i}", "seed": 3000 + i, "evaluator_success": True} for i in range(50)
+            {"trajectory_id": f"t-{i}", "seed": 3000 + i, "evaluator_success": True} for i in range(count)
         ],
-        "adaptation_seeds": list(range(3000, 3050)),
+        "adaptation_seeds": list(range(3000, 3000 + count)),
         "controller_config_hash": "a" * 64,
         "accepted_episodes_jsonl": str(accepted),
         "accepted_episodes_sha256": hashlib.sha256(accepted.read_bytes()).hexdigest(),
@@ -98,8 +98,8 @@ def _runtime_evidence():
     }
 
 
-def _fresh_inputs(tmp_path):
-    source, base, collection = _inputs(tmp_path)
+def _fresh_inputs(tmp_path, count=50):
+    source, base, collection = _inputs(tmp_path, count=count)
     accepted = tmp_path / "accepted_episodes.jsonl"
     rows = [json.loads(line) for line in accepted.read_text(encoding="utf-8").splitlines()]
     accepted_reset_identities = []
@@ -155,8 +155,11 @@ def _fresh_runtime_evidence(*, steps=11, warmup=0):
     return evidence
 
 
-def _fresh_save(tmp_path, run_id="fresh-run"):
-    source, base, collection = _fresh_inputs(tmp_path)
+def _fresh_save(
+    tmp_path, run_id="fresh-run", count=50, eval_counts=None, train_success_count=None,
+    collection_success_count=None,
+):
+    source, base, collection = _fresh_inputs(tmp_path, count=count)
     steps, frames, batch = 11, 17, 8
     optimizer = {
         "optimizer": "AdamW", "weight_decay": 1e-5, "peak_learning_rate": 5e-5,
@@ -167,15 +170,17 @@ def _fresh_save(tmp_path, run_id="fresh-run"):
     return save_peft_adapter(
         source, tmp_path / "fresh_outputs", vla="smolvla", task_id=0, run_id=run_id,
         base_checkpoint=base, base_checkpoint_revision="base-rev",
-        collection_manifest=collection, collection_success_count=50,
+        collection_manifest=collection,
+        collection_success_count=count if collection_success_count is None else collection_success_count,
         controller_config_hash="a" * 64, checkpoint_step=steps, seed=1000,
         train_counts={
-            "successful_trajectories": 50, "steps": steps, "requested_epochs": 5,
+            "successful_trajectories": count if train_success_count is None else train_success_count,
+            "steps": steps, "requested_epochs": 5,
             "batch_size": batch, "global_batch_size": batch, "dataset_frames": frames,
             "epoch_equivalent": steps * batch / frames, "save_freq": steps,
             "seed": 1000, "training_scope": "task_specific",
         },
-        eval_counts={
+        eval_counts=eval_counts or {
             "baseline": {"episodes": 10, "seeds": list(range(1000, 1010))},
             "adapted": {"episodes": 10, "seeds": list(range(1000, 1010))},
             "seeds": list(range(1000, 1010)),
@@ -225,6 +230,38 @@ def test_collection_contract_requires_one_task_50_confirmed_and_disjoint_seeds(t
     collection.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(PEFTArtifactError, match="exactly one"):
         load_arrow_collection_manifest(collection, task_id=0)
+
+
+def test_legacy_manifest_without_producer_count_fields_remains_compatible(tmp_path):
+    _, _, collection = _inputs(tmp_path)
+    payload = json.loads(collection.read_text(encoding="utf-8"))
+    assert "accepted_target" not in payload
+    assert "accepted_count" not in payload
+    assert load_arrow_collection_manifest(collection, task_id=0)["evaluator_confirmed_successes"] == 50
+
+
+@pytest.mark.parametrize("field", ["accepted_target", "accepted_count"])
+def test_producer_count_fields_must_match_expected_successes(tmp_path, field):
+    _, _, collection = _inputs(tmp_path, count=1)
+    payload = json.loads(collection.read_text(encoding="utf-8"))
+    payload[field] = 2
+    collection.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    with pytest.raises(PEFTArtifactError, match=f"{field} must equal"):
+        load_arrow_collection_manifest(collection, task_id=0, expected_successes=1)
+
+
+def test_producer_count_fields_reject_boolean_values(tmp_path):
+    _, _, collection = _inputs(tmp_path, count=1)
+    payload = json.loads(collection.read_text(encoding="utf-8"))
+    payload["accepted_count"] = True
+    collection.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    with pytest.raises(PEFTArtifactError, match="accepted_count must be a positive integer"):
+        load_arrow_collection_manifest(collection, task_id=0, expected_successes=1)
+    payload["accepted_count"] = 1
+    payload["evaluator_confirmed_successes"] = False
+    collection.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    with pytest.raises(PEFTArtifactError, match="evaluator_confirmed_successes must be a positive integer"):
+        load_arrow_collection_manifest(collection, task_id=0, expected_successes=1)
 
 
 def test_collection_contract_rejects_eval_seed_overlap_and_unconfirmed_rows(tmp_path):
@@ -404,6 +441,51 @@ def test_fresh_artifact_enforces_dynamic_five_epoch_budget(tmp_path):
     assert restored.train_counts["epoch_equivalent"] == pytest.approx(88 / 17)
     assert restored.optimizer["warmup_steps"] == 0
     assert restored.optimizer["decay_steps"] == 11
+
+
+def test_one_demo_artifact_round_trip_and_lineage_count(tmp_path):
+    eval_counts = {
+        "mode": "adapted_only",
+        "baseline": {"status": "SKIPPED", "reason": "baseline disabled for one-shot pilot"},
+        "adapted": {
+            "status": "COMPLETED", "episodes": 10, "seeds": list(range(1000, 1010)),
+            "successes": 3,
+        },
+        "seeds": list(range(1000, 1010)),
+    }
+    manifest = _fresh_save(tmp_path, count=1, eval_counts=eval_counts)
+    restored = load_peft_manifest(manifest.artifact_path)
+    assert restored.collection_success_count == 1
+    assert restored.train_counts["successful_trajectories"] == 1
+    assert restored.eval_counts["mode"] == "adapted_only"
+    bundled = json.loads(
+        (Path(manifest.artifact_path) / restored.collection_manifest_path).read_text(encoding="utf-8")
+    )
+    assert bundled["evaluator_confirmed_successes"] == 1
+    assert len(bundled["successful_trajectories"]) == 1
+
+
+def test_one_demo_count_mismatch_is_rejected_at_collection_boundary(tmp_path):
+    with pytest.raises(PEFTArtifactError, match="exactly 2"):
+        _fresh_save(tmp_path, count=1, collection_success_count=2)
+
+
+def test_train_count_must_match_collection_count(tmp_path):
+    with pytest.raises(PEFTArtifactError, match="match collection_success_count"):
+        _fresh_save(tmp_path, count=1, train_success_count=2)
+
+
+def test_adapted_only_rejects_fake_skipped_baseline_metrics(tmp_path):
+    eval_counts = {
+        "mode": "adapted_only",
+        "baseline": {
+            "status": "SKIPPED", "reason": "baseline disabled", "successes": 0,
+        },
+        "adapted": {"status": "COMPLETED", "episodes": 10, "seeds": list(range(1000, 1010))},
+        "seeds": list(range(1000, 1010)),
+    }
+    with pytest.raises(PEFTArtifactError, match="only status and reason"):
+        _fresh_save(tmp_path, count=1, eval_counts=eval_counts)
 
 
 def test_fresh_artifact_relocates_after_all_original_inputs_are_deleted(tmp_path):

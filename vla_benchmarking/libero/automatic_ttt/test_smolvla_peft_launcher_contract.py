@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -41,6 +42,53 @@ def test_launcher_is_scalar_task_specific_and_manifest_driven():
     assert "save_peft_adapter(" in text
     assert text.count("save_peft_adapter(") == 1
     assert "module load miniforge/24.3.0-0" in text
+
+
+def test_launcher_supports_one_shot_skip_baseline_without_removing_baseline_path():
+    text = LAUNCHER.read_text(encoding="utf-8")
+    assert 'PEFT_ARROW_DEMOS="${PEFT_ARROW_DEMOS:-50}"' in text
+    assert 'PEFT_SKIP_BASELINE="${PEFT_SKIP_BASELINE:-0}"' in text
+    assert 'if [[ "$PEFT_SKIP_BASELINE" == 0 ]]; then' in text
+    assert 'if [[ "$PEFT_SKIP_BASELINE" == 1 ]]; then' in text
+    assert "probe_libero_eval_resets" in text
+    assert "eval_reset_contract validate-audit" in text
+    assert 'baseline_stage.v1' in text
+    assert '"evaluation_mode":"adapted_only"' in text
+    assert '"mode":"adapted_only"' in text
+    assert '"status":"COMPLETED"' in text
+    assert '"comparison_available":baseline is not None' in text
+    assert '"improvement_claim_supported":False' in text
+    assert '"success_delta":(adapted["success_rate"]-baseline["success_rate"] if baseline is not None else None)' in text
+    assert '"task_id": int(os.environ["TASK_ID"])' in text
+    assert '"base_policy_revision": os.environ["BASE_POLICY_REVISION"]' in text
+    assert '"eval_seeds_reserved": list(range(1000, 1010))' in text
+
+
+def test_embedded_launcher_python_heredocs_compile():
+    """Catch shell-heredoc indentation errors before submitting a GPU job."""
+    text = LAUNCHER.read_text(encoding="utf-8")
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", text, flags=re.DOTALL)
+    assert blocks, "launcher must contain embedded Python validation blocks"
+    for index, block in enumerate(blocks):
+        compile(block, f"{LAUNCHER}:heredoc-{index}", "exec")
+
+
+def test_all_task_wrapper_seals_one_demo_and_skips_baseline():
+    text = (LAUNCHER.parent / "run_smolvla_peft_arrow_all_tasks.sbatch").read_text(encoding="utf-8")
+    assert 'export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1' in text
+    assert '${PEFT_ARROW_DEMOS:-}" != 1' in text
+    assert '${PEFT_SKIP_BASELINE:-}" != 1' in text
+    assert 'for task_id in 0 1 2 3 4 5 6 7 8 9; do' in text
+    assert 'bash "$RUNNER"' in text
+
+
+def test_canary_is_adapted_only_and_uses_shared_reset_contract():
+    text = CANARY.read_text(encoding="utf-8")
+    assert 'export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1' in text
+    assert "probe_libero_eval_resets" in text
+    assert "OUTPUT_DIR=\"$out\"" in text
+    assert '"adapted_eval_seeds":[1000]' in text
+    assert '"paired_eval_seeds"' not in text
 
 
 def test_launcher_uses_matching_sealed_evaluation_seeds():

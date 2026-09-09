@@ -369,6 +369,29 @@ class _ArrowSession:
     seed: int | None = None
     provenance: Mapping[str, Any] | None = None
 
+    def cleanup_attempt(self) -> None:
+        """Release every per-episode Arrow reference before the next reset.
+
+        ``_ArrowSession`` intentionally persists the heavyweight Molmo
+        runtime, but none of the current environment, RGB capture, rendered
+        arrow, calibration, action-budget, or candidate-worker state may span
+        collection attempts.  This hook is called after the environment is
+        closed by the collector and is idempotent so exception paths are safe.
+        """
+        worker = self.worker
+        if worker is not None and hasattr(worker, "robot_calibration"):
+            worker.robot_calibration = None
+        self.worker = None
+        self.pending_capture = None
+        self.pending_arrow = None
+        self.current_arrow_rgb = None
+        self.current_view = None
+        self.transform = None
+        self.opening_m = None
+        self.action_budget = None
+        self.task_id = None
+        self.seed = None
+
     def capture(self, environment: Any, *, resolution: int, camera_name: str) -> Any:
         """Return the cached post-VLA frame once, then fresh controller frames."""
         if camera_name == "agentview" and self.pending_capture is not None:
@@ -654,6 +677,7 @@ def build_collection_factory(
                 controller_config_hash=supplied_hash,
                 reserved_eval_init_state_indices=kwargs.get("reserved_eval_init_state_indices"),
                 reserved_eval_init_state_hashes=kwargs.get("reserved_eval_init_state_hashes"),
+                attempt_cleanup_fn=getattr(session, "cleanup_attempt", None),
                 provenance={**provenance, "collection_mode": "fresh_arrow", "vla_loaded": False,
                             "vla_called": False, "method": "successful_arrow_behavior_cloning"},
             )
@@ -668,6 +692,7 @@ def build_collection_factory(
                 max_attempts=int(kwargs.get("max_attempts", DEFAULT_MAX_ATTEMPTS)),
                 vla_step_budget=int(vla_step_budget), teacher_step_budget=int(arrow_step_budget),
                 source_state_fn=classify_source_state, controller_config_hash=supplied_hash,
+                attempt_cleanup_fn=getattr(session, "cleanup_attempt", None),
                 provenance={**provenance, "collection_mode": "same_episode_takeover",
                             "base_policy": str(Path(selected_base).expanduser().resolve())},
             )
