@@ -1,0 +1,78 @@
+{
+  "action_encoding": "normalized_delta_pose_rotvec_gripper_v1",
+  "artifact_lineage_schema": "arrow_policy_suite.artifact_lineage.v1",
+  "calibration_revision": "f25cef6f15cd9d505e0e210f8d7ff53d3a3374d77107dfd664839d7d0266e721",
+  "camera_names": [
+    "agentview",
+    "robot0_eye_in_hand"
+  ],
+  "config_sha256": "f496fa400630a903197c436b556876418e07a1d24843321c345f804a6adb6b27",
+  "controller_revision": "37497fd0b2f60346b9ffd1501ccc743046c7fa2370ef6fa9531a7204f69cc044",
+  "create_only_artifacts": true,
+  "depth_units": "meters",
+  "environment_revision": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
+  "fast_fast_parameter_count": 448,
+  "fast_feature_dim": 32,
+  "fast_support_attempts": 1,
+  "fast_support_mode": "one_observation",
+  "identity_seal_sha256": "cc874f6ecd78a878c280ca0cac2c29eb213b76d6532c728e0e99a3ff51b531c6",
+  "image_resolution": [
+    256,
+    256
+  ],
+  "learned_seeds": [
+    1000,
+    1001,
+    1002
+  ],
+  "metric_revision": "libero-check-success@8f1084e3132a39270c3a13ebe37270a43ece2a01",
+  "minimal_branch_hold_steps": 20,
+  "minimal_representative_variant": "runtime_oracle",
+  "model_revision": "6721902bc4d61e50a3bfdb11dfb4cb626f05d102",
+  "n_action_steps": 1,
+  "observation_schema": "libero_rgb_state8_instruction_v1",
+  "on_call_attempts_per_task": 50,
+  "on_call_min_teacher_steps": 20,
+  "on_call_progress_threshold": 0.1,
+  "on_call_progress_window": 20,
+  "primary_horizon": 1200,
+  "processor_revision": "pre-29267ff4423fcce93bbd76ad0f386905f9de5d267ca13379a5795a514a81b7a9_post-ad2d22405cb63be4932c4a4d9a69bc9953df02a01235c5f420b679dbe6bfe7c5",
+  "renderer_revision": "libero-offscreen@8f1084e3132a39270c3a13ebe37270a43ece2a01",
+  "schema": "arrow_policy_suite.study_config.v1",
+  "secondary_horizon": 280,
+  "split_manifest_schema": "arrow_policy_suite.reset_split.v1",
+  "task_ids": [
+    0
+  ],
+  "test_reset_ids": {
+    "0": [
+      "exploratory-task0-test-00",
+      "exploratory-task0-test-01",
+      "exploratory-task0-test-02",
+      "exploratory-task0-test-03",
+      "exploratory-task0-test-04",
+      "exploratory-task0-test-05",
+      "exploratory-task0-test-06",
+      "exploratory-task0-test-07",
+      "exploratory-task0-test-08",
+      "exploratory-task0-test-09"
+    ]
+  },
+  "together_pose_weight": 0.5,
+  "trace_geometry_provider_revision": "exploratory-canary-not-used-v1",
+  "trace_lookahead": 2,
+  "validation_reset_ids": {
+    "0": [
+      "exploratory-task0-validation-00",
+      "exploratory-task0-validation-01",
+      "exploratory-task0-validation-02",
+      "exploratory-task0-validation-03",
+      "exploratory-task0-validation-04",
+      "exploratory-task0-validation-05",
+      "exploratory-task0-validation-06",
+      "exploratory-task0-validation-07",
+      "exploratory-task0-validation-08",
+      "exploratory-task0-validation-09"
+    ]
+  }
+}
