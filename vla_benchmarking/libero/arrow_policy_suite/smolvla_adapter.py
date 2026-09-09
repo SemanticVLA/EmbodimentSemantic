@@ -10,11 +10,12 @@ from __future__ import annotations
 from collections import deque
 import copy
 from dataclasses import dataclass
+import math
 import random
 import re
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
-from .contracts import ActionProposal, ObservationFrame, StepRecord, ContractError
+from .contracts import ActionProposal, ObservationFrame, StepRecord, ContractError, clip_action
 
 
 _NATIVE_LOAD_ERROR_MAX = 256
@@ -297,17 +298,31 @@ class SmolVLASnapshot:
     postprocessor_state: Any = None
     rng_state: Any = None
     native_policy_state: Any = None
+    clipped_rows: tuple[bool, ...] = ()
 
 
 def _to_rows(value: Any) -> tuple[tuple[float, ...], ...]:
-    """Convert [7] or [chunk,7] model output without adding normalization."""
+    """Convert [7] or [chunk,7] model output to canonical normalized actions."""
+
+    rows, _ = _to_rows_with_clipping(value)
+    return rows
+
+
+def _to_rows_with_clipping(value: Any) -> tuple[tuple[tuple[float, ...], ...], tuple[bool, ...]]:
+    """Normalize finite SmolVLA rows and retain per-row clipping diagnostics.
+
+    SmolVLA's action head is trained against normalized actions, but a native
+    checkpoint can still emit values outside the environment boundary.
+    Clipping finite, correctly-shaped rows here is the canonical adapter
+    behavior; malformed shapes and non-finite values remain hard errors.
+    """
 
     if isinstance(value, ActionProposal):
-        return (tuple(value.action),)
+        value = value.action
     if isinstance(value, Mapping):
         for key in ("action", "actions", "action_chunk"):
             if key in value:
-                return _to_rows(value[key])
+                return _to_rows_with_clipping(value[key])
         raise ContractError("SmolVLA output mapping lacks action/action_chunk")
     detach = getattr(value, "detach", None)
     if callable(detach):
@@ -333,16 +348,22 @@ def _to_rows(value: Any) -> tuple[tuple[float, ...], ...]:
     if isinstance(first, (int, float)):
         rows = [rows]
     normalized: list[tuple[float, ...]] = []
+    clipped: list[bool] = []
     for row in rows:
         if isinstance(row, (str, bytes)):
             raise ContractError("SmolVLA action output must contain numeric rows")
         try:
-            normalized.append(tuple(float(item) for item in row))
+            numeric = tuple(float(item) for item in row)
         except (TypeError, ValueError) as exc:
             raise ContractError("SmolVLA action output must contain numeric rows") from exc
-    if any(len(row) != 7 for row in normalized):
-        raise ContractError("SmolVLA action output rows must have dimension seven")
-    return tuple(normalized)
+        if len(numeric) != 7:
+            raise ContractError("SmolVLA action output rows must have dimension seven")
+        if any(not math.isfinite(item) for item in numeric):
+            raise ContractError("SmolVLA action output must contain finite numeric rows")
+        bounded = clip_action(numeric)
+        normalized.append(bounded)
+        clipped.append(bounded != numeric)
+    return tuple(normalized), tuple(clipped)
 
 
 def _native_image_tensor(value: Any, *, name: str) -> Any:
@@ -453,6 +474,7 @@ class SmolVLAAdapter:
         self._pending: deque[tuple[float, ...]] = deque()
         self._chunk_id = 0
         self._chunk_horizon = 0
+        self._clipped_rows: tuple[bool, ...] = ()
         self._inflight: ActionProposal | None = None
         self.n_action_steps = 1 if force_single_action_step else getattr(policy, "n_action_steps", None)
         if force_single_action_step and policy is not None and not _force_single_action_step(policy):
@@ -516,6 +538,7 @@ class SmolVLAAdapter:
         self._pending.clear()
         self._chunk_id = 0
         self._chunk_horizon = 0
+        self._clipped_rows = ()
         self._inflight = None
         reset = getattr(self.policy, "reset", None)
         if callable(reset):
@@ -579,19 +602,24 @@ class SmolVLAAdapter:
         if self._inflight is not None:
             raise ContractError("previous SmolVLA proposal was not committed")
         if not self._pending:
-            rows = _to_rows(self._infer(frame))
+            rows, clipped_rows = _to_rows_with_clipping(self._infer(frame))
             self._pending.extend(rows)
+            self._clipped_rows = clipped_rows
             self._chunk_id += 1
             self._chunk_horizon = len(rows)
+        action_index = self._chunk_horizon - len(self._pending)
         action = self._pending.popleft()
+        action_clipped = bool(self._clipped_rows[action_index]) if action_index < len(self._clipped_rows) else False
         proposal = _proposal(
             action,
             frame,
             self.producer,
             action_chunk_id=f"{self.producer}-chunk-{self._chunk_id}",
-            action_chunk_index=self._chunk_horizon - len(self._pending) - 1,
+            action_chunk_index=action_index,
             action_chunk_horizon=self._chunk_horizon,
             queued_actions=len(self._pending),
+            smolvla_output_clipped=action_clipped,
+            smolvla_chunk_clipped=any(self._clipped_rows),
         )
         self._inflight = proposal
         return proposal
@@ -617,6 +645,7 @@ class SmolVLAAdapter:
         action.
         """
         self._pending.clear()
+        self._clipped_rows = ()
         self._inflight = None
         invalidate = getattr(self.policy, "invalidate_pending", None)
         if callable(invalidate):
@@ -638,6 +667,7 @@ class SmolVLAAdapter:
             tuple(self._pending), self._chunk_id, self._chunk_horizon,
             model_snapshot, self._inflight, inference_snapshot,
             preprocessor_snapshot, postprocessor_snapshot, _capture_rng_state(), native_policy_snapshot,
+            tuple(self._clipped_rows),
         )
 
     def restore(self, snapshot: SmolVLASnapshot) -> None:
@@ -646,6 +676,7 @@ class SmolVLAAdapter:
         self._pending = deque(snapshot.pending_actions)
         self._chunk_id = int(snapshot.next_chunk_id)
         self._chunk_horizon = int(snapshot.chunk_horizon or len(self._pending))
+        self._clipped_rows = tuple(snapshot.clipped_rows)
         self._inflight = snapshot.inflight
         _restore_state(self.policy, snapshot.model_state, name="SmolVLA policy") if self.policy is not None else None
         _restore_native_policy_state(self.policy, snapshot.native_policy_state)

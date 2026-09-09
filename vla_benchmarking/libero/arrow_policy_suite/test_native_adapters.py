@@ -73,6 +73,45 @@ def test_smolvla_adapter_consumes_chunk_before_inference_again():
     assert calls == [0]
 
 
+def test_smolvla_adapter_clips_finite_out_of_range_actions_and_records_diagnostic():
+    adapter = SmolVLAAdapter(
+        inference=lambda _observation, _step: [[1.25, -2.0, 0.5, 0.0, 1.0, -1.0, 0.25]]
+    )
+    proposal = adapter.propose(_frame())
+
+    assert proposal.action == (1.0, -1.0, 0.5, 0.0, 1.0, -1.0, 0.25)
+    assert proposal.metadata["smolvla_output_clipped"] is True
+    assert proposal.metadata["smolvla_chunk_clipped"] is True
+
+
+def test_smolvla_adapter_preserves_valid_actions_without_clipping_diagnostic():
+    action = (0.1, -0.2, 0.3, 0.4, -0.5, 0.6, -0.7)
+    adapter = SmolVLAAdapter(inference=lambda _observation, _step: action)
+    proposal = adapter.propose(_frame())
+
+    assert proposal.action == action
+    assert proposal.metadata["smolvla_output_clipped"] is False
+    assert proposal.metadata["smolvla_chunk_clipped"] is False
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_smolvla_adapter_rejects_nonfinite_actions(bad_value):
+    adapter = SmolVLAAdapter(
+        inference=lambda _observation, _step: [bad_value, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+
+    with pytest.raises(ContractError, match="finite"):
+        adapter.propose(_frame())
+
+
+@pytest.mark.parametrize("bad_action", [[0.0] * 6, [0.0] * 8, [[0.0] * 6]])
+def test_smolvla_adapter_rejects_wrong_action_dimensions(bad_action):
+    adapter = SmolVLAAdapter(inference=lambda _observation, _step: bad_action)
+
+    with pytest.raises(ContractError, match="dimension seven"):
+        adapter.propose(_frame())
+
+
 def test_smolvla_local_loader_surfaces_bounded_sanitized_cause(monkeypatch):
     import vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory as runtime
 
