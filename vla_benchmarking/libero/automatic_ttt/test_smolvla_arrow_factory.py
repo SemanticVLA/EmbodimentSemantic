@@ -45,6 +45,41 @@ class _RawEnvironment:
         self.close_count += 1
 
 
+@pytest.mark.parametrize("value, expected", [(False, False), (True, True), (np.bool_(False), False), (np.bool_(True), True)])
+def test_direct_environment_normalizes_boolean_success_scalars(value, expected) -> None:
+    raw = SimpleNamespace(check_success=lambda: value)
+    environment = runtime._DirectLiberoEnvironment(
+        raw,
+        episode=EpisodeSpec("episode", 9, 3000, "task", "smolvla"),
+    )
+
+    result = environment.check_success()
+
+    assert result is expected
+    assert type(result) is bool
+
+
+def test_direct_environment_rejects_integer_success_scalar() -> None:
+    raw = SimpleNamespace(check_success=lambda: 0)
+    environment = runtime._DirectLiberoEnvironment(
+        raw,
+        episode=EpisodeSpec("episode", 9, 3000, "task", "smolvla"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"unsupported value.*builtins\.int"):
+        environment.check_success()
+
+
+def test_arrow_session_normalizes_numpy_boolean_mapping(tmp_path) -> None:
+    session = runtime._ArrowSession(molmo=object(), resolution=8, output_root=tmp_path)
+    environment = SimpleNamespace(check_success=lambda: {"task_success": np.bool_(True)})
+
+    result = session.evaluate(environment)
+
+    assert result is True
+    assert type(result) is bool
+
+
 def test_factory_preserves_live_identity_and_blocks_takeover_reset(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     raw = _RawEnvironment()
     identities: dict[str, object] = {}
