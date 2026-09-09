@@ -172,10 +172,18 @@ export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 if [[ -n "${ARROW_SUITE_HF_CACHE:-}" ]]; then
   HF_CACHE="$(realpath -e -- "$ARROW_SUITE_HF_CACHE")" || die 'HF cache cannot be resolved'
   [[ "$HF_CACHE" != / && ! -L "$HF_CACHE" ]] || die 'HF cache must resolve to a non-root non-symlink directory'
-  HF_MODEL_ROOT="$HF_CACHE/transformers/models--allenai--MolmoPoint-8B"
-  [[ -d "$HF_MODEL_ROOT/snapshots" ]] || die "pinned MolmoPoint cache is missing snapshots: $HF_MODEL_ROOT"
-  find "$HF_MODEL_ROOT/snapshots" -mindepth 1 -maxdepth 1 -type d -print -quit | grep -q . || \
-    die "pinned MolmoPoint cache has no snapshot: $HF_MODEL_ROOT/snapshots"
+  MOLMO_REVISION='188130f961c8e0888a34e11121a1423c461a01ba'
+  SMOLVLM_REVISION='7b375e1b73b11138ff12fe22c8f2822d8fe03467'
+  MOLMO_SNAPSHOT=''
+  SMOLVLM_SNAPSHOT=''
+  for cache_layout in hub transformers; do
+    candidate="$HF_CACHE/$cache_layout/models--allenai--MolmoPoint-8B/snapshots/$MOLMO_REVISION"
+    [[ -d "$candidate" ]] && MOLMO_SNAPSHOT="$candidate"
+    candidate="$HF_CACHE/$cache_layout/models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots/$SMOLVLM_REVISION"
+    [[ -d "$candidate" ]] && SMOLVLM_SNAPSHOT="$candidate"
+  done
+  [[ -n "$MOLMO_SNAPSHOT" ]] || die "pinned MolmoPoint snapshot is missing revision $MOLMO_REVISION under hub/ or transformers/"
+  [[ -n "$SMOLVLM_SNAPSHOT" ]] || die "pinned SmolVLM snapshot is missing revision $SMOLVLM_REVISION under hub/ or transformers/"
   export HF_HOME="$HF_CACHE"
   export HF_HUB_CACHE="$HF_CACHE/hub"
   export TRANSFORMERS_CACHE="$HF_CACHE/transformers"

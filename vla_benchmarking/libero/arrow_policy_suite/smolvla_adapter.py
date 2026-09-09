@@ -11,9 +11,40 @@ from collections import deque
 import copy
 from dataclasses import dataclass
 import random
+import re
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .contracts import ActionProposal, ObservationFrame, StepRecord, ContractError
+
+
+_NATIVE_LOAD_ERROR_MAX = 256
+_SENSITIVE_ERROR_VALUE = re.compile(
+    r"(?i)\b(api[_-]?key|token|password|passwd|secret|authorization|cookie)\b"
+    r"(\s*[:=]\s*)[^\s,;]+"
+)
+_BEARER_ERROR_VALUE = re.compile(r"(?i)\b(bearer\s+)[^\s,;]+")
+
+
+def _native_load_exception_detail(exc: BaseException) -> str:
+    """Return bounded, single-line diagnostics for native loader failures.
+
+    Native model loading crosses several optional dependency boundaries.  The
+    public ``ContractError`` must retain the original exception as its cause,
+    while exposing enough detail for a Legion log to identify the failing
+    dependency/version.  Keep this detail intentionally bounded and redact
+    common credential-shaped values; callers should never need a traceback or
+    an unbounded model/config dump to diagnose a load failure.
+    """
+    message = str(exc).strip()
+    message = "".join(char if char.isprintable() and char not in "\r\n\t" else " " for char in message)
+    message = re.sub(r"\s+", " ", message)
+    message = _BEARER_ERROR_VALUE.sub(r"\1<redacted>", message)
+    message = _SENSITIVE_ERROR_VALUE.sub(r"\1\2<redacted>", message)
+    if not message:
+        message = "<no message>"
+    if len(message) > _NATIVE_LOAD_ERROR_MAX:
+        message = message[: _NATIVE_LOAD_ERROR_MAX - 1].rstrip() + "…"
+    return f"{type(exc).__name__}: {message}"
 
 
 def _proposal(action: Sequence[float], frame: ObservationFrame, producer: str, **metadata: Any) -> ActionProposal:
@@ -468,7 +499,9 @@ class SmolVLAAdapter:
             )
         except Exception as exc:  # pragma: no cover - native runtime boundary
             raise ContractError(
-                "pinned local SmolVLA could not be loaded; inject inference for a dependency-light run"
+                "pinned local SmolVLA could not be loaded: "
+                f"{_native_load_exception_detail(exc)}; "
+                "inject inference for a dependency-light run"
             ) from exc
         return cls(
             policy,

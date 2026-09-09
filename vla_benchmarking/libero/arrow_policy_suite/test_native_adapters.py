@@ -13,7 +13,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arrow_policy_suite.arrow_adapter import ArrowAdapter
-from arrow_policy_suite.contracts import ActionProposal, ObservationFrame
+from arrow_policy_suite.contracts import ActionProposal, ContractError, ObservationFrame
 from arrow_policy_suite.libero_adapter import LiberoEnvironmentAdapter, canonicalize_observation
 from arrow_policy_suite.smolvla_adapter import SmolVLAAdapter
 
@@ -71,6 +71,32 @@ def test_smolvla_adapter_consumes_chunk_before_inference_again():
     assert first.action == (0.1,) * 7
     assert second.action == (0.2,) * 7
     assert calls == [0]
+
+
+def test_smolvla_local_loader_surfaces_bounded_sanitized_cause(monkeypatch):
+    import vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory as runtime
+
+    class LoaderFailure(RuntimeError):
+        pass
+
+    def fail_loader(_checkpoint, *, device):
+        assert device == "cuda"
+        raise LoaderFailure(
+            "Transformers rejected checkpoint\n"
+            "token=super-secret-value "
+            + ("details " * 100)
+        )
+
+    monkeypatch.setattr(runtime, "_load_local_smolvla_policy", fail_loader)
+    with pytest.raises(ContractError) as exc_info:
+        SmolVLAAdapter.from_local_checkpoint("/sealed/checkpoint")
+
+    message = str(exc_info.value)
+    assert "LoaderFailure: Transformers rejected checkpoint token=<redacted>" in message
+    assert "super-secret-value" not in message
+    assert "Traceback" not in message
+    assert len(message) < 500
+    assert isinstance(exc_info.value.__cause__, LoaderFailure)
 
 
 def test_smolvla_snapshot_state_preserves_inflight_and_queue():

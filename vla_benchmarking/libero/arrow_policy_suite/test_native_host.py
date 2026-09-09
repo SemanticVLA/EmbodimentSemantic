@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from arrow_policy_suite.contracts import ActionProposal, ObservationFrame, digest
 from arrow_policy_suite.interruptible_arrow import ArrowPerceptionUnavailable, InterruptibleArrow
 from arrow_policy_suite.libero_adapter import LiberoEnvironmentAdapter
-from arrow_policy_suite.native_host import NativeHost, _equal, _proposal_equal
+from arrow_policy_suite.native_host import NativeHost, _equal, _proposal_equal, _proposal_mismatch
 from arrow_policy_suite.libero_state import OffScreenRenderSnapshot
 from arrow_policy_suite.native_arrow_teacher import PerFrameArrowTeacher
 from arrow_policy_suite.policies import OnCallPolicy
@@ -201,8 +201,44 @@ def test_proposal_equality_ignores_only_rng_but_full_equality_does_not():
     # Proposal purity ignores the explicitly rollback-only RNG field, while
     # the complete comparator still treats it as a snapshot difference.
     assert _proposal_equal(left, rng_changed)
+    assert _proposal_mismatch(left, rng_changed) is None
     assert not _equal(left, rng_changed)
     assert not _proposal_equal(left, sim_changed)
+
+
+def test_proposal_mismatch_reports_exact_sim_and_wrapper_paths_without_values():
+    left = OffScreenRenderSnapshot(
+        "get_state", {"qpos": np.array([1.0, 2.0])}, {"steps": 1}, {}, {}, {}, "digest"
+    )
+    sim_changed = OffScreenRenderSnapshot(
+        "get_state", {"qpos": np.array([1.0, 3.0])}, {"steps": 1}, {}, {}, {}, "digest"
+    )
+    wrapper_changed = OffScreenRenderSnapshot(
+        "get_state", {"qpos": np.array([1.0, 2.0])}, {"steps": 2}, {}, {}, {}, "digest"
+    )
+
+    sim_mismatch = _proposal_mismatch(left, sim_changed, path="environment")
+    wrapper_mismatch = _proposal_mismatch(left, wrapper_changed, path="environment")
+    assert sim_mismatch is not None
+    assert sim_mismatch[0] == "environment.sim_state.qpos"
+    assert sim_mismatch[1:] == ("numpy.ndarray", "numpy.ndarray")
+    assert wrapper_mismatch is not None
+    assert wrapper_mismatch[0] == "environment.wrapper_fields.steps"
+    assert wrapper_mismatch[1:] == ("int", "int")
+
+
+def test_proposal_mismatch_honors_purity_excluded_dataclass_field():
+    from dataclasses import dataclass, field
+
+    @dataclass(frozen=True)
+    class Snapshot:
+        mutable: tuple[int, ...]
+        rng: tuple[int, ...] = field(metadata={"proposal_purity": False})
+
+    left = Snapshot((1,), (2,))
+    right = Snapshot((1,), (3,))
+    assert _proposal_equal(left, right)
+    assert _proposal_mismatch(left, right) is None
 
 
 def test_native_host_accepts_rng_only_environment_snapshot_change_during_proposal():
@@ -299,7 +335,7 @@ def test_native_host_rejects_producer_that_mutates_environment_before_step():
         def restore_state(self, _state):
             return None
 
-    with pytest.raises(Exception, match="advanced environment state"):
+    with pytest.raises(Exception, match=r"advanced environment state at environment\[0\]"):
         NativeHost(env, MutatingVLA()).step()
     assert env.value == 0.0
     assert env.steps == 0

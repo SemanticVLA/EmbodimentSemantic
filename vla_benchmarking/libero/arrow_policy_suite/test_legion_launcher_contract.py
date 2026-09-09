@@ -107,8 +107,11 @@ def test_batch_validates_explicit_runtime_and_pinned_offline_molmo_cache():
     assert 'explicit Arrow teacher runtime must retain its virtual-environment context' in SBATCH
     assert "ARROW_SUITE_HF_CACHE must be a safe absolute Linux path" in SBATCH
     assert "teacher-dependent policies require explicit ARROW_SUITE_PYTHON and ARROW_SUITE_HF_CACHE" in SBATCH
-    assert "models--allenai--MolmoPoint-8B" in SBATCH
-    assert '"$HF_MODEL_ROOT/snapshots"' in SBATCH
+    assert "models--allenai--MolmoPoint-8B/snapshots/$MOLMO_REVISION" in SBATCH
+    assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots/$SMOLVLM_REVISION" in SBATCH
+    assert "for cache_layout in hub transformers" in SBATCH
+    assert "MOLMO_REVISION='188130f961c8e0888a34e11121a1423c461a01ba'" in SBATCH
+    assert "SMOLVLM_REVISION='7b375e1b73b11138ff12fe22c8f2822d8fe03467'" in SBATCH
     assert 'export HF_HUB_CACHE="$HF_CACHE/hub"' in SBATCH
     assert 'export TRANSFORMERS_CACHE="$HF_CACHE/transformers"' in SBATCH
     assert 'export HF_MODULES_CACHE="$HF_CACHE/modules"' in SBATCH

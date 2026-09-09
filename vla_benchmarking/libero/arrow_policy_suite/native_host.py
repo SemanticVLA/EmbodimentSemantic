@@ -171,6 +171,87 @@ def _proposal_equal(left: Any, right: Any) -> bool:
     return _equal(left, right)
 
 
+def _type_name(value: Any) -> str:
+    """Return a compact, value-free type name for diagnostics."""
+    value_type = type(value)
+    module = value_type.__module__
+    qualified_name = value_type.__qualname__
+    return qualified_name if module == "builtins" else f"{module}.{qualified_name}"
+
+
+def _mapping_path(path: str, key: Any) -> str:
+    """Extend a mismatch path without serializing arbitrary mapping values."""
+    if isinstance(key, str):
+        return f"{path}.{key}"
+    return f"{path}[<{_type_name(key)}-key>]"
+
+
+def _mapping_sort_key(key: Any) -> tuple[str, str]:
+    """Provide a deterministic order without exposing key values in errors."""
+    return (_type_name(key), repr(key) if isinstance(key, (str, int, float, bool, type(None))) else "")
+
+
+def _proposal_mismatch(
+    left: Any,
+    right: Any,
+    *,
+    path: str = "$",
+) -> tuple[str, str, str] | None:
+    """Return the first structural proposal-purity mismatch.
+
+    The traversal intentionally mirrors :func:`_proposal_equal`: RNG-only
+    dataclass fields marked ``proposal_purity=False`` are skipped, mappings
+    and sequences are walked recursively, and array/tensor leaves are checked
+    by ``_equal``.  The returned tuple contains only a path and type names;
+    snapshot values are never interpolated into the diagnostic.
+    """
+    if left is right:
+        return None
+    if left is None or right is None or type(left) is not type(right):
+        return path, _type_name(left), _type_name(right)
+    if is_dataclass(left) and is_dataclass(right):
+        for item in fields(left):
+            if item.metadata.get("proposal_purity", True) is False:
+                continue
+            mismatch = _proposal_mismatch(
+                getattr(left, item.name),
+                getattr(right, item.name),
+                path=f"{path}.{item.name}",
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    if isinstance(left, Mapping):
+        left_keys = set(left)
+        right_keys = set(right)
+        if left_keys != right_keys:
+            for key in sorted(left_keys ^ right_keys, key=_mapping_sort_key):
+                key_path = _mapping_path(path, key)
+                if key in left:
+                    return key_path, _type_name(left[key]), "<missing>"
+                return key_path, "<missing>", _type_name(right[key])
+        for key in sorted(left_keys, key=_mapping_sort_key):
+            mismatch = _proposal_mismatch(
+                left[key], right[key], path=_mapping_path(path, key)
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    if isinstance(left, (list, tuple)):
+        if len(left) != len(right):
+            return f"{path}.length", _type_name(left), _type_name(right)
+        for index, (left_item, right_item) in enumerate(zip(left, right)):
+            mismatch = _proposal_mismatch(
+                left_item, right_item, path=f"{path}[{index}]"
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    if isinstance(left, (set, frozenset)):
+        return None if left == right else (path, _type_name(left), _type_name(right))
+    return None if _equal(left, right) else (path, _type_name(left), _type_name(right))
+
+
 @dataclass(frozen=True)
 class TeacherStatus:
     available: bool
@@ -395,7 +476,21 @@ class NativeHost:
             after_proposals = _copy_state(self._env_hooks[0], "environment")
             proposal_unchanged = _proposal_equal(transaction.environment_state, after_proposals)
             if not proposal_unchanged:
-                raise ContractError("proposal producers advanced environment state")
+                mismatch = _proposal_mismatch(
+                    transaction.environment_state,
+                    after_proposals,
+                    path="environment",
+                )
+                if mismatch is None:
+                    # Keep the purity contract fail-closed if a future leaf
+                    # type makes the boolean comparator stricter than the
+                    # structural reporter.
+                    raise ContractError("proposal producers advanced environment state")
+                path, left_type, right_type = mismatch
+                raise ContractError(
+                    "proposal producers advanced environment state at "
+                    f"{path} ({left_type} != {right_type})"
+                )
             action, executed_by = self._select_action(frame, base, teacher)
             result = self.environment.step(action)
             self.timestep += 1
