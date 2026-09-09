@@ -35,6 +35,31 @@ _PRIVILEGED_KEY_FRAGMENTS = (
     "sim_state", "privileged", "ground_truth", "gt_pose", "object_pose", "object_world",
     "object_state", "teacher_action", "controller_action",
 )
+_OUTCOME_KEY_NAMES = frozenset({
+    "terminal", "terminated", "truncated", "done", "success", "task_success",
+    "is_success", "reward", "return", "score",
+})
+
+
+def _is_privileged_key(key_text: str) -> bool:
+    """Reject privileged channels and explicit evaluator outcome fields.
+
+    Geometry-controller diagnostics are not policy metadata and are removed
+    by the teacher bridge before this contract boundary. Keeping the generic
+    boundary strict avoids accidentally allowing adjacent fields such as
+    ``contact_mode`` or future contact diagnostics.
+    Outcome fields are rejected both by exact name and by explicit
+    ``terminal_*``/``success_*``/``reward_*`` naming.
+    """
+    normalized = str(key_text).lower()
+    if normalized in _OUTCOME_KEY_NAMES:
+        return True
+    if any(fragment in normalized for fragment in _PRIVILEGED_KEY_FRAGMENTS):
+        return True
+    return any(
+        normalized.startswith(f"{prefix}_") or normalized.endswith(f"_{prefix}")
+        for prefix in ("terminal", "success", "reward")
+    )
 
 
 def _safe(value: Any) -> Any:
@@ -61,7 +86,7 @@ def assert_student_observation(value: Mapping[str, Any], *, path: str = "observa
         raise ContractError(f"{path} must be a mapping")
     for key, item in value.items():
         key_text = str(key).lower()
-        if any(fragment in key_text for fragment in _PRIVILEGED_KEY_FRAGMENTS):
+        if _is_privileged_key(key_text):
             raise ContractError(f"privileged field {path}.{key} is not allowed")
         if isinstance(item, Mapping):
             assert_student_observation(item, path=f"{path}.{key}")

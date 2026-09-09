@@ -191,12 +191,16 @@ class PerFrameArrowTeacher:
         def signal(*keys: str) -> bool:
             return any(bool(plan.get(key, plan_metadata.get(key, candidate_metadata.get(key, False)))) for key in keys)
 
+        # The controller's plan provenance contains a full geometry audit
+        # (including contact-mode/tuning fields) for offline diagnostics. It
+        # is not consumed by policy-side handback logic and must not cross the
+        # policy metadata boundary, where contact/simulator/outcome fields
+        # are intentionally rejected. Keep only the compact signals below.
         metadata: dict[str, Any] = {
             "phase": phase,
             "phase_index": self._phase_index,
             "phase_steps": self._phase_steps,
             "candidate_id": self._last_candidate_id,
-            "plan_provenance": plan.get("provenance", {}),
             "phase_error": phase_error,
             "phase_error_source": "eef_to_waypoint_m" if phase_error is not None else "unavailable",
             "milestone": bool(self._last_milestone),

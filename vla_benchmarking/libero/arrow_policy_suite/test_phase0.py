@@ -80,6 +80,15 @@ def test_metadata_and_provenance_privileged_fields_fail_closed():
         ObservationFrame({"state": [0.0] * 8}, provenance={"simulator_state_digest": "x"})
 
 
+def test_contact_simulator_and_outcome_metadata_remain_privileged():
+    for outcome_key in (
+        "terminal_contact_allowance_m", "contact_mode", "terminal", "success", "reward",
+        "terminal_success", "simulator_state",
+    ):
+        with pytest.raises(ContractError, match="privileged"):
+            ObservationFrame({"state": [0.0] * 8}, metadata={outcome_key: False})
+
+
 def test_student_validation_is_an_allowlist():
     with pytest.raises(ContractError, match="unknown/non-student"):
         validate_student_observation({"state": [0.0] * 8, "debug_sidecar": True})
