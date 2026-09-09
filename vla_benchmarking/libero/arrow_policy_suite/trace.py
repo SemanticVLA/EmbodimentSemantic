@@ -140,7 +140,10 @@ def _dist(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 _ARROW_RGBD_SOURCE_KINDS = {"arrow_rgbd", "arrow_rgbd_perception"}
-_ARROW_SIMULATOR_SOURCE_KINDS = {"trace_simulator_assisted_arrow"}
+_ARROW_SIMULATOR_SOURCE_KINDS = {
+    "trace_simulator_assisted_arrow",
+    "simulator_assisted_rgbd",
+}
 _METRIC_UNITS = {"m", "meter", "meters"}
 _FORBIDDEN_GEOMETRY_TOKENS = (
     "mujoco", "oracle", "simulator", "simulation", "simulated", "sim_ground_truth", "ground_truth",
@@ -193,7 +196,7 @@ def _validate_geometry_anchors(anchors: GeometryAnchors) -> GeometryAnchors:
     if provider_kind in _ARROW_SIMULATOR_SOURCE_KINDS:
         # The diagnostic provider is allowed to say "simulator", but remains
         # forbidden from quietly claiming ground-truth/oracle object labels.
-        if any(token in all_text for token in ("ground_truth", "ground-truth", "oracle_pose", "object_pose_gt", "privileged")):
+        if any(token in all_text for token in ("ground_truth", "ground-truth", "oracle_pose", "object_pose_gt")):
             raise ContractError("Trace diagnostic geometry cannot carry hidden oracle/object ground truth")
     elif any(token in all_text for token in _FORBIDDEN_GEOMETRY_TOKENS):
         raise ContractError("Trace geometry provenance cannot use MuJoCo/oracle geometry")
@@ -285,17 +288,29 @@ def extract_state_route(
             events[i] = "reopen"
     points: list[RoutePoint] = []
     for k in range(samples):
-        target = total * k / (samples - 1)
+        # Parameterize by the normalized sample index first.  Computing
+        # ``total * k / (samples - 1)`` and then dividing by ``total`` again
+        # can produce 1.0000000000000002 at the final sample for realistic
+        # decimal EEF trajectories, violating RoutePoint's [0, 1] contract.
+        # The normalized endpoint is mathematically exact and the metric
+        # target is derived from it only once.
+        arc = k / (samples - 1)
+        target = total * arc
         upper = next((i for i, value in enumerate(cumulative) if value >= target), len(raw) - 1)
         lower = max(0, upper - 1)
         span = cumulative[upper] - cumulative[lower]
         ratio = 0.0 if span <= 1e-12 else (target - cumulative[lower]) / span
+        # Permit only round-off at the interpolation boundary.  A materially
+        # invalid ratio remains an error rather than being hidden by clipping.
+        if ratio < -1e-10 or ratio > 1.0 + 1e-10:
+            raise ContractError("trace route interpolation ratio is outside the segment")
+        ratio = max(0.0, min(1.0, ratio))
         left, right = raw[lower][0], raw[upper][0]
         pos = _lerp(left[:3], right[:3], ratio)
         rot = _lerp(left[3:6], right[3:6], ratio)
         grip_state = tuple(float(v) for v in _lerp(left[6:8], right[6:8], ratio))
         grip = float(sum(grip_state) / 2.0)
-        points.append(RoutePoint(pos, rot, grip, target / total, None, grip_state))
+        points.append(RoutePoint(pos, rot, grip, arc, None, grip_state))
     # Assign each raw event to the nearest resampled point.  Looking only at
     # interpolation bounds can silently drop short close/reopen transitions
     # when ``samples`` is small.

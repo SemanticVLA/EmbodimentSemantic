@@ -10,7 +10,8 @@
 # Optional:
 #   ARROW_SUITE_OPERATION (canary), ARROW_SUITE_STEPS, ARROW_SUITE_OUTPUT,
 #   ARROW_SUITE_CHECKPOINT, ARROW_SUITE_CONTROLLER, ARROW_SUITE_PYTHON,
-#   ARROW_SUITE_GRAPH_CONTEXT_REVISION, ARROW_SUITE_TRACE_GEOMETRY_VARIANT.
+#   ARROW_SUITE_GRAPH_CONTEXT_REVISION, ARROW_SUITE_TRACE_GEOMETRY_VARIANT,
+#   ARROW_SUITE_GRAPH_FACTORY, and policy-specific Fast/Trace artifact inputs.
 # Engineering-only environment smoke (no config/factory required):
 #   ARROW_SUITE_ENGINEERING_SMOKE=1
 
@@ -45,6 +46,7 @@ REPO_ROOT="$(realpath -e -- "$ARROW_SUITE_REPO_ROOT")" || die 'repository cannot
 actual_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)" || die 'cannot resolve repository SHA'
 [[ "$actual_commit" == "$ARROW_SUITE_EXPECTED_COMMIT" ]] || die "repository SHA mismatch: $actual_commit"
 [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] || die 'repository checkout is dirty'
+cd -- "$REPO_ROOT" || die 'cannot enter repository checkout'
 
 ENGINEERING_SMOKE="${ARROW_SUITE_ENGINEERING_SMOKE:-0}"
 operation="${ARROW_SUITE_OPERATION:-canary}"
@@ -52,6 +54,54 @@ if [[ "$ENGINEERING_SMOKE" != 1 ]]; then
   for name in ARROW_SUITE_CONFIG ARROW_SUITE_FACTORY ARROW_SUITE_POLICY; do
     [[ -n "${!name:-}" ]] || die "$name is required outside engineering smoke"
   done
+  case "$ARROW_SUITE_POLICY" in
+    arrow_fast|arrow_trace)
+      for name in ARROW_SUITE_GRAPH_FACTORY ARROW_SUITE_GRAPH_CONTEXT_REVISION \
+        ARROW_SUITE_TEXT_GRAPH_TRIPLET ARROW_SUITE_VISUAL_ARROW; do
+        [[ -n "${!name:-}" ]] || die "$name is required for $ARROW_SUITE_POLICY"
+      done
+      for name in ARROW_SUITE_TEXT_GRAPH_TRIPLET ARROW_SUITE_VISUAL_ARROW; do
+        value="${!name}"
+        [[ "$value" == @/* ]] || die "$name must be supplied as @/absolute/artifact.json"
+        artifact_path="${value#@}"
+        [[ "$artifact_path" != *'/../'* && "$artifact_path" != */.. && -f "$artifact_path" ]] || \
+          die "$name artifact is unsafe or missing"
+      done
+      ;;
+  esac
+  case "$ARROW_SUITE_POLICY" in
+    arrow_fast)
+      for name in ARROW_SUITE_GRAPH_FACTORY ARROW_SUITE_FAST_ARTIFACT_KIND \
+        ARROW_SUITE_FAST_ENCODER_REVISION ARROW_SUITE_FAST_ENCODER_SHA256 \
+        ARROW_SUITE_FAST_ROUTER_REVISION ARROW_SUITE_FAST_ROUTER_SHA256 \
+        ARROW_SUITE_FAST_SOURCE_MANIFEST_SHA256 ARROW_SUITE_FAST_VLA_MANIFEST_SHA256 \
+        ARROW_SUITE_GRAPH_CONTEXT_REVISION; do
+        [[ -n "${!name:-}" ]] || die "$name is required for arrow_fast"
+      done
+      [[ "$ARROW_SUITE_GRAPH_FACTORY" =~ ^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$ ]] || die 'ARROW_SUITE_GRAPH_FACTORY is invalid'
+      [[ "$ARROW_SUITE_FAST_ARTIFACT_KIND" =~ ^[A-Za-z0-9_.:-]+$ ]] || die 'ARROW_SUITE_FAST_ARTIFACT_KIND is invalid'
+      [[ "$ARROW_SUITE_FAST_ENCODER_REVISION" =~ ^[A-Za-z0-9_.:/-]+$ ]] || die 'ARROW_SUITE_FAST_ENCODER_REVISION is invalid'
+      [[ "$ARROW_SUITE_FAST_ROUTER_REVISION" =~ ^[A-Za-z0-9_.:/-]+$ ]] || die 'ARROW_SUITE_FAST_ROUTER_REVISION is invalid'
+      for name in ARROW_SUITE_FAST_ENCODER_SHA256 ARROW_SUITE_FAST_ROUTER_SHA256 \
+        ARROW_SUITE_FAST_SOURCE_MANIFEST_SHA256 ARROW_SUITE_FAST_VLA_MANIFEST_SHA256; do
+        [[ "${!name}" =~ ^[0-9a-f]{64}$ ]] || die "$name must be a full lowercase SHA-256"
+      done
+      [[ "$ARROW_SUITE_GRAPH_CONTEXT_REVISION" =~ ^[A-Za-z0-9_.:/-]+$ ]] || die 'ARROW_SUITE_GRAPH_CONTEXT_REVISION is invalid'
+      ;;
+    arrow_trace)
+      for name in ARROW_SUITE_GRAPH_FACTORY ARROW_SUITE_TRACE_ROUTE_ARTIFACT \
+        ARROW_SUITE_TRACE_CALIBRATION_ARTIFACT ARROW_SUITE_TRACE_GEOMETRY_VARIANT \
+        ARROW_SUITE_GRAPH_CONTEXT_REVISION; do
+        [[ -n "${!name:-}" ]] || die "$name is required for arrow_trace"
+      done
+      [[ "$ARROW_SUITE_GRAPH_FACTORY" =~ ^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$ ]] || die 'ARROW_SUITE_GRAPH_FACTORY is invalid'
+      for name in ARROW_SUITE_TRACE_ROUTE_ARTIFACT ARROW_SUITE_TRACE_CALIBRATION_ARTIFACT; do
+        value="${!name}"
+        [[ "$value" =~ ^/[A-Za-z0-9_./-]+$ && "$value" != *'/../'* && "$value" != */.. ]] || die "$name must be a safe absolute Linux path"
+      done
+      [[ "$ARROW_SUITE_GRAPH_CONTEXT_REVISION" =~ ^[A-Za-z0-9_.:/-]+$ ]] || die 'ARROW_SUITE_GRAPH_CONTEXT_REVISION is invalid'
+      ;;
+  esac
   CONFIG="$(realpath -e -- "$ARROW_SUITE_CONFIG")" || die 'sealed config cannot be resolved'
   [[ -f "$CONFIG" ]] || die 'sealed config is not a file'
 else

@@ -31,6 +31,7 @@ def test_submit_builds_remote_command_from_joined_lines():
     assert "$remote = @'" not in SUBMIT
     assert "' + $repoExport + @'" not in SUBMIT
     assert '"export ARROW_SUITE_EXPECTED_COMMIT=\'$ExpectedCommit\'"' in SUBMIT
+    assert "sbatch --parsable --partition='$Partition' --export=ALL" in SUBMIT
 
 
 def test_sbatch_resolves_array_log_name_and_has_engineering_smoke_marker():
@@ -44,3 +45,46 @@ def test_sbatch_uses_canonical_controller_hash_not_raw_file_hash():
     assert "from vla_benchmarking.libero.arrow_grasp_controller.configs import load_controller_config" in SBATCH
     assert 'print(load_controller_config(sys.argv[1])["config_hash"])' in SBATCH
     assert 'sha256sum -- "$ARROW_SUITE_CONTROLLER"' not in SBATCH
+
+
+def test_submit_forwards_and_validates_fast_and_trace_contract_inputs():
+    for name in (
+        "GraphFactory",
+        "GraphTripletArtifact",
+        "VisualArrowArtifact",
+        "FastArtifactKind",
+        "FastEncoderRevision",
+        "FastEncoderSha256",
+        "FastRouterRevision",
+        "FastRouterSha256",
+        "FastSourceManifestSha256",
+        "FastVlaManifestSha256",
+        "TraceRouteArtifact",
+        "TraceCalibrationArtifact",
+    ):
+        assert f"${name}" in SUBMIT
+    for env_name in (
+        "ARROW_SUITE_GRAPH_FACTORY",
+        "ARROW_SUITE_TEXT_GRAPH_TRIPLET",
+        "ARROW_SUITE_VISUAL_ARROW",
+        "ARROW_SUITE_FAST_ARTIFACT_KIND",
+        "ARROW_SUITE_FAST_ENCODER_REVISION",
+        "ARROW_SUITE_FAST_ENCODER_SHA256",
+        "ARROW_SUITE_FAST_ROUTER_REVISION",
+        "ARROW_SUITE_FAST_ROUTER_SHA256",
+        "ARROW_SUITE_FAST_SOURCE_MANIFEST_SHA256",
+        "ARROW_SUITE_FAST_VLA_MANIFEST_SHA256",
+        "ARROW_SUITE_TRACE_ROUTE_ARTIFACT",
+        "ARROW_SUITE_TRACE_CALIBRATION_ARTIFACT",
+    ):
+        assert env_name in SUBMIT
+        assert env_name in SBATCH
+    assert "GraphFactory is required for Fast and Trace policies." in SUBMIT
+    assert "FastArtifactKind must be" not in SUBMIT  # kind is validated as a token, runtime owns support
+    assert "required for arrow_fast" in SUBMIT
+    assert "required for arrow_trace" in SUBMIT
+
+
+def test_batch_anchors_python_execution_in_verified_repository():
+    assert 'cd -- "$REPO_ROOT" || die' in SBATCH
+    assert 'export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"' in SBATCH

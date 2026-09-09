@@ -41,6 +41,7 @@ class PerFrameArrowTeacher:
         phase_tolerance_m: float = 0.015,
         osc_position_scale_m: float | None = None,
         eef_orientation_transform: Any | None = None,
+        cleanup_attempt: Callable[[], None] | None = None,
     ) -> None:
         if not callable(perception):
             raise TypeError("PerFrameArrowTeacher requires a perception callable")
@@ -52,6 +53,10 @@ class PerFrameArrowTeacher:
         self.phase_tolerance_m = float(phase_tolerance_m)
         self.osc_position_scale_m = osc_position_scale_m
         self.eef_orientation_transform = eef_orientation_transform
+        if cleanup_attempt is not None and not callable(cleanup_attempt):
+            raise TypeError("cleanup_attempt must be callable when provided")
+        self._cleanup_attempt = cleanup_attempt
+        self._closed = False
         self._plan: Mapping[str, Any] | None = None
         self._phase_index = 0
         self._phase_steps = 0
@@ -61,6 +66,8 @@ class PerFrameArrowTeacher:
         self._last_milestone_phase: str | None = None
 
     def reset(self) -> None:
+        if self._closed:
+            raise ContractError("Arrow teacher is closed")
         self._plan = None
         self._phase_index = 0
         self._phase_steps = 0
@@ -68,6 +75,31 @@ class PerFrameArrowTeacher:
         self._last_candidate_id = None
         self._last_milestone = False
         self._last_milestone_phase = None
+
+    def close(self) -> None:
+        """Release Arrow runtime references exactly once.
+
+        Fast support owns this lifecycle boundary: after the one-shot support
+        observation, the scored host must not retain Molmo, worker, or live
+        environment references.  Marking the teacher closed before invoking
+        the callback makes repeated ``close``/``destroy`` calls harmless even
+        when cleanup itself raises.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        cleanup = self._cleanup_attempt
+        self._cleanup_attempt = None
+        self._pending = None
+        self._plan = None
+        self.perception = None  # type: ignore[assignment]
+        self.eef_orientation_transform = None
+        if cleanup is not None:
+            cleanup()
+
+    def destroy(self) -> None:
+        """Alias for runtimes whose disposable-component hook is ``destroy``."""
+        self.close()
 
     @staticmethod
     def _proprio(frame: ObservationFrame) -> Mapping[str, Any]:
@@ -183,6 +215,8 @@ class PerFrameArrowTeacher:
         return metadata
 
     def propose(self, frame: ObservationFrame) -> ActionProposal | None:
+        if self._closed:
+            raise ContractError("Arrow teacher is closed")
         if self._pending is not None:
             if self._pending.timestep == frame.timestep:
                 return self._pending
@@ -210,6 +244,8 @@ class PerFrameArrowTeacher:
         return proposal
 
     def commit(self, record: StepRecord) -> None:
+        if self._closed:
+            raise ContractError("Arrow teacher is closed")
         if self._pending is None or record.teacher is None:
             raise ContractError("Arrow commit has no pending teacher proposal")
         if record.teacher.action != self._pending.action or record.base.timestep != self._pending.timestep:
@@ -252,15 +288,17 @@ class PerFrameArrowTeacher:
     def snapshot_state(self) -> Any:
         return (copy.deepcopy(self._plan), self._phase_index, self._phase_steps,
                 self._pending, self._last_candidate_id, self._last_milestone,
-                self._last_milestone_phase)
+                self._last_milestone_phase, self._closed)
 
     def restore_state(self, state: Any) -> None:
-        if not isinstance(state, tuple) or len(state) not in {5, 7}:
+        if not isinstance(state, tuple) or len(state) not in {5, 7, 8}:
             raise ContractError("invalid Arrow phase snapshot")
         copied = copy.deepcopy(state)
         self._plan, self._phase_index, self._phase_steps, self._pending, self._last_candidate_id = copied[:5]
-        self._last_milestone = bool(copied[5]) if len(copied) == 7 else False
-        self._last_milestone_phase = copied[6] if len(copied) == 7 else None
+        self._last_milestone = bool(copied[5]) if len(copied) in {7, 8} else False
+        self._last_milestone_phase = copied[6] if len(copied) in {7, 8} else None
+        if len(copied) == 8:
+            self._closed = bool(copied[7])
 
     snapshot = snapshot_state
     restore = restore_state

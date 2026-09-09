@@ -80,7 +80,9 @@ def _copy_state(hook: Any, name: str) -> Any:
     try:
         return copy.deepcopy(hook())
     except Exception as exc:
-        raise ContractError(f"{name} snapshot failed") from exc
+        raise ContractError(
+            f"{name} snapshot failed: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _restore_state(pair: Any, state: Any, name: str) -> None:
@@ -89,7 +91,9 @@ def _restore_state(pair: Any, state: Any, name: str) -> None:
     try:
         pair[1](state)
     except Exception as exc:
-        raise ContractError(f"{name} restore failed") from exc
+        raise ContractError(
+            f"{name} restore failed: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _equal(left: Any, right: Any) -> bool:

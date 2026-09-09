@@ -82,6 +82,58 @@ def _hooks(component: Any, name: str, *, required: bool = True) -> tuple[Any, An
     return None
 
 
+def _validate_fast_lifecycle(receipt: Any) -> dict[str, Any]:
+    """Validate the one-shot Fast support receipt before scored execution."""
+    if receipt is None:
+        raise ContractError("arrow_fast host lacks a verified Fast lifecycle receipt")
+    required = (
+        "support_attempts", "support_steps", "support_complete", "restored_t0",
+        "fast_slot_capacity", "scored_teacher_calls", "teacher_destroyed",
+        "non_fast_changed", "slow_manifest_sha256_before", "slow_manifest_sha256_after",
+        "vla_manifest_sha256_before", "vla_manifest_sha256_after",
+    )
+    missing = [name for name in required if not hasattr(receipt, name)]
+    if missing:
+        raise ContractError(f"arrow_fast lifecycle receipt is missing {missing}")
+    if int(receipt.support_attempts) != 1 or int(receipt.support_steps) != 1:
+        raise ContractError("arrow_fast requires exactly one complete support observation")
+    if receipt.support_complete is not True or receipt.restored_t0 is not True:
+        raise ContractError("arrow_fast Fast support was incomplete or did not restore t0")
+    if int(receipt.fast_slot_capacity) != 448:
+        raise ContractError("arrow_fast lifecycle receipt must report 448 fast slots")
+    if int(receipt.scored_teacher_calls) != 0:
+        raise ContractError("arrow_fast scored path made teacher calls")
+    if receipt.teacher_destroyed is not True:
+        raise ContractError("arrow_fast support teacher was not destroyed")
+    # Older teacher implementations expose only close(), so detached=False is
+    # valid when no explicit detach-support field exists.  If a newer receipt
+    # reports that detach is supported, require the stronger invariant.
+    if getattr(receipt, "teacher_detach_supported", False) and receipt.teacher_detached is not True:
+        raise ContractError("arrow_fast support teacher was not detached")
+    if int(receipt.non_fast_changed) != 0:
+        raise ContractError("arrow_fast changed non-fast parameters")
+    hash_values: dict[str, str] = {}
+    for label in ("slow_manifest_sha256", "vla_manifest_sha256"):
+        before = getattr(receipt, f"{label}_before")
+        after = getattr(receipt, f"{label}_after")
+        if not isinstance(before, str) or not before or before != after:
+            raise ContractError(f"arrow_fast {label} changed across support adaptation")
+        hash_values[label] = before
+    return {
+        "support_attempts": int(receipt.support_attempts),
+        "support_steps": int(receipt.support_steps),
+        "support_complete": True,
+        "restored_t0": True,
+        "fast_slot_capacity": int(receipt.fast_slot_capacity),
+        "scored_teacher_calls": int(receipt.scored_teacher_calls),
+        "teacher_destroyed": True,
+        "teacher_detached": bool(getattr(receipt, "teacher_detached", False)),
+        "non_fast_changed": int(receipt.non_fast_changed),
+        "slow_manifest_sha256": hash_values["slow_manifest_sha256"],
+        "vla_manifest_sha256": hash_values["vla_manifest_sha256"],
+    }
+
+
 def production_preflight(
     host: NativeHost,
     config: StudyConfig,
@@ -125,7 +177,7 @@ def production_preflight(
                 raise ContractError(f"interruptible Arrow teacher requires {hook_name}()")
     teacher_required = {
         "teacher_only", "arrow_together", "arrow_on_call", "arrow_minimal",
-        "arrow_minimal_runtime", "arrow_fast",
+        "arrow_minimal_runtime",
     }
     if policy_id in teacher_required and host.teacher is None:
         raise ContractError(f"{policy_id} requires a same-frame Arrow teacher")
@@ -147,6 +199,9 @@ def production_preflight(
         corrector = getattr(host.policy, "corrector", None)
         if learned_policy != "arrow_fast" or not callable(getattr(corrector, "correction", None)):
             raise ContractError("arrow_fast host lacks a loaded fast corrector artifact")
+        if host.teacher is not None:
+            raise ContractError("arrow_fast scored host must be teacher-free after support adaptation")
+        fast_lifecycle = _validate_fast_lifecycle(getattr(host, "fast_lifecycle_receipt", None))
     if graph_context_revision is not None:
         if str(graph_context_revision).strip().lower() in {"", "unresolved", "unknown", "latest"}:
             raise ContractError("graph_context_revision must be explicit")
@@ -157,7 +212,7 @@ def production_preflight(
             raise ContractError("Trace requires explicit RGB-D geometry variant")
         if trace_geometry_variant == "rgbd" and str(config.trace_geometry_provider_revision).lower().startswith("sim"):
             raise ContractError("vision-only Trace cannot use a simulator geometry revision")
-    return {
+    result = {
         "status": "READY",
         "policy_id": policy_id,
         "n_action_steps": 1,
@@ -165,6 +220,9 @@ def production_preflight(
         "graph_context_revision": graph_context_revision,
         "trace_geometry_variant": trace_geometry_variant,
     }
+    if policy_id == "arrow_fast":
+        result["fast_lifecycle"] = fast_lifecycle
+    return result
 
 
 @dataclass(frozen=True)

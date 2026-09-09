@@ -25,6 +25,7 @@ from .rgbd_geometry import (
     ArrowRGBDGeometryProvider,
     CaptureFn,
     EndpointFn,
+    SimulatorAssistedRGBDGeometryProvider,
     TraceSimulatorAssistedArrowGeometryProvider,
     _hash_payload,
 )
@@ -222,7 +223,17 @@ def build_trace_policy_components(
             expected_calibration_revision=calibration["revision"],
             expected_calibration_hash=calibration["calibration_hash"],
         )
-    else:
+    elif variant == "simulator_assisted_rgbd":
+        if not callable(capture_fn) or not callable(endpoint_fn):
+            raise ContractError(
+                "Trace simulator-assisted RGB-D construction requires capture_fn and endpoint_fn"
+            )
+        geometry_provider = SimulatorAssistedRGBDGeometryProvider(
+            capture_fn, endpoint_fn, expected_frame_name=calibration["frame_name"],
+            expected_calibration_revision=calibration["revision"],
+            expected_calibration_hash=calibration["calibration_hash"],
+        )
+    else:  # simulator_assisted_arrow: simulator anchors are intentionally separate.
         if not callable(simulator_anchors_fn):
             raise ContractError("simulator-assisted Trace construction requires simulator_anchors_fn")
         geometry_provider = TraceSimulatorAssistedArrowGeometryProvider(

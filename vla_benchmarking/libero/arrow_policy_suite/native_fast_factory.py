@@ -18,6 +18,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import copy
+import dataclasses
+import hashlib
+import json
+import math
 import os
 import re
 from typing import Any, Callable, Mapping
@@ -34,6 +38,7 @@ from .fast_training import (
     make_deterministic_router_artifact,
 )
 from .native_factory import NativeHostSpec, action_selector_for, build_native_host
+from .native_host import _capture_rng, _restore_rng
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -66,11 +71,37 @@ def _pair(component: Any, name: str) -> tuple[Callable[[], Any], Callable[[Any],
     raise ContractError(f"{name} requires paired snapshot/restore hooks")
 
 
-@dataclass(frozen=True)
-class _NativeSupportSnapshot:
-    environment: Any
-    vla: Any
-    teacher: Any
+def _stable_value(value: Any) -> Any:
+    """Normalize opaque adapter/RNG state for a deterministic t0 identity."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else repr(value)
+    if isinstance(value, Mapping):
+        return {str(key): _stable_value(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_stable_value(item) for item in value]
+    if dataclasses.is_dataclass(value):
+        return {
+            "__type__": f"{type(value).__module__}.{type(value).__qualname__}",
+            **{field.name: _stable_value(getattr(value, field.name)) for field in dataclasses.fields(value)},
+        }
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return _stable_value(tolist())
+    attrs = getattr(value, "__dict__", None)
+    if isinstance(attrs, Mapping):
+        return {
+            "__type__": f"{type(value).__module__}.{type(value).__qualname__}",
+            "__dict__": _stable_value(attrs),
+        }
+    return repr(value)
+
+
+def _state_identity(value: Any) -> str:
+    payload = json.dumps(_stable_value(value), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -148,19 +179,42 @@ def build_fast_native_components(
     _env_hooks = _pair(environment, "environment")
     _vla_hooks = _pair(vla, "VLA")
     _teacher_hooks = _pair(teacher, "teacher")
-    def snapshot() -> _NativeSupportSnapshot:
-        return _NativeSupportSnapshot(
+    state_store: dict[str, tuple[Any, Any, Any, Mapping[str, Any]]] = {}
+
+    def capture_token() -> dict[str, str]:
+        state = (
             copy.deepcopy(_env_hooks[0]()),
             copy.deepcopy(_vla_hooks[0]()),
             copy.deepcopy(_teacher_hooks[0]()),
+            _capture_rng(),
         )
+        token = _state_identity(state)
+        state_store[token] = state
+        return {"t0_snapshot_sha256": token}
 
-    def restore(value: _NativeSupportSnapshot) -> None:
-        if not isinstance(value, _NativeSupportSnapshot):
+    # Capture before observe(): the observation itself is part of the support
+    # attempt and an adapter is not allowed to consume RNG before this point.
+    pre_observe_token = capture_token()
+    first_snapshot = True
+
+    def snapshot() -> Mapping[str, str]:
+        nonlocal first_snapshot
+        if first_snapshot:
+            first_snapshot = False
+            return pre_observe_token
+        return capture_token()
+
+    def restore(value: Mapping[str, str]) -> None:
+        if not isinstance(value, Mapping) or value.get("t0_snapshot_sha256") not in state_store:
             raise ContractError("native Fast snapshot belongs to another runtime")
-        _env_hooks[1](copy.deepcopy(value.environment))
-        _vla_hooks[1](copy.deepcopy(value.vla))
-        _teacher_hooks[1](copy.deepcopy(value.teacher))
+        saved = state_store[value["t0_snapshot_sha256"]]
+        _env_hooks[1](copy.deepcopy(saved[0]))
+        _vla_hooks[1](copy.deepcopy(saved[1]))
+        _teacher_hooks[1](copy.deepcopy(saved[2]))
+        # Restore process RNG after component hooks: an adapter's restore hook
+        # is allowed to rebuild tensors or preprocessors and may consume RNG.
+        # This makes the exact support t0 replayable for scored inference.
+        _restore_rng(saved[3])
 
     raw = environment.observe()
     frame = ObservationFrame(raw, timestep=0, episode_id=episode_id)

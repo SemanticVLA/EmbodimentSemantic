@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,7 @@ from arrow_policy_suite.config import ProtocolSeal, StudyConfig
 from arrow_policy_suite.contracts import ActionProposal, ObservationFrame
 from arrow_policy_suite.native_executor import execute_native, production_preflight
 from arrow_policy_suite.native_factory import NativeHostSpec, action_selector_for, build_native_host, build_policy
+from arrow_policy_suite.fast import FastPolicy
 from arrow_policy_suite.splits import ResetIdentity, build_split_manifest
 
 
@@ -123,6 +125,61 @@ def test_native_executor_runs_explicit_factory_and_writes_create_only_manifest(t
 def test_production_preflight_requires_graph_context_for_fast(tmp_path):
     host = build_native_host(NativeHostSpec(_Env(), _VLA(), _Arrow(), policy_id="teacher_only"))
     with pytest.raises(Exception, match="graph-context"):
+        production_preflight(host, _config(), policy_id="arrow_fast")
+
+
+def test_fast_preflight_requires_teacher_free_host_and_support_receipt():
+    class Corrector:
+        def correction(self, _payload):
+            return (0.0,) * 7
+
+    host = build_native_host(NativeHostSpec(
+        _Env(), _VLA(), None, policy_id="arrow_fast",
+        policy=FastPolicy(Corrector()), graph_context_fn=lambda _frame: {"triplet": "a"},
+    ))
+    with pytest.raises(Exception, match="lifecycle receipt"):
+        production_preflight(host, _config(), policy_id="arrow_fast")
+    host.fast_lifecycle_receipt = type("Receipt", (), {
+        "support_attempts": 1, "support_steps": 1,
+        "support_complete": True, "restored_t0": True,
+        "fast_slot_capacity": 448, "scored_teacher_calls": 0, "teacher_detached": True,
+        "teacher_destroyed": True,
+        "non_fast_changed": 0,
+        "slow_manifest_sha256_before": "a" * 64,
+        "slow_manifest_sha256_after": "a" * 64,
+        "vla_manifest_sha256_before": "b" * 64,
+        "vla_manifest_sha256_after": "b" * 64,
+    })()
+    ready = production_preflight(host, _config(), policy_id="arrow_fast")
+    assert ready["fast_lifecycle"]["support_complete"] is True
+
+
+def test_fast_preflight_rejects_invalid_lifecycle_evidence():
+    class Corrector:
+        def correction(self, _payload):
+            return (0.0,) * 7
+
+    host = build_native_host(NativeHostSpec(
+        _Env(), _VLA(), None, policy_id="arrow_fast",
+        policy=FastPolicy(Corrector()), graph_context_fn=lambda _frame: {"triplet": "a"},
+    ))
+    values = dict(
+        support_attempts=1, support_steps=1, support_complete=True, restored_t0=True,
+        fast_slot_capacity=448, scored_teacher_calls=0, teacher_destroyed=True,
+        teacher_detached=False, non_fast_changed=0,
+        slow_manifest_sha256_before="a" * 64, slow_manifest_sha256_after="a" * 64,
+        vla_manifest_sha256_before="b" * 64, vla_manifest_sha256_after="b" * 64,
+    )
+    for field, value in (("support_steps", 2), ("fast_slot_capacity", 447), ("non_fast_changed", 1)):
+        invalid = dict(values)
+        invalid[field] = value
+        host.fast_lifecycle_receipt = SimpleNamespace(**invalid)
+        with pytest.raises(Exception):
+            production_preflight(host, _config(), policy_id="arrow_fast")
+    invalid = dict(values)
+    invalid["vla_manifest_sha256_after"] = "c" * 64
+    host.fast_lifecycle_receipt = SimpleNamespace(**invalid)
+    with pytest.raises(Exception, match="manifest"):
         production_preflight(host, _config(), policy_id="arrow_fast")
 
 

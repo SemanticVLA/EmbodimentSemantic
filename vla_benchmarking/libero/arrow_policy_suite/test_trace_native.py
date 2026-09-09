@@ -8,6 +8,7 @@ from arrow_policy_suite.rgbd_geometry import (
     ArrowPixelEndpoints,
     ArrowRGBDGeometryProvider,
     ArrowRGBDObservation,
+    SimulatorAssistedRGBDGeometryProvider,
     TraceSimulatorAssistedArrowGeometryProvider,
 )
 from arrow_policy_suite.trace import TracePolicy, extract_state_route, warp_route
@@ -87,6 +88,35 @@ def test_simulator_assisted_provider_is_explicit_diagnostic_and_warps():
     assert warped.destination_role == "bowl"
 
 
+def test_simulator_assisted_rgbd_crosses_trace_policy_boundary_as_diagnostic():
+    route = extract_state_route(
+        [
+            {"state": [0.0, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+            {"state": [0.2, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+        ],
+        source_anchor=(0.0, 0.0, 0.0), destination_anchor=(1.0, 0.0, 0.0),
+        samples=2, source_role="cup", destination_role="bowl",
+    )
+    provider = SimulatorAssistedRGBDGeometryProvider(
+        lambda _frame: _capture(),
+        lambda _frame, _capture: {
+            "source_xy": (10.0, 10.0),
+            "destination_xy": (22.0, 10.0),
+            "provenance": {"simulator_bbox": True},
+        },
+        expected_calibration_revision="calib-v1",
+    )
+    policy = TracePolicy(
+        (route,), provider,
+        waypoint_action=lambda _frame, _point: (0.0,) * 7,
+    )
+    frame = _frame()
+    decision = policy.decide(frame, ActionProposal((0.0,) * 7, "vla", 0), None)
+    assert decision.policy_id == "arrow_trace"
+    assert decision.metadata["trace_provenance"]["warp_provider"] == "simulator_assisted_rgbd"
+    assert decision.metadata["trace_provenance"]["diagnostic_only"] is True
+
+
 def test_waypoint_controller_persists_close_until_reopen():
     route = extract_state_route(
         [
@@ -122,3 +152,18 @@ def test_trace_counts_perception_unavailable_without_base_fallback():
         policy.decide(_frame(), ActionProposal((0.0,) * 7, "vla", 0), None)
     assert policy.failure_accounting["perception_failures"] == 1
     assert policy.failure_accounting["fallback_to_base"] is False
+
+
+def test_trace_resampling_clamps_only_endpoint_roundoff_for_realistic_states():
+    route = extract_state_route(
+        [
+            {"state": [0.0, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+            {"state": [0.2, 0.0, 0.2, 0, 0, 0, 0.0, 0.0]},
+            {"state": [0.3, 0.0, 0.2, 0, 0, 0, 0.0, 0.0]},
+            {"state": [0.8, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+        ],
+        source_anchor=(0.2, 0.0, 0.2), destination_anchor=(0.8, 0.0, 0.2), samples=4,
+    )
+    assert route.points[0].arc == 0.0
+    assert route.points[-1].arc == 1.0
+    assert all(0.0 <= point.arc <= 1.0 for point in route.points)

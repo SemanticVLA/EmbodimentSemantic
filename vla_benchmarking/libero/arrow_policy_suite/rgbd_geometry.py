@@ -372,6 +372,162 @@ class TraceSimulatorAssistedArrowGeometryProvider:
     __call__ = anchors
 
 
+class SimulatorAssistedRGBDGeometryProvider:
+    """Diagnostic RGB-D provider whose endpoint detector may use simulator hints.
+
+    The capture, calibration, synchronization, and deprojection contracts are
+    identical to :class:`ArrowRGBDGeometryProvider`.  Only endpoint selection
+    differs: ``endpoint_fn`` may use simulator-derived bounding boxes or arrow
+    annotations.  Every anchor is consequently marked diagnostic-only and is
+    not eligible for the vision-only Trace result.
+    """
+
+    provider = "simulator_assisted_rgbd"
+    provider_revision = "simulator-assisted-rgbd-v1"
+    provider_hash = hashlib.sha256(provider_revision.encode("utf-8")).hexdigest()
+
+    def __init__(
+        self,
+        capture_fn: CaptureFn,
+        endpoint_fn: EndpointFn,
+        *,
+        expected_frame_name: str = "world",
+        expected_calibration_revision: str | None = None,
+        expected_calibration_hash: str | None = None,
+        max_frame_age_s: float = 0.25,
+        max_rgb_depth_skew_s: float = 1e-3,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        if not callable(capture_fn) or not callable(endpoint_fn):
+            raise ContractError("simulator-assisted RGB-D provider requires capture_fn and endpoint_fn")
+        if not expected_frame_name or max_frame_age_s < 0 or max_rgb_depth_skew_s < 0:
+            raise ContractError("RGB-D frame and freshness configuration is invalid")
+        if not callable(clock):
+            raise ContractError("RGB-D clock must be callable")
+        self.capture_fn = capture_fn
+        self.endpoint_fn = endpoint_fn
+        self.expected_frame_name = str(expected_frame_name)
+        self.expected_calibration_revision = expected_calibration_revision
+        self.expected_calibration_hash = expected_calibration_hash
+        self.max_frame_age_s = float(max_frame_age_s)
+        self.max_rgb_depth_skew_s = float(max_rgb_depth_skew_s)
+        self.clock = clock
+
+    @staticmethod
+    def _diagnostic_endpoints(value: ArrowPixelEndpoints | Mapping[str, Any]) -> tuple[ArrowPixelEndpoints, Mapping[str, Any]]:
+        """Coerce endpoint pixels while retaining privileged provenance.
+
+        This deliberately does not call the strict ``_coerce_endpoints`` path,
+        whose recursive rejection of bbox/simulator fields is part of the
+        vision-only contract.
+        """
+        if isinstance(value, ArrowPixelEndpoints):
+            source, destination = value.source_xy, value.destination_xy
+            source_role, destination_role = value.source_role, value.destination_role
+            provenance = dict(value.provenance)
+        elif isinstance(value, Mapping):
+            source = value.get("source_xy", value.get("source", value.get("source_pixel_xy")))
+            destination = value.get("destination_xy", value.get("destination", value.get("destination_pixel_xy")))
+            if source is None or destination is None:
+                raise ContractError("simulator-assisted endpoint detector needs source and destination pixels")
+            source_role = None if value.get("source_role") is None else str(value["source_role"])
+            destination_role = None if value.get("destination_role") is None else str(value["destination_role"])
+            provenance = dict(value.get("provenance", {}))
+        else:
+            raise ContractError("simulator-assisted endpoint detector must return endpoint pixels or a mapping")
+        try:
+            source_xy = tuple(float(item) for item in source)
+            destination_xy = tuple(float(item) for item in destination)
+        except (TypeError, ValueError) as exc:
+            raise ContractError("simulator-assisted endpoint pixels must be numeric") from exc
+        if len(source_xy) != 2 or len(destination_xy) != 2 or any(
+            not math.isfinite(item) for item in (*source_xy, *destination_xy)
+        ):
+            raise ContractError("simulator-assisted endpoint pixels must be finite 2-vectors")
+        if not isinstance(provenance, Mapping):
+            raise ContractError("simulator-assisted endpoint provenance must be a mapping")
+        # Rebuild a strict endpoint object only when provenance is non-
+        # privileged.  For diagnostic provenance retain the raw fields in the
+        # returned mapping and let the provider perform deprojection directly.
+        try:
+            endpoint = ArrowPixelEndpoints(source_xy, destination_xy, source_role, destination_role, {})
+        except ContractError:
+            raise
+        return endpoint, provenance
+
+    def anchors(self, frame: ObservationFrame) -> GeometryAnchors:
+        capture = _coerce_capture(self.capture_fn(frame))
+        if capture.frame_name != self.expected_frame_name:
+            raise ContractError(
+                f"RGB-D frame mismatch: expected {self.expected_frame_name!r}, got {capture.frame_name!r}"
+            )
+        if self.expected_calibration_revision is not None and capture.calibration_revision != self.expected_calibration_revision:
+            raise ContractError("RGB-D calibration revision does not match frozen provider configuration")
+        frame_timestamp = frame.metadata.get("timestamp_s", frame.metadata.get("timestamp"))
+        if frame_timestamp is not None:
+            if abs(_finite(frame_timestamp, "frame timestamp") - capture.timestamp_s) > self.max_frame_age_s:
+                raise ContractError("RGB-D capture is stale relative to the policy observation")
+        elif abs(_finite(self.clock(), "clock") - capture.timestamp_s) > self.max_frame_age_s:
+            raise ContractError("RGB-D capture is stale relative to the current policy time")
+        if abs(float(capture.rgb_timestamp_s) - float(capture.depth_timestamp_s)) > self.max_rgb_depth_skew_s:
+            raise ContractError("RGB-D capture exceeds synchronized timestamp skew")
+        K, T = _validate_calibration(capture.intrinsics, capture.world_from_camera)
+        endpoint_value = self.endpoint_fn(frame, capture)
+        endpoints, endpoint_provenance = self._diagnostic_endpoints(endpoint_value)
+        source = _deproject(endpoints.source_xy, capture.depth_m, K, T)
+        destination = _deproject(endpoints.destination_xy, capture.depth_m, K, T)
+        if math.dist(source, destination) <= 1e-9:
+            raise ContractError("RGB-D arrow anchors are degenerate")
+        calibration_hash = _hash_payload({
+            "intrinsics": K, "world_from_camera": T,
+            "frame": capture.frame_name, "revision": capture.calibration_revision,
+        })
+        if self.expected_calibration_hash is not None and calibration_hash != self.expected_calibration_hash:
+            raise ContractError("RGB-D calibration hash does not match frozen artifact")
+        provenance = {
+            "source_kind": self.provider,
+            "privileged_source": "simulator_bbox_or_arrow",
+            "diagnostic_only": True,
+            "vision_only": False,
+            "provider_revision": self.provider_revision,
+            "provider_hash": self.provider_hash,
+            "coordinate_frame": capture.frame_name,
+            "units": "m",
+            "calibration_hash": calibration_hash,
+            "calibration_revision": capture.calibration_revision,
+            "camera_id": capture.camera_id,
+            "timestamp_s": capture.timestamp_s,
+            "rgb_timestamp_s": capture.rgb_timestamp_s,
+            "depth_timestamp_s": capture.depth_timestamp_s,
+            "frame_timestamp_checked": frame_timestamp is not None,
+            "endpoint_source_xy": endpoints.source_xy,
+            "endpoint_destination_xy": endpoints.destination_xy,
+            "source_role": endpoints.source_role,
+            "destination_role": endpoints.destination_role,
+            "endpoint_provenance": dict(endpoint_provenance),
+        }
+        return GeometryAnchors(
+            source, destination, capture.frame_name, capture.calibration_revision,
+            self.provider, provenance,
+        )
+
+    __call__ = anchors
+
+
+def simulator_assisted_rgbd(
+    capture_fn: CaptureFn,
+    endpoint_fn: EndpointFn,
+    **kwargs: Any,
+) -> SimulatorAssistedRGBDGeometryProvider:
+    """Construct the explicitly diagnostic simulator-assisted RGB-D provider."""
+    return SimulatorAssistedRGBDGeometryProvider(capture_fn, endpoint_fn, **kwargs)
+
+
+# Verbose alias retained for callers that use the Trace naming convention.
+TraceSimulatorAssistedRGBDGeometryProvider = SimulatorAssistedRGBDGeometryProvider
+trace_simulator_assisted_rgbd = simulator_assisted_rgbd
+
+
 def trace_simulator_assisted_arrow(
     anchors_fn: Callable[[ObservationFrame], GeometryAnchors | Mapping[str, Any]], **kwargs: Any
 ) -> TraceSimulatorAssistedArrowGeometryProvider:
@@ -382,4 +538,6 @@ def trace_simulator_assisted_arrow(
 __all__ = [
     "ArrowRGBDObservation", "ArrowPixelEndpoints", "ArrowRGBDGeometryProvider",
     "TraceSimulatorAssistedArrowGeometryProvider", "trace_simulator_assisted_arrow",
+    "SimulatorAssistedRGBDGeometryProvider", "TraceSimulatorAssistedRGBDGeometryProvider",
+    "simulator_assisted_rgbd", "trace_simulator_assisted_rgbd",
 ]

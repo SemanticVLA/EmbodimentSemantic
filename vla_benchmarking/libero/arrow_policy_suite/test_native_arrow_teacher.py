@@ -4,10 +4,12 @@ from types import SimpleNamespace
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from arrow_policy_suite.contracts import ObservationFrame
+from arrow_policy_suite.contracts import ContractError, ObservationFrame
 from arrow_policy_suite.native_arrow_teacher import PerFrameArrowTeacher
 
 
@@ -55,3 +57,17 @@ def test_canonical_rotvec_is_converted_to_quaternion_for_osc():
     proposal = teacher.propose(_frame(rotvec=(0.0, 0.0, 1.5707963267948966)))
     assert proposal is not None
     assert all(abs(float(value)) <= 1.0 for value in proposal.action)
+
+
+def test_teacher_close_destroy_are_idempotent_and_block_new_proposals():
+    cleanup_calls = []
+    teacher = PerFrameArrowTeacher(
+        lambda _frame: {"waypoints": [[0.01, 0.0, 0.5]] * 6},
+        cleanup_attempt=lambda: cleanup_calls.append("cleanup"),
+    )
+    teacher.close()
+    teacher.destroy()
+    teacher.close()
+    assert cleanup_calls == ["cleanup"]
+    with pytest.raises(ContractError, match="closed"):
+        teacher.propose(_frame())

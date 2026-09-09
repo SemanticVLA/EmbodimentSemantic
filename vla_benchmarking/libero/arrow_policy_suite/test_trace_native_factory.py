@@ -105,3 +105,68 @@ def test_trace_loader_rejects_route_with_actions(tmp_path):
             geometry_variant="rgbd", capture_fn=lambda _frame: {}, endpoint_fn=lambda *_args: {},
             graph_context_fn=lambda _frame: {}, graph_context_revision="graph-v1",
         )
+
+
+def test_trace_loader_wires_simulator_assisted_rgbd_with_frozen_calibration(tmp_path):
+    route_path, calibration_path = _write_artifacts(tmp_path)
+
+    def capture(_frame):
+        return ArrowRGBDObservation(
+            np.zeros((32, 32, 3), dtype=np.uint8), np.ones((32, 32), dtype=np.float32),
+            np.array([[100.0, 0.0, 16.0], [0.0, 100.0, 16.0], [0.0, 0.0, 1.0]]),
+            np.eye(4), "world", "calib-v1", 10.0,
+        )
+
+    def simulator_endpoints(_frame, _capture):
+        # The diagnostic provider is allowed to retain this provenance; the
+        # strict vision-only provider must reject the same metadata.
+        return {
+            "source_xy": (10.0, 16.0),
+            "destination_xy": (22.0, 16.0),
+            "source_role": "cup",
+            "destination_role": "bowl",
+            "provenance": {"bbox_source": "simulator_bbox", "arrow_source": "simulator_arrow"},
+        }
+
+    fields = build_trace_native_fields(
+        route_artifact=route_path, calibration_artifact=calibration_path,
+        geometry_variant="simulator_assisted_rgbd", capture_fn=capture,
+        endpoint_fn=simulator_endpoints,
+        graph_context_fn=lambda _frame: {"triplet": ["cup", "inside", "bowl"]},
+        graph_context_revision="graph-v1",
+    )
+    provider = fields["policy"].geometry_provider
+    assert fields["trace_geometry_variant"] == "simulator_assisted_rgbd"
+    assert provider.provider == "simulator_assisted_rgbd"
+    assert provider.expected_frame_name == "world"
+    assert provider.expected_calibration_revision == "calib-v1"
+    assert provider.expected_calibration_hash == fields["policy_kwargs"]["geometry_provider"].expected_calibration_hash
+
+    anchors = provider(_frame())
+    assert anchors.provider == "simulator_assisted_rgbd"
+    assert anchors.provenance["diagnostic_only"] is True
+    assert anchors.provenance["vision_only"] is False
+    assert anchors.provenance["provider_revision"] == "simulator-assisted-rgbd-v1"
+    assert anchors.provenance["provider_hash"] == provider.provider_hash
+    assert anchors.provenance["endpoint_provenance"]["bbox_source"] == "simulator_bbox"
+
+
+def test_trace_loader_geometry_variants_fail_closed_on_wrong_callbacks(tmp_path):
+    route_path, calibration_path = _write_artifacts(tmp_path)
+    common = {
+        "route_artifact": route_path,
+        "calibration_artifact": calibration_path,
+        "graph_context_fn": lambda _frame: {},
+        "graph_context_revision": "graph-v1",
+    }
+
+    with pytest.raises(ContractError, match="simulator-assisted RGB-D.*capture_fn and endpoint_fn"):
+        build_trace_native_fields(
+            **common, geometry_variant="simulator_assisted_rgbd",
+            simulator_anchors_fn=lambda _frame: {},
+        )
+    with pytest.raises(ContractError, match="simulator-assisted Trace.*simulator_anchors_fn"):
+        build_trace_native_fields(
+            **common, geometry_variant="simulator_assisted_arrow",
+            capture_fn=lambda _frame: {}, endpoint_fn=lambda *_args: {},
+        )

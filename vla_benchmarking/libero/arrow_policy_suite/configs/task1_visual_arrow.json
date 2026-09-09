@@ -1,0 +1,7 @@
+{
+  "destination": "plate_1",
+  "geometry_kind": "semantic_endpoint_pair",
+  "provider": "canonical_visual_arrow",
+  "source": "akita_black_bowl_1",
+  "task_id": 1
+}
