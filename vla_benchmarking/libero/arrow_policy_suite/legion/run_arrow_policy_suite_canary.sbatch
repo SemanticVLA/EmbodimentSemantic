@@ -10,6 +10,7 @@
 # Optional:
 #   ARROW_SUITE_OPERATION (canary), ARROW_SUITE_STEPS, ARROW_SUITE_OUTPUT,
 #   ARROW_SUITE_CHECKPOINT, ARROW_SUITE_CONTROLLER, ARROW_SUITE_PYTHON,
+#   ARROW_SUITE_HF_CACHE (provide both explicitly for teacher-dependent policies),
 #   ARROW_SUITE_GRAPH_CONTEXT_REVISION, ARROW_SUITE_TRACE_GEOMETRY_VARIANT,
 #   ARROW_SUITE_GRAPH_FACTORY, and policy-specific Fast/Trace artifact inputs.
 # Engineering-only environment smoke (no config/factory required):
@@ -48,12 +49,31 @@ actual_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)" || die 'cannot resolve rep
 [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] || die 'repository checkout is dirty'
 cd -- "$REPO_ROOT" || die 'cannot enter repository checkout'
 
+if [[ -n "${ARROW_SUITE_PYTHON:-}" ]]; then
+  [[ "$ARROW_SUITE_PYTHON" =~ ^/[A-Za-z0-9_./-]+$ && "$ARROW_SUITE_PYTHON" != *'/../'* && "$ARROW_SUITE_PYTHON" != */.. ]] || \
+    die 'ARROW_SUITE_PYTHON must be a safe absolute Linux path'
+  ARROW_SUITE_PYTHON_RESOLVED="$(realpath -e -- "$ARROW_SUITE_PYTHON")" || die 'ARROW_SUITE_PYTHON cannot be resolved'
+  [[ "$ARROW_SUITE_PYTHON_RESOLVED" =~ ^/[A-Za-z0-9_./-]+$ && "$ARROW_SUITE_PYTHON_RESOLVED" != *'/../'* && "$ARROW_SUITE_PYTHON_RESOLVED" != */.. && ! -L "$ARROW_SUITE_PYTHON_RESOLVED" && -x "$ARROW_SUITE_PYTHON_RESOLVED" ]] || \
+    die "ARROW_SUITE_PYTHON target is not a safe executable regular path: $ARROW_SUITE_PYTHON_RESOLVED"
+fi
+if [[ -n "${ARROW_SUITE_HF_CACHE:-}" ]]; then
+  [[ "$ARROW_SUITE_HF_CACHE" =~ ^/[A-Za-z0-9_./-]+$ && "$ARROW_SUITE_HF_CACHE" != *'/../'* && "$ARROW_SUITE_HF_CACHE" != */.. ]] || \
+    die 'ARROW_SUITE_HF_CACHE must be a safe absolute Linux path'
+  [[ ! -L "$ARROW_SUITE_HF_CACHE" && -d "$ARROW_SUITE_HF_CACHE" ]] || die "ARROW_SUITE_HF_CACHE is not an existing regular directory: $ARROW_SUITE_HF_CACHE"
+fi
+
 ENGINEERING_SMOKE="${ARROW_SUITE_ENGINEERING_SMOKE:-0}"
 operation="${ARROW_SUITE_OPERATION:-canary}"
 if [[ "$ENGINEERING_SMOKE" != 1 ]]; then
   for name in ARROW_SUITE_CONFIG ARROW_SUITE_FACTORY ARROW_SUITE_POLICY; do
     [[ -n "${!name:-}" ]] || die "$name is required outside engineering smoke"
   done
+  case "$ARROW_SUITE_POLICY" in
+    teacher_only|arrow_together|arrow_on_call|arrow_apprentice|arrow_editor|arrow_minimal|arrow_minimal_runtime|arrow_minimal_learned|arrow_fast)
+      [[ -n "${ARROW_SUITE_PYTHON:-}" && -n "${ARROW_SUITE_HF_CACHE:-}" ]] || \
+        die 'teacher-dependent policies require explicit ARROW_SUITE_PYTHON and ARROW_SUITE_HF_CACHE'
+      ;;
+  esac
   case "$ARROW_SUITE_POLICY" in
     arrow_fast|arrow_trace)
       for name in ARROW_SUITE_GRAPH_FACTORY ARROW_SUITE_GRAPH_CONTEXT_REVISION \
@@ -145,12 +165,39 @@ trap archive_on_exit EXIT
 module purge
 module load miniforge/24.3.0-0
 source "$(conda info --base)/etc/profile.d/conda.sh"
-PYTHON="${ARROW_SUITE_PYTHON:-$HOME/.conda/envs/embodiment-smolvla-py312/bin/python}"
+PYTHON="${ARROW_SUITE_PYTHON_RESOLVED:-${ARROW_SUITE_PYTHON:-$HOME/.conda/envs/embodiment-smolvla-py312/bin/python}}"
 [[ -x "$PYTHON" ]] || die "Python is missing: $PYTHON"
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
+if [[ -n "${ARROW_SUITE_HF_CACHE:-}" ]]; then
+  HF_CACHE="$(realpath -e -- "$ARROW_SUITE_HF_CACHE")" || die 'HF cache cannot be resolved'
+  [[ "$HF_CACHE" != / && ! -L "$HF_CACHE" ]] || die 'HF cache must resolve to a non-root non-symlink directory'
+  HF_MODEL_ROOT="$HF_CACHE/transformers/models--allenai--MolmoPoint-8B"
+  [[ -d "$HF_MODEL_ROOT/snapshots" ]] || die "pinned MolmoPoint cache is missing snapshots: $HF_MODEL_ROOT"
+  find "$HF_MODEL_ROOT/snapshots" -mindepth 1 -maxdepth 1 -type d -print -quit | grep -q . || \
+    die "pinned MolmoPoint cache has no snapshot: $HF_MODEL_ROOT/snapshots"
+  export HF_HOME="$HF_CACHE"
+  export HF_HUB_CACHE="$HF_CACHE/hub"
+  export TRANSFORMERS_CACHE="$HF_CACHE/transformers"
+  export HF_MODULES_CACHE="$HF_CACHE/modules"
+  export HF_HUB_DISABLE_TELEMETRY=1
+  export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+else
+  export HF_HUB_DISABLE_TELEMETRY=1
+fi
 nvidia-smi -L >/dev/null || die 'CUDA device is unavailable'
 "$PYTHON" -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))' || die 'Torch CUDA preflight failed'
+if [[ -n "${ARROW_SUITE_PYTHON:-}" ]]; then
+  "$PYTHON" - <<'PY'
+from importlib.metadata import version
+expected = {"transformers": "4.57.1"}
+for package, wanted in expected.items():
+    observed = version(package)
+    if observed != wanted:
+        raise SystemExit(f"explicit Arrow teacher runtime requires {package}=={wanted}, found {observed}")
+print("verified explicit Arrow teacher runtime", version("transformers"))
+PY
+fi
 
 if [[ "$ENGINEERING_SMOKE" != 1 && -n "${ARROW_SUITE_CONTROLLER:-}" ]]; then
   [[ -f "$ARROW_SUITE_CONTROLLER" ]] || die "controller config is not a file: $ARROW_SUITE_CONTROLLER"

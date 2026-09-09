@@ -18,10 +18,18 @@ def test_submit_uses_immutable_remote_repo_release_and_linux_paths():
 
 
 def test_submit_rejects_shell_injection_before_interpolation():
-    for value in ("RemoteRepoRoot", "RemoteConfig", "RunRoot", "ArchiveRoot", "Checkpoint", "Controller", "GraphContextRevision"):
+    for value in ("RemoteRepoRoot", "RemoteConfig", "RunRoot", "ArchiveRoot", "Checkpoint", "Controller", "RuntimePython", "HfCache", "GraphContextRevision"):
         assert value in SUBMIT
     assert "contains unsafe shell characters" in SUBMIT
     assert "must be a safe absolute Linux path" in SUBMIT
+
+
+def test_submit_requires_explicit_canonical_runtime_for_teacher_policies():
+    assert "teacherPolicies" in SUBMIT
+    assert "RuntimePython and HfCache are required for teacher-dependent policies" in SUBMIT
+    assert "frozen_base and arrow_trace do not select Molmo implicitly" in SUBMIT
+    assert "export ARROW_SUITE_PYTHON='$RuntimePython'" in SUBMIT
+    assert "export ARROW_SUITE_HF_CACHE='$HfCache'" in SUBMIT
 
 
 def test_submit_builds_remote_command_from_joined_lines():
@@ -88,3 +96,20 @@ def test_submit_forwards_and_validates_fast_and_trace_contract_inputs():
 def test_batch_anchors_python_execution_in_verified_repository():
     assert 'cd -- "$REPO_ROOT" || die' in SBATCH
     assert 'export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"' in SBATCH
+
+
+def test_batch_validates_explicit_runtime_and_pinned_offline_molmo_cache():
+    assert "ARROW_SUITE_PYTHON must be a safe absolute Linux path" in SBATCH
+    assert 'ARROW_SUITE_PYTHON_RESOLVED="$(realpath -e -- "$ARROW_SUITE_PYTHON")"' in SBATCH
+    assert 'ARROW_SUITE_PYTHON target is not a safe executable regular path' in SBATCH
+    assert 'PYTHON="${ARROW_SUITE_PYTHON_RESOLVED:-' in SBATCH
+    assert "ARROW_SUITE_HF_CACHE must be a safe absolute Linux path" in SBATCH
+    assert "teacher-dependent policies require explicit ARROW_SUITE_PYTHON and ARROW_SUITE_HF_CACHE" in SBATCH
+    assert "models--allenai--MolmoPoint-8B" in SBATCH
+    assert '"$HF_MODEL_ROOT/snapshots"' in SBATCH
+    assert 'export HF_HUB_CACHE="$HF_CACHE/hub"' in SBATCH
+    assert 'export TRANSFORMERS_CACHE="$HF_CACHE/transformers"' in SBATCH
+    assert 'export HF_MODULES_CACHE="$HF_CACHE/modules"' in SBATCH
+    assert 'export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1' in SBATCH
+    assert 'explicit Arrow teacher runtime requires {package}=={wanted}' in SBATCH
+    assert '"transformers": "4.57.1"' in SBATCH

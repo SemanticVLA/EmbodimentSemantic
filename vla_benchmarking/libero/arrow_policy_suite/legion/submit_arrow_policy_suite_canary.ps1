@@ -14,6 +14,8 @@ param(
     [ValidateRange(1,1200)][int]$Steps = 3,
     [string]$Checkpoint,
     [string]$Controller,
+    [Alias('Python','MolmoPython')][string]$RuntimePython,
+    [Alias('MolmoCache')][string]$HfCache,
     [string]$GraphContextRevision,
     [string]$GraphFactory,
     [string]$GraphTripletArtifact,
@@ -44,6 +46,8 @@ if (-not [string]::IsNullOrWhiteSpace($LocalConfig)) {
 if (-not $EngineeringSmoke -and [string]::IsNullOrWhiteSpace($Factory)) { throw 'Factory is required unless -EngineeringSmoke is selected.' }
 if (-not $EngineeringSmoke -and $Factory -notmatch '^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$') { throw 'Factory must be module:callable.' }
 if ($Controller -and ($Controller -notmatch '^/[A-Za-z0-9_./-]+$' -or $Controller -match '(^|/)\.\.(/|$)')) { throw 'Controller must be a safe absolute Linux path.' }
+if ($RuntimePython -and ($RuntimePython -notmatch '^/[A-Za-z0-9_./-]+$' -or $RuntimePython -match '(^|/)\.\.(/|$)')) { throw 'RuntimePython must be a safe absolute Linux path.' }
+if ($HfCache -and ($HfCache -notmatch '^/[A-Za-z0-9_./-]+$' -or $HfCache -match '(^|/)\.\.(/|$)')) { throw 'HfCache must be a safe absolute Linux path.' }
 if ($RunRoot -notmatch '^/[A-Za-z0-9_./-]+$' -or $RunRoot -match '(^|/)\.\.(/|$)' -or $ArchiveRoot -notmatch '^/[A-Za-z0-9_./-]+$' -or $ArchiveRoot -match '(^|/)\.\.(/|$)') { throw 'RunRoot and ArchiveRoot must be safe absolute Linux paths.' }
 if ($Checkpoint -and ($Checkpoint -notmatch '^/[A-Za-z0-9_./-]+$' -or $Checkpoint -match '(^|/)\.\.(/|$)')) { throw 'Checkpoint must be a safe absolute Linux path.' }
 if ($GraphContextRevision -and $GraphContextRevision -notmatch '^[A-Za-z0-9_.:/-]+$') { throw 'GraphContextRevision contains unsafe shell characters.' }
@@ -99,6 +103,12 @@ if ($Policy -eq 'arrow_trace') {
         if ([string]::IsNullOrWhiteSpace($required.Value)) { throw "$($required.Name) is required for arrow_trace." }
     }
 }
+$teacherPolicies = @('teacher_only','arrow_together','arrow_on_call','arrow_apprentice','arrow_editor','arrow_minimal','arrow_minimal_runtime','arrow_minimal_learned','arrow_fast')
+if ($Policy -in $teacherPolicies) {
+    if ([string]::IsNullOrWhiteSpace($RuntimePython) -or [string]::IsNullOrWhiteSpace($HfCache)) {
+        throw 'RuntimePython and HfCache are required for teacher-dependent policies; frozen_base and arrow_trace do not select Molmo implicitly.'
+    }
+}
 $job = Join-Path $PSScriptRoot 'run_arrow_policy_suite_canary.sbatch'
 if (-not (Test-Path -LiteralPath $job -PathType Leaf)) { throw "Missing launcher: $job" }
 
@@ -128,6 +138,8 @@ if (-not $EngineeringSmoke) {
 }
 if ($Checkpoint) { $remoteLines += "export ARROW_SUITE_CHECKPOINT='$Checkpoint'" }
 if ($Controller) { $remoteLines += "export ARROW_SUITE_CONTROLLER='$Controller'" }
+if ($RuntimePython) { $remoteLines += "export ARROW_SUITE_PYTHON='$RuntimePython'" }
+if ($HfCache) { $remoteLines += "export ARROW_SUITE_HF_CACHE='$HfCache'" }
 if ($GraphContextRevision) { $remoteLines += "export ARROW_SUITE_GRAPH_CONTEXT_REVISION='$GraphContextRevision'" }
 if ($GraphFactory) { $remoteLines += "export ARROW_SUITE_GRAPH_FACTORY='$GraphFactory'" }
 if ($GraphTripletArtifact) { $remoteLines += "export ARROW_SUITE_TEXT_GRAPH_TRIPLET='@$GraphTripletArtifact'" }
