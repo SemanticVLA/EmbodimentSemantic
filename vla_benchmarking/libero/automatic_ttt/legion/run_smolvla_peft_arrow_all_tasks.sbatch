@@ -24,14 +24,14 @@ die() { printf 'SmolVLA all-task PEFT job: %s\n' "$*" >&2; exit 2; }
 [[ -n "${PEFT_ALL_TASK_RUN_ROOT:-}" && -n "${PEFT_ALL_TASK_ARCHIVE_ROOT:-}" ]] || die 'all-task roots are required'
 VALIDATION_PYTHON="${PEFT_PYTHON:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/venv-py312-eacdc54a9663db0a/bin/python}"
 [[ -x "$VALIDATION_PYTHON" ]] || die "Python is missing: $VALIDATION_PYTHON"
-# A normal run starts at task 0 and executes every task once.  Recovery may
-# publish task 0 from a preserved, already-trained run before continuing with
-# fresh task 1..9 runs in this same allocation.  Never let a resume source be
-# silently ignored or leak into a later fresh task.
+# A normal run starts at task 0 and executes every task once.  Operational
+# recovery may start at a later task after earlier task artifacts have been
+# preserved, or may publish task 0 from a preserved, already-trained run before
+# continuing with fresh task 1..9 runs in this same allocation.  Never let a
+# resume source be silently ignored or leak into a later fresh task.
 PEFT_START_TASK_ID="${PEFT_START_TASK_ID:-0}"
 [[ "$PEFT_START_TASK_ID" =~ ^[0-9]+$ ]] || die 'PEFT_START_TASK_ID must be an integer in [0,9]'
 (( PEFT_START_TASK_ID <= 9 )) || die 'PEFT_START_TASK_ID must be in [0,9]'
-(( PEFT_START_TASK_ID == 0 )) || die 'PEFT_START_TASK_ID must start at 0; recovery advances it internally after task 0'
 if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" && "$PEFT_START_TASK_ID" -ne 0 ]]; then
   die 'PEFT_RESUME_SOURCE_RUN_ROOT is permitted only when PEFT_START_TASK_ID=0'
 fi
@@ -99,7 +99,8 @@ PY
   PEFT_START_TASK_ID=1
 fi
 
-for task_id in $(seq "$PEFT_START_TASK_ID" 9); do
+FIRST_TASK_ID="$PEFT_START_TASK_ID"
+for task_id in $(seq "$FIRST_TASK_ID" 9); do
   export PEFT_TASK_ID="$task_id"
   unset PEFT_TASK_IDS PEFT_ARROW_COLLECTION_MANIFEST
   export PEFT_LABEL="${PEFT_ALL_TASK_LABEL:-smolvla_fresh_arrow_bc5}_task_${task_id}"
@@ -111,4 +112,4 @@ for task_id in $(seq "$PEFT_START_TASK_ID" 9); do
   printf '[%s] completed task %s/9 in job %s\n' "$(date +'%F %T')" "$task_id" "$SLURM_JOB_ID"
 done
 
-printf 'VERIFIED all ten task-specific runs completed sequentially in job %s\n' "$SLURM_JOB_ID"
+printf 'VERIFIED task-specific runs %s..9 completed sequentially in job %s\n' "$FIRST_TASK_ID" "$SLURM_JOB_ID"

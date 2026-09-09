@@ -151,15 +151,16 @@ def test_all_task_wrapper_seals_one_demo_and_skips_baseline():
     assert '[[ -x "$VALIDATION_PYTHON" ]]' in text
     assert 'PEFT_START_TASK_ID="${PEFT_START_TASK_ID:-0}"' in text
     assert '(( PEFT_START_TASK_ID <= 9 ))' in text
-    assert '(( PEFT_START_TASK_ID == 0 ))' in text
-    assert 'for task_id in $(seq "$PEFT_START_TASK_ID" 9); do' in text
+    assert '(( PEFT_START_TASK_ID == 0 ))' not in text
+    assert 'FIRST_TASK_ID="$PEFT_START_TASK_ID"' in text
+    assert 'for task_id in $(seq "$FIRST_TASK_ID" 9); do' in text
     assert 'bash "$RUNNER"' in text
 
 
 def test_all_task_wrapper_resumes_task_zero_then_starts_fresh_at_task_one():
     text = (LAUNCHER.parent / "run_smolvla_peft_arrow_all_tasks.sbatch").read_text(encoding="utf-8")
     resume_branch = text.index('if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]; then')
-    task_loop = text.index('for task_id in $(seq "$PEFT_START_TASK_ID" 9); do')
+    task_loop = text.index('for task_id in $(seq "$FIRST_TASK_ID" 9); do')
     resume_section = text[resume_branch:task_loop]
 
     assert 'PEFT_RESUME_SOURCE_RUN_ROOT is permitted only when PEFT_START_TASK_ID=0' in text
