@@ -20,6 +20,7 @@ from .contracts import (
     StepRecord,
     _safe,
     state8,
+    clip_action,
     validate_action,
 )
 
@@ -578,7 +579,13 @@ class TracePolicy:
         # baseline, invalidating the policy comparison, so construction fails
         # closed above and this call is intentionally unconditional.
         guided = validate_action(self.waypoint_action(frame, target))
-        action = tuple(0.5 * base.action[i] + 0.5 * guided[i] for i in range(6)) + (guided[6],)
+        # The controller and base proposal are individually normalized, but
+        # the final blend is the last action boundary and must absorb tiny
+        # floating-point excursions without changing the gripper event.
+        action = clip_action(
+            tuple(0.5 * base.action[i] + 0.5 * guided[i] for i in range(6))
+            + (guided[6],)
+        )
         crossed_events = [point.event for point in route.points[previous_index:self._index + self.lookahead + 1]
                           if point.event is not None]
         event = crossed_events[-1] if crossed_events else target.event

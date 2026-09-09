@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import math
 from typing import Any, Mapping, Sequence
 
-from .contracts import ContractError, ObservationFrame, state8, validate_action
+from .contracts import ContractError, ObservationFrame, clip_action, state8
 from .trace import RoutePoint
 
 
@@ -113,7 +113,13 @@ class WaypointController:
             for i in range(3)
         )
         gripper = cfg.gripper_closed if self._gripper_closed else cfg.gripper_open
-        action = validate_action((*translation, *rotation, gripper))
+        # The controller owns the conversion from metric pose deltas to the
+        # canonical normalized action.  ``max_*`` is an independent safety
+        # bound and may be wider than the configured normalization scale, so
+        # clip only after conversion.  ``clip_action`` still rejects malformed
+        # dimensions and non-finite values; the gripper value is already a
+        # validated semantic command in [-1, 1] and is left unchanged.
+        action = clip_action((*translation, *rotation, gripper))
         self._last_route_id = None
         self._last_action = action
         self._last_metadata = {

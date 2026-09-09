@@ -12,7 +12,7 @@ from arrow_policy_suite.rgbd_geometry import (
     TraceSimulatorAssistedArrowGeometryProvider,
 )
 from arrow_policy_suite.trace import TracePolicy, extract_state_route, warp_route
-from arrow_policy_suite.waypoint_controller import WaypointController
+from arrow_policy_suite.waypoint_controller import WaypointController, WaypointControllerConfig
 
 
 def _frame(timestamp: float = 10.0) -> ObservationFrame:
@@ -137,6 +137,59 @@ def test_waypoint_controller_persists_close_until_reopen():
     assert reopen_action[6] == -1.0
     assert controller.events == ("close", "reopen")
     assert all(-1.0 <= value <= 1.0 for value in hold_action)
+
+
+def test_waypoint_controller_normalizes_wide_metric_delta_and_preserves_gripper():
+    # A safety bound wider than one normalization scale is valid configuration
+    # but must saturate the continuous command at the action boundary.
+    controller = WaypointController(WaypointControllerConfig(
+        translation_scale_m=0.05,
+        max_translation_m=0.10,
+    ))
+    frame = _frame()
+    point = extract_state_route(
+        [
+            {"state": [0.0, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+            {"state": [0.2, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+        ],
+        source_anchor=(0.0, 0.0, 0.0),
+        destination_anchor=(1.0, 0.0, 0.0),
+        samples=2,
+    ).points[1]
+    action = controller(frame, point)
+    assert len(action) == 7
+    assert all(-1.0 <= value <= 1.0 for value in action)
+    assert action[0] == 1.0
+    assert action[1:6] == (0.0,) * 5
+    assert action[6] == -1.0
+
+
+def test_trace_generated_proposal_is_normalized_and_directionally_correct():
+    route = extract_state_route(
+        [
+            {"state": [0.0, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+            {"state": [0.2, 0.0, 0.2, 0, 0, 0, 0.1, 0.1]},
+        ],
+        source_anchor=(0.0, 0.0, 0.0),
+        destination_anchor=(1.0, 0.0, 0.0),
+        samples=2,
+    )
+    provider = lambda _frame: GeometryAnchors(
+        (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), "world", "calib-v1", "arrow_rgbd",
+        {"source_kind": "arrow_rgbd", "coordinate_frame": "world", "units": "m"},
+    )
+    controller = WaypointController(WaypointControllerConfig(
+        translation_scale_m=0.05,
+        max_translation_m=0.10,
+    ))
+    policy = TracePolicy((route,), provider, waypoint_action=controller, lookahead=1)
+    decision = policy.decide(_frame(), ActionProposal((1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0), "vla", 0), None)
+
+    assert len(decision.action) == 7
+    assert all(-1.0 <= value <= 1.0 for value in decision.action)
+    assert decision.action[0] == 1.0
+    assert decision.action[0] > decision.action[1]
+    assert decision.action[6] == -1.0
 
 
 def test_trace_counts_perception_unavailable_without_base_fallback():
