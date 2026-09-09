@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -18,6 +19,10 @@ from .reporting import aggregate_rows, write_report
 
 
 _LEARNED_POLICY_IDS = {"arrow_apprentice", "arrow_editor", "arrow_minimal_learned"}
+_TEACHER_REQUIRED_POLICY_IDS = {
+    "teacher_only", "arrow_together", "arrow_on_call", "arrow_minimal", "arrow_minimal_runtime", "arrow_fast",
+}
+_TEACHER_FREE_POLICY_IDS = _LEARNED_POLICY_IDS | {"frozen_base", "arrow_trace"}
 
 
 def _load_config_bundle(path: str | Path) -> tuple[StudyConfig, Any | None]:
@@ -130,9 +135,25 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--retained-training-manifest", action="append", default=[],
                      help="retained training manifest path or SHA-256 digest (repeatable)")
     pre.set_defaults(func=_cmd_preflight)
-    collect = sub.add_parser("collect", help="show collection contract; never launch runs")
-    collect.add_argument("config")
-    collect.set_defaults(func=_cmd_collect)
+    collect = sub.add_parser("collect", help="collect bounded native On-Call episodes")
+    # Keep the historical positional ``collect CONFIG`` form for receipt-only
+    # callers, while accepting the exact executable contract emitted by the
+    # Legion sbatch launcher.
+    collect.add_argument("config", nargs="?")
+    collect.add_argument("--config", dest="config_option", help="study config to validate")
+    collect.add_argument("--factory", help="executor path as python.module:callable; never imported here")
+    collect.add_argument("--input", action="append", default=[], help="input artifact path (repeatable)")
+    collect.add_argument("--output", help="planned output artifact path")
+    collect.add_argument("--run-dir", help="planned run directory")
+    collect.add_argument("--dry-run", action="store_true", help="emit a DRY_RUN receipt")
+    collect.add_argument("--execute", action="store_true", help="execute through an injected native factory")
+    collect.add_argument("--policy", default="frozen_base", help="policy/control id for native execution")
+    collect.add_argument("--steps", type=int, help="bounded native collection steps")
+    collect.add_argument("--checkpoint", help="checkpoint file/directory to hash into run provenance")
+    collect.add_argument("--controller", help="controller config/file/directory to hash into run provenance")
+    collect.add_argument("--graph-context-revision", help="sealed graph/arrow context revision")
+    collect.add_argument("--trace-geometry-variant", choices=("rgbd", "simulator_assisted_rgbd"))
+    collect.set_defaults(func=_cmd_handoff)
     report = sub.add_parser("report", help="aggregate completed JSON rows")
     report.add_argument("rows")
     report.add_argument("output", nargs="?")
@@ -227,7 +248,153 @@ def _training_manifest_digest(path_or_digest: str) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _immutable_artifact_path(value: str | Path, *, label: str) -> Path:
+    """Resolve one input as a safe, existing, non-symlink file or directory.
+
+    Native learned policies deliberately have no fallback artifact.  Keep the
+    path contract here (before a factory is imported) so create-only handoffs
+    and scored execution validate the same immutable input identity.
+    """
+
+    candidate = Path(str(value))
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        raise ContractError(f"{label} must be a safe absolute path")
+    if candidate.is_symlink() or not candidate.exists() or not (candidate.is_file() or candidate.is_dir()):
+        raise ContractError(f"{label} must be an existing immutable file or directory: {candidate}")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ContractError(f"{label} cannot be resolved: {candidate}") from exc
+    if resolved.is_symlink() or not (resolved.is_file() or resolved.is_dir()):
+        raise ContractError(f"{label} must resolve to an immutable file or directory: {candidate}")
+    if resolved.is_dir():
+        entries = list(resolved.rglob("*"))
+        if any(item.is_symlink() for item in entries):
+            raise ContractError(f"{label} directory contains a symlink: {candidate}")
+        if any(not (item.is_file() or item.is_dir()) for item in entries):
+            raise ContractError(f"{label} directory contains a non-regular entry: {candidate}")
+    return resolved
+
+
+def _artifact_sha256(path: Path) -> str:
+    if path.is_dir():
+        entries: list[tuple[str, str]] = []
+        for child in sorted(item for item in path.rglob("*") if item.is_file()):
+            relative = child.relative_to(path).as_posix()
+            entries.append((relative, _artifact_sha256(child)))
+        if not entries:
+            raise ContractError(f"learned artifact directory is empty: {path}")
+        # Keep this byte-for-byte compatible with native_executor._hash_path.
+        return hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise ContractError(f"learned artifact is unreadable: {path}") from exc
+    return digest.hexdigest()
+
+
+def _learned_artifact_inputs(policy_id: str, values: Any) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    """Validate and describe repeatable learned inputs for a handoff/execute."""
+
+    raw_values = tuple(str(item) for item in (values or ()))
+    if policy_id in _LEARNED_POLICY_IDS and len(raw_values) != 1:
+        raise ContractError(
+            f"{policy_id} requires exactly one --input learned artifact; "
+            "refusing a frozen-policy fallback"
+        )
+    if policy_id not in _LEARNED_POLICY_IDS and raw_values:
+        raise ContractError("learned artifacts are only valid for Apprentice, Editor, and Minimal-Learned")
+    paths: list[str] = []
+    records: list[dict[str, Any]] = []
+    for raw in raw_values:
+        path = _immutable_artifact_path(raw, label="learned artifact input")
+        record: dict[str, Any] = {"path": str(path), "sha256": _artifact_sha256(path)}
+        if policy_id == "arrow_apprentice":
+            if not path.is_dir():
+                raise ContractError("arrow_apprentice requires an immutable directory bundle")
+            manifest = path / "apprentice_manifest.json"
+            if manifest.is_symlink() or not manifest.is_file():
+                raise ContractError("arrow_apprentice bundle requires apprentice_manifest.json")
+            try:
+                manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ContractError("arrow_apprentice bundle manifest is unreadable") from exc
+            if not isinstance(manifest_payload, Mapping):
+                raise ContractError("arrow_apprentice bundle manifest must be a JSON object")
+            inventory = manifest_payload.get("checkpoint_inventory", manifest_payload.get("inventory"))
+            inventory_hash = manifest_payload.get("checkpoint_sha256", manifest_payload.get("inventory_sha256"))
+            if not isinstance(inventory, Mapping) or not inventory:
+                raise ContractError("arrow_apprentice bundle manifest has no hashed inventory")
+            if not isinstance(inventory_hash, str) or len(inventory_hash) != 64:
+                raise ContractError("arrow_apprentice bundle manifest has no inventory hash")
+            actual_inventory: dict[str, str] = {}
+            for item in sorted(path.rglob("*")):
+                if item == manifest:
+                    continue
+                if item.is_symlink():
+                    raise ContractError("arrow_apprentice bundle contains a symlink")
+                if item.is_file():
+                    actual_inventory[item.relative_to(path).as_posix()] = _artifact_sha256(item)
+            if not actual_inventory:
+                raise ContractError("arrow_apprentice bundle payload is empty")
+            if dict(inventory) != actual_inventory:
+                raise ContractError("arrow_apprentice bundle inventory does not match payload")
+            expected_inventory_hash = hashlib.sha256(
+                (json.dumps(dict(sorted(actual_inventory.items())), sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            ).hexdigest()
+            if inventory_hash != expected_inventory_hash:
+                raise ContractError("arrow_apprentice bundle inventory hash mismatch")
+            record["bundle_manifest"] = {
+                "path": str(manifest),
+                "sha256": _artifact_sha256(manifest),
+                "inventory_sha256": inventory_hash,
+                "payload_files": len(actual_inventory),
+            }
+        else:
+            if not path.is_file():
+                raise ContractError(f"{policy_id} requires an immutable regular checkpoint file")
+            sidecar = _immutable_artifact_path(f"{path}.json", label="learned artifact sidecar")
+            if not sidecar.is_file():
+                raise ContractError(f"{policy_id} requires a regular .json sidecar")
+            record["sidecar"] = {"path": str(sidecar), "sha256": _artifact_sha256(sidecar)}
+        paths.append(str(path))
+        records.append(record)
+    return tuple(paths), records
+
+
+def _runtime_privilege_receipt(policy_id: str) -> dict[str, Any]:
+    return {
+        "teacher_required": policy_id in _TEACHER_REQUIRED_POLICY_IDS,
+        "teacher_free": policy_id in _TEACHER_FREE_POLICY_IDS,
+    }
+
+
+def _launcher_identity_receipt() -> dict[str, int]:
+    """Capture only explicitly supplied paired-reset identity values."""
+
+    identity: dict[str, int] = {}
+    for env_name, field_name in (
+        ("ARROW_SUITE_TASK_ID", "task_id"),
+        ("ARROW_SUITE_SEED", "seed"),
+        ("ARROW_SUITE_INIT_STATE_INDEX", "init_state_index"),
+    ):
+        value = os.environ.get(env_name)
+        if value is None or value == "":
+            continue
+        if not value.isdecimal():
+            raise ContractError(f"{env_name} must be a non-negative integer")
+        identity[field_name] = int(value)
+    return identity
+
+
 def _cmd_collect(args: argparse.Namespace) -> int:
+    if not getattr(args, "config", None):
+        receipt = {"status": "BLOCKED", "errors": ["collect requires --config CONFIG or positional CONFIG"], "runs_launched": False}
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+        return 2
     try:
         config = _load_config(args.config)
         receipt = preflight(config)
@@ -245,13 +412,33 @@ def _handoff_receipt(args: argparse.Namespace) -> dict[str, Any]:
 
     operation = str(args.command)
     mode = "DRY_RUN" if bool(getattr(args, "dry_run", False)) else "CREATE_ONLY"
+    policy_id = str(getattr(args, "policy", "frozen_base"))
+    try:
+        learned_inputs, learned_records = _learned_artifact_inputs(
+            policy_id, getattr(args, "input", None)
+        )
+        launch_identity = _launcher_identity_receipt()
+    except ContractError as exc:
+        return {
+            "status": "BLOCKED",
+            "errors": [str(exc)],
+            "runs_launched": False,
+            "operation": operation,
+            "inputs": list(getattr(args, "input", None) or []),
+            "learned_artifacts": [],
+            "runtime_privileges": _runtime_privilege_receipt(policy_id),
+            "launch_identity": {},
+        }
     receipt: dict[str, Any] = {
         "status": mode,
         "operation": operation,
         "runs_launched": False,
         "execution": "not_launched",
         "factory": getattr(args, "factory", None),
-        "inputs": list(getattr(args, "input", None) or []),
+        "inputs": list(learned_inputs),
+        "learned_artifacts": learned_records,
+        "runtime_privileges": _runtime_privilege_receipt(policy_id),
+        "launch_identity": launch_identity,
         "output": getattr(args, "output", None),
         "run_dir": getattr(args, "run_dir", None),
         "config": None,
@@ -281,6 +468,16 @@ def _handoff_receipt(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_handoff(args: argparse.Namespace) -> int:
+    if str(getattr(args, "command", "")) == "collect":
+        positional = getattr(args, "config", None)
+        option = getattr(args, "config_option", None)
+        if positional and option:
+            print(json.dumps({"status": "BLOCKED", "errors": ["collect accepts one config path"], "runs_launched": False}, indent=2))
+            return 2
+        if option:
+            args.config = option
+        if not bool(getattr(args, "execute", False)):
+            return _cmd_collect(args)
     if bool(getattr(args, "execute", False)):
         return _cmd_execute(args)
     receipt = _handoff_receipt(args)
@@ -302,13 +499,37 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     if not args.run_dir:
         print(json.dumps({"status": "BLOCKED", "errors": ["--execute requires a new --run-dir"], "runs_launched": False}, indent=2))
         return 2
+    if str(args.command) in {"collect", "evaluate"} and getattr(args, "steps", None) is None:
+        print(json.dumps({
+            "status": "BLOCKED",
+            "errors": [f"--execute {args.command} requires explicit --steps; no horizon default is permitted"],
+            "runs_launched": False,
+        }, indent=2))
+        return 2
+    if str(args.command) == "evaluate" and int(args.steps) not in {280, 1200}:
+        print(json.dumps({
+            "status": "BLOCKED",
+            "errors": ["--execute evaluate accepts only the predeclared 280 or 1200 step horizons"],
+            "runs_launched": False,
+        }, indent=2))
+        return 2
+    if getattr(args, "steps", None) is not None and int(args.steps) < 1:
+        print(json.dumps({
+            "status": "BLOCKED",
+            "errors": ["--steps must be a positive integer"],
+            "runs_launched": False,
+        }, indent=2))
+        return 2
     try:
+        learned_inputs, learned_records = _learned_artifact_inputs(
+            str(args.policy), getattr(args, "input", None)
+        )
+        launch_identity = _launcher_identity_receipt()
+        # Pass canonical immutable paths to the native factory.  This is the
+        # exact contract consumed by native_legion_factory implementations:
+        # ``learned_artifacts=tuple(Path(...), ...)``.
+        args.input = list(learned_inputs)
         config, loaded = _load_config_bundle(args.config)
-        if args.policy in _LEARNED_POLICY_IDS and not list(getattr(args, "input", ()) or ()):
-            raise ContractError(
-                f"{args.policy} requires at least one --input learned checkpoint/runner artifact; "
-                "refusing a frozen-policy fallback"
-            )
         from .native_executor import execute_native, import_callable
         factory = import_callable(args.factory)
         default_steps = {"canary": 3, "evaluate": 1200, "collect": 60}.get(args.command, 3)
@@ -321,7 +542,11 @@ def _cmd_execute(args: argparse.Namespace) -> int:
             learned_artifacts=tuple(getattr(args, "input", ()) or ()),
             protocol_seal=loaded if loaded is not None and hasattr(loaded, "protocol_sha256") else None,
         )
-        print(json.dumps(receipt.to_dict(), indent=2, sort_keys=True, default=str))
+        output_receipt = receipt.to_dict()
+        output_receipt["learned_artifacts"] = learned_records
+        output_receipt["runtime_privileges"] = _runtime_privilege_receipt(str(args.policy))
+        output_receipt["launch_identity"] = launch_identity
+        print(json.dumps(output_receipt, indent=2, sort_keys=True, default=str))
         return 0 if receipt.status == "COMPLETED" else 2
     except (OSError, ValueError, json.JSONDecodeError, ContractError) as exc:
         print(json.dumps({"status": "BLOCKED", "errors": [str(exc)], "runs_launched": False}, indent=2))

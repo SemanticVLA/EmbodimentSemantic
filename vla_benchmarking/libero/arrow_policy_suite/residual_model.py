@@ -102,6 +102,9 @@ class ResidualBatch:
     episode_ids: tuple[str, ...]
     observation_digests: tuple[str, ...] = ()
     source_manifest_sha256: str | None = None
+    target_actions: tuple[tuple[float, ...], ...] = ()
+    label_masks: tuple[tuple[float, ...], ...] = ()
+    target_kind: str = "teacher_residual"
 
     def __post_init__(self) -> None:
         count = len(self.features)
@@ -120,6 +123,21 @@ class ResidualBatch:
                 raise ContractError("each residual row requires an episode id")
         if self.observation_digests and len(self.observation_digests) != count:
             raise ContractError("observation_digests must be empty or match row count")
+        if self.target_kind not in {"teacher_residual", "minimal_branch_residual"}:
+            raise ContractError("unsupported residual target kind")
+        if self.target_actions and len(self.target_actions) != count:
+            raise ContractError("target_actions must be empty or match row count")
+        if self.label_masks and len(self.label_masks) != count:
+            raise ContractError("label_masks must be empty or match row count")
+        for index in range(count):
+            if self.target_actions:
+                _as_finite_vector(self.target_actions[index], name=f"target_actions[{index}]", width=ACTION_DIM)
+            if self.label_masks:
+                mask = _as_finite_vector(self.label_masks[index], name=f"label_masks[{index}]", width=ACTION_DIM)
+                if any(value not in {0.0, 1.0} for value in mask):
+                    raise ContractError("label_masks must contain binary action ownership labels")
+        if self.target_kind == "minimal_branch_residual" and not self.target_actions:
+            raise ContractError("Minimal-Learned batches require branch target actions")
 
     @property
     def input_dim(self) -> int:
@@ -131,8 +149,9 @@ class ResidualBatch:
 
     @property
     def target_residuals(self) -> tuple[tuple[float, ...], ...]:
+        targets = self.target_actions or self.teacher_actions
         return tuple(
-            tuple(self.teacher_actions[row][col] - self.base_actions[row][col] for col in range(ACTION_DIM))
+            tuple(targets[row][col] - self.base_actions[row][col] for col in range(ACTION_DIM))
             for row in range(self.rows)
         )
 
@@ -144,6 +163,8 @@ class ResidualBatch:
             "episode_ids": sorted(set(self.episode_ids)),
             "source_manifest_sha256": self.source_manifest_sha256,
             "observation_digests": list(self.observation_digests),
+            "target_kind": self.target_kind,
+            "label_masks": [list(mask) for mask in self.label_masks],
         }
         encoded = json.dumps(_safe(payload), sort_keys=True, separators=(",", ":")).encode("utf-8")
         return {**payload, "content_sha256": hashlib.sha256(encoded).hexdigest()}
@@ -226,11 +247,20 @@ def residual_batch_from_rows(
     feature_fn: ResidualFeatureFn,
     *,
     source_manifest_sha256: str | None = None,
+    target_kind: str | None = None,
 ) -> ResidualBatch:
     """Create a residual batch while retaining source episode/action lineage."""
 
     if not rows:
         raise ContractError("cannot build a residual batch from zero rows")
+    resolved_kind = target_kind or ("minimal_branch_residual" if any(row.label_action is not None for row in rows) else "teacher_residual")
+    if any(row.target_kind != resolved_kind for row in rows):
+        raise ContractError("residual rows mix incompatible label sources")
+    if resolved_kind == "minimal_branch_residual":
+        if any(row.label_action is None for row in rows):
+            raise ContractError("Minimal-Learned rows require persisted branch action labels")
+    elif any(row.label_action is not None for row in rows):
+        raise ContractError("teacher residual batches cannot contain Minimal branch labels")
     features = tuple(tuple(float(value) for value in feature_fn(row)) for row in rows)
     return ResidualBatch(
         features=features,
@@ -239,6 +269,9 @@ def residual_batch_from_rows(
         episode_ids=tuple(row.episode_id for row in rows),
         observation_digests=tuple(str(row.metadata.get("observation_digest", "")) for row in rows),
         source_manifest_sha256=source_manifest_sha256,
+        target_actions=tuple(row.target_action for row in rows) if resolved_kind == "minimal_branch_residual" else (),
+        label_masks=tuple(row.label_mask for row in rows if row.label_mask is not None) if resolved_kind == "minimal_branch_residual" else (),
+        target_kind=resolved_kind,
     )
 
 

@@ -12,7 +12,8 @@
 #   ARROW_SUITE_CHECKPOINT, ARROW_SUITE_CONTROLLER, ARROW_SUITE_PYTHON,
 #   ARROW_SUITE_HF_CACHE (provide both explicitly for teacher-dependent policies),
 #   ARROW_SUITE_GRAPH_CONTEXT_REVISION, ARROW_SUITE_TRACE_GEOMETRY_VARIANT,
-#   ARROW_SUITE_GRAPH_FACTORY, and policy-specific Fast/Trace artifact inputs.
+#   ARROW_SUITE_GRAPH_FACTORY, ARROW_SUITE_LEARNED_ARTIFACTS (one learned
+#   checkpoint/bundle path), and policy-specific Fast/Trace inputs.
 # Engineering-only environment smoke (no config/factory required):
 #   ARROW_SUITE_ENGINEERING_SMOKE=1
 
@@ -39,6 +40,11 @@ for name in ARROW_SUITE_RUN_ROOT ARROW_SUITE_ARCHIVE_ROOT; do
   value="${!name}"
   [[ "$value" = /* && "$value" != / && ! -L "$value" ]] || die "$name must be a non-root absolute non-symlink path"
 done
+for name in ARROW_SUITE_TASK_ID ARROW_SUITE_SEED ARROW_SUITE_INIT_STATE_INDEX; do
+  if [[ -n "${!name:-}" ]]; then
+    [[ "${!name}" =~ ^[0-9]+$ ]] || die "$name must be a non-negative integer"
+  fi
+done
 command -v realpath >/dev/null 2>&1 || die 'realpath is required'
 command -v git >/dev/null 2>&1 || die 'git is required'
 
@@ -64,14 +70,58 @@ fi
 
 ENGINEERING_SMOKE="${ARROW_SUITE_ENGINEERING_SMOKE:-0}"
 operation="${ARROW_SUITE_OPERATION:-canary}"
+learned_artifacts=()
+if [[ -n "${ARROW_SUITE_LEARNED_ARTIFACTS:-}" ]]; then
+  IFS=: read -r -a learned_artifacts <<< "$ARROW_SUITE_LEARNED_ARTIFACTS"
+fi
+
+validate_immutable_learned_file() {
+  local label="$1" path="$2"
+  [[ "$path" =~ ^/[A-Za-z0-9_./-]+$ && "$path" != *'/../'* && "$path" != */.. ]] || \
+    die "$label must be a safe absolute Linux path"
+  [[ ! -L "$path" && -f "$path" ]] || die "$label must be an existing immutable regular file: $path"
+}
+
+validate_immutable_apprentice_bundle() {
+  local path="$1" manifest payload_count=0 entry
+  [[ "$path" =~ ^/[A-Za-z0-9_./-]+$ && "$path" != *'/../'* && "$path" != */.. ]] || \
+    die 'Apprentice learned artifact must be a safe absolute Linux path'
+  [[ ! -L "$path" && -d "$path" ]] || die "Apprentice learned artifact must be an immutable directory bundle: $path"
+  manifest="$path/apprentice_manifest.json"
+  [[ ! -L "$manifest" && -s "$manifest" ]] || die "Apprentice bundle manifest is missing or empty: $manifest"
+  payload_count=0
+  while IFS= read -r -d '' entry; do
+    [[ ! -L "$entry" ]] || die "Apprentice bundle contains a symlink: $entry"
+    if [[ -f "$entry" && "$entry" != "$manifest" ]]; then
+      payload_count=$((payload_count + 1))
+    fi
+  done < <(find "$path" -mindepth 1 -print0)
+  ((payload_count > 0)) || die "Apprentice bundle payload is empty: $path"
+}
+
 if [[ "$ENGINEERING_SMOKE" != 1 ]]; then
   for name in ARROW_SUITE_CONFIG ARROW_SUITE_FACTORY ARROW_SUITE_POLICY; do
     [[ -n "${!name:-}" ]] || die "$name is required outside engineering smoke"
   done
   case "$ARROW_SUITE_POLICY" in
-    teacher_only|arrow_together|arrow_on_call|arrow_apprentice|arrow_editor|arrow_minimal|arrow_minimal_runtime|arrow_minimal_learned|arrow_fast)
+    teacher_only|arrow_together|arrow_on_call|arrow_minimal|arrow_minimal_runtime|arrow_fast)
       [[ -n "${ARROW_SUITE_PYTHON:-}" && -n "${ARROW_SUITE_HF_CACHE:-}" ]] || \
         die 'teacher-dependent policies require explicit ARROW_SUITE_PYTHON and ARROW_SUITE_HF_CACHE'
+      ;;
+  esac
+  case "$ARROW_SUITE_POLICY" in
+    arrow_apprentice|arrow_editor|arrow_minimal_learned)
+      ((${#learned_artifacts[@]} == 1)) || die "$ARROW_SUITE_POLICY requires exactly one learned artifact; refusing a frozen-policy fallback"
+      learned_artifact="${learned_artifacts[0]}"
+      if [[ "$ARROW_SUITE_POLICY" == arrow_apprentice ]]; then
+        validate_immutable_apprentice_bundle "$learned_artifact"
+      else
+        validate_immutable_learned_file 'learned artifact' "$learned_artifact"
+        validate_immutable_learned_file 'learned artifact sidecar' "${learned_artifact}.json"
+      fi
+      ;;
+    *)
+      ((${#learned_artifacts[@]} == 0)) || die 'learned artifacts are only valid for Apprentice, Editor, and Minimal-Learned policies'
       ;;
   esac
   case "$ARROW_SUITE_POLICY" in
@@ -270,7 +320,17 @@ if [[ "$ENGINEERING_SMOKE" != 1 && -n "${ARROW_SUITE_CONTROLLER:-}" ]]; then
   [[ "$ARROW_SUITE_CONTROLLER_HASH" =~ ^[0-9a-f]{64}$ ]] || die 'resolved controller config hash is invalid'
 fi
 
+if [[ "$ENGINEERING_SMOKE" != 1 && "$operation" == collect && -z "${ARROW_SUITE_STEPS:-}" ]]; then
+  die 'ARROW_SUITE_STEPS is required explicitly for collect; refusing a hidden horizon default'
+fi
+if [[ "$ENGINEERING_SMOKE" != 1 && "$operation" == evaluate && -z "${ARROW_SUITE_STEPS:-}" ]]; then
+  die 'ARROW_SUITE_STEPS is required explicitly for evaluate; refusing a hidden horizon default'
+fi
 steps="${ARROW_SUITE_STEPS:-3}"
+[[ "$steps" =~ ^[1-9][0-9]{0,3}$ && "$steps" -le 1200 ]] || die 'ARROW_SUITE_STEPS must be between 1 and 1200'
+if [[ "$ENGINEERING_SMOKE" != 1 && "$operation" == evaluate && "$steps" != 280 && "$steps" != 1200 ]]; then
+  die 'evaluate accepts only the predeclared 280 or 1200 step horizons'
+fi
 output="${ARROW_SUITE_OUTPUT:-$RUN_ROOT/execution_receipt.json}"
 [[ "$output" = /* && "$output" != *'/../'* && "$output" != */.. ]] || die 'ARROW_SUITE_OUTPUT must be a safe absolute Linux path'
 output="$(realpath -m -- "$output")"
@@ -309,6 +369,9 @@ args=( -m vla_benchmarking.libero.arrow_policy_suite.cli "$operation"
   --run-dir "$RUN_ROOT/native_run" --output "$output" --steps "$steps" --execute )
 [[ -n "${ARROW_SUITE_CHECKPOINT:-}" ]] && args+=(--checkpoint "$ARROW_SUITE_CHECKPOINT")
 [[ -n "${ARROW_SUITE_CONTROLLER:-}" ]] && args+=(--controller "$ARROW_SUITE_CONTROLLER")
+for learned_artifact in "${learned_artifacts[@]}"; do
+  args+=(--input "$learned_artifact")
+done
 [[ -n "${ARROW_SUITE_GRAPH_CONTEXT_REVISION:-}" ]] && args+=(--graph-context-revision "$ARROW_SUITE_GRAPH_CONTEXT_REVISION")
 [[ -n "${ARROW_SUITE_TRACE_GEOMETRY_VARIANT:-}" ]] && args+=(--trace-geometry-variant "$ARROW_SUITE_TRACE_GEOMETRY_VARIANT")
 "$PYTHON" "${args[@]}" | tee "$RUN_ROOT/cli_stdout.log"

@@ -12,7 +12,7 @@ from itertools import product
 import inspect
 from typing import Any, Callable, Mapping, Sequence
 
-from .contracts import ActionProposal, ObservationFrame, PolicyDecision, ResidualFn, StepRecord, clip_action
+from .contracts import ActionProposal, ContractError, ObservationFrame, PolicyDecision, ResidualFn, StepRecord, clip_action
 from .runtime import ProgressTracker
 
 
@@ -419,6 +419,17 @@ class MinimalPolicy(_BasePolicy):
         if teacher is None:
             return _policy_decision(frame, base.action, self.policy_id,
                                     metadata={"variant": self.variant, "teacher_available": False})
+        if (self.branch_runner is None
+                or not callable(getattr(self.branch_runner, "run_all", None))
+                or getattr(self.branch_runner, "is_real", False) is not True):
+            raise ContractError(
+                "Minimal-Runtime requires a real branch runner; refusing full-teacher fallback"
+            )
+        if int(getattr(self.branch_runner, "horizon", 20)) != 20:
+            raise ContractError("Minimal-Runtime branch horizon must be exactly 20")
+        configured_masks = tuple(getattr(self.branch_runner, "masks", tuple(range(8))))
+        if configured_masks != tuple(range(8)):
+            raise ContractError("Minimal-Runtime must evaluate exactly the eight action-group masks")
         # A selected mask is a real 20-action burst.  The coordinator still
         # owns each step; this policy only reuses the selected ownership mask.
         if self._active_mask is not None and self._burst_remaining > 0:
@@ -439,7 +450,13 @@ class MinimalPolicy(_BasePolicy):
         elif self.branch_runner is not None:
             results = tuple(self.branch_runner.run_all())
             if len(results) != 8:
-                raise ValueError("Minimal-Runtime must evaluate exactly eight masks")
+                raise ContractError("Minimal-Runtime must evaluate exactly eight masks")
+            if tuple(int(result.mask) for result in results) != tuple(range(8)):
+                raise ContractError("Minimal-Runtime branch runner returned the wrong mask set")
+            if any(int(result.metadata.get("fresh_proposals", len(result.actions))) != len(result.actions)
+                   or int(result.metadata.get("fresh_actions", len(result.actions))) != len(result.actions)
+                   for result in results):
+                raise ContractError("Minimal-Runtime requires one fresh proposal/action per branch step")
             candidates = [result for result in results if bool(result.metadata.get("sufficient", False))]
             if candidates:
                 chosen = min(
@@ -458,6 +475,7 @@ class MinimalPolicy(_BasePolicy):
             cloned_steps = sum(int(result.metadata.get("cloned_steps", len(result.actions))) for result in results)
             branch_metadata = {
                 "branch_steps": cloned_steps,
+                "branch_cloned_steps": cloned_steps,
                 "branch_masks_evaluated": len(results),
                 "branch_fallback": chosen is None,
                 "branch_selected_mask": chosen.mask if chosen is not None else 7,
@@ -466,26 +484,11 @@ class MinimalPolicy(_BasePolicy):
             self._active_mask = tuple(mask)
             self._burst_remaining = 20
             self._last_branch_metadata = dict(branch_metadata)
-        elif self.decisions >= self.max_decisions or self.branch_evaluator is None:
+        elif self.decisions >= self.max_decisions:
             mask = self.GROUPS
             outcome = None
-            branch_metadata = {"branch_steps": 0, "branch_masks_evaluated": 0, "branch_fallback": True}
-        else:
-            outcomes: list[tuple[tuple[str, ...], BranchOutcome]] = []
-            for mask in self.masks():
-                outcome = self.branch_evaluator(frame, base, teacher, mask, 20)
-                if outcome.sufficient:
-                    outcomes.append((mask, outcome))
-            if outcomes:
-                mask, outcome = min(outcomes, key=lambda pair: (len(pair[0]), -pair[1].progress, pair[0]))
-            else:
-                mask, outcome = self.GROUPS, None
-            branch_metadata = {
-                "branch_steps": 20,
-                "branch_masks_evaluated": 8,
-                "branch_fallback": not bool(outcomes),
-                "branch_selected_mask": self.GROUPS,
-            }
+            branch_metadata = {"branch_steps": 0, "branch_masks_evaluated": 0, "branch_fallback": True,
+                               "branch_cloned_steps": 0, "branch_fallback_reason": "decision_cap"}
         self.decisions += 1
         action = self._apply_mask(base.action, teacher.action, mask)
         metadata = {"variant": "runtime_oracle", "branch_steps": 20 if self.branch_runner is None else int(branch_metadata.get("branch_steps", 0)),

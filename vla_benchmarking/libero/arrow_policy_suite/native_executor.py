@@ -17,6 +17,7 @@ import subprocess
 from typing import Any, Callable, Mapping
 
 from .artifacts import write_json_artifact
+from .collection import TrainingSourceWriter
 from .config import ProtocolSeal, StudyConfig
 from .contracts import ContractError
 from .native_host import NativeHost
@@ -195,6 +196,21 @@ def production_preflight(
             raise ContractError("arrow_minimal_learned host lacks its learned variant")
         if not callable(getattr(host.policy, "learned_fn", None)) and not callable(getattr(host.policy, "residual_fn", None)):
             raise ContractError("arrow_minimal_learned host lacks a loaded action/residual runner hook")
+    if policy_id == "arrow_minimal_runtime":
+        if getattr(host.policy, "policy_id", None) != "arrow_minimal" or getattr(host.policy, "variant", None) != "runtime_oracle":
+            raise ContractError("arrow_minimal_runtime host lacks its runtime policy")
+        branch_runner = getattr(host.policy, "branch_runner", None)
+        if branch_runner is None or not callable(getattr(branch_runner, "run_all", None)):
+            raise ContractError("arrow_minimal_runtime requires a real branch runner")
+        if getattr(branch_runner, "is_real", False) is not True:
+            raise ContractError("arrow_minimal_runtime branch runner is not a real sandbox")
+        if (getattr(branch_runner, "composite_snapshot", None) is None
+                and getattr(branch_runner, "require_state_isolation", False) is not True):
+            raise ContractError("arrow_minimal_runtime requires composite VLA/teacher/policy/RNG isolation")
+        if int(getattr(branch_runner, "horizon", 0)) != 20:
+            raise ContractError("arrow_minimal_runtime branch horizon must be exactly 20")
+        if tuple(getattr(branch_runner, "masks", ())) != tuple(range(8)):
+            raise ContractError("arrow_minimal_runtime requires all eight action-group masks")
     if policy_id == "arrow_fast":
         corrector = getattr(host.policy, "corrector", None)
         if learned_policy != "arrow_fast" or not callable(getattr(corrector, "correction", None)):
@@ -263,6 +279,45 @@ def _resolve_host(factory: Callable[..., Any], **kwargs: Any) -> NativeHost:
     raise ContractError("native factory must return NativeHost or {'host': NativeHost}")
 
 
+def _native_identity(host: NativeHost, *, operation: str) -> dict[str, Any]:
+    """Resolve explicit Legion task/reset identity; never invent scored IDs."""
+    required = ("task_id", "seed", "init_state_index")
+    missing = [name for name in required if not hasattr(host, name) or getattr(host, name) in (None, "")]
+    if missing and operation in {"collect", "evaluate"}:
+        raise ContractError(
+            f"native {operation} requires explicit host identity fields: {', '.join(missing)}"
+        )
+    if missing:
+        return {}
+    task_id = getattr(host, "task_id")
+    seed = getattr(host, "seed")
+    init_state_index = getattr(host, "init_state_index")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ContractError("native host seed must be a non-negative integer")
+    if isinstance(init_state_index, bool) or not isinstance(init_state_index, int) or init_state_index < 0:
+        raise ContractError("native host init_state_index must be a non-negative integer")
+    if isinstance(task_id, bool) or task_id in (None, ""):
+        raise ContractError("native host task_id is required")
+    reset_identity = getattr(host, "reset_identity", None)
+    reset_digest = getattr(reset_identity, "digest", None) if reset_identity is not None else None
+    episode_id = getattr(reset_identity, "episode_id", None) if reset_identity is not None else None
+    # Native LIBERO hosts expose the explicit init-state index rather than a
+    # ResetIdentity object.  This is an identity from the launcher, not a
+    # generated reset token or the protocol seal digest.
+    reset_id = str(reset_digest) if reset_digest else f"init_state_index:{init_state_index}"
+    episode_id = str(episode_id) if episode_id else f"task-{task_id}-seed-{seed}-init-{init_state_index}"
+    resolved: dict[str, Any] = {
+        "task_id": task_id,
+        "seed": seed,
+        "init_state_index": init_state_index,
+        "reset_id": reset_id,
+        "episode_id": episode_id,
+    }
+    if reset_digest:
+        resolved["reset_identity_sha256"] = str(reset_digest)
+    return resolved
+
+
 def execute_native(
     factory: Callable[..., Any], *,
     config: StudyConfig,
@@ -277,6 +332,7 @@ def execute_native(
     controller: str | Path | None = None,
     learned_artifacts: tuple[str, ...] = (),
     protocol_seal: ProtocolSeal | None = None,
+    training_source: str | Path | None = None,
 ) -> NativeExecutionReceipt:
     if operation not in {"canary", "collect", "evaluate"}:
         raise ContractError(
@@ -319,6 +375,16 @@ def execute_native(
             graph_context_revision=graph_context_revision,
             trace_geometry_variant=trace_geometry_variant,
         )
+        run_identity = _native_identity(host, operation=operation)
+        if run_identity:
+            manifest["identity"] = dict(run_identity)
+            manifest.update({
+                "task_id": run_identity["task_id"],
+                "seed": run_identity["seed"],
+                "init_state_index": run_identity["init_state_index"],
+                "reset_id": run_identity["reset_id"],
+                "episode_id": run_identity["episode_id"],
+            })
         records = host.run(max_steps=int(max_steps), reset_environment=False)
         manifest["preflight"] = preflight
         manifest["steps"] = len(records)
@@ -330,6 +396,32 @@ def execute_native(
              "action": list(item.action), "teacher_available": item.teacher_status.available}
             for item in records
         ]
+        if operation == "collect":
+            # _native_identity is mandatory for collect/evaluate, so rows can
+            # never be attributed to an unknown or protocol-seal-derived reset.
+            identity_payload: Mapping[str, Any] = run_identity
+            source_path = Path(training_source) if training_source is not None else target / "training_source.jsonl"
+            source_writer = TrainingSourceWriter(source_path)
+            source_hashes = {
+                "config_sha256": manifest["config_sha256"],
+                "identity_seal_sha256": manifest["identity_seal_sha256"],
+                "protocol_seal_sha256": manifest["protocol_seal_sha256"],
+                "checkpoint_sha256": manifest["checkpoint_sha256"],
+                "controller_sha256": manifest["controller_sha256"],
+            }
+            rows = [source_writer.append(
+                item, identity=identity_payload, source_hashes=source_hashes,
+                episode_success=bool(manifest["success"]),
+                episode_complete=bool(manifest["terminal"]),
+            )
+                    for item in records]
+            manifest["training_source"] = {
+                "schema": "arrow_policy_suite.training_source.v1",
+                "path": str(source_path),
+                "sha256": source_writer.sha256(),
+                "rows": len(rows),
+                "eligible_rows": sum(bool(row.get("eligible", False)) for row in rows),
+            }
         manifest_path = target / "run_manifest.json"
         write_json_artifact(manifest_path, manifest, kind="native-run-manifest",
                             lineage=tuple(value for value in (manifest["config_sha256"], manifest["identity_seal_sha256"]) if value))

@@ -47,7 +47,10 @@ def test_native_minimal_checkpoint_is_teacher_free_and_reloadable(tmp_path):
     pytest.importorskip("torch")
     from arrow_policy_suite.learning import InterventionRow
     rows = (InterventionRow("ep", 0, 0, {"state": [0.0] * 8}, (0.0,) * 7,
-                            (0.2,) + (0.0,) * 6, False),)
+                            (0.2,) + (0.0,) * 6, False, source="minimal_branch",
+                            label_action=(0.1,) + (0.0,) * 6,
+                            label_mask=(1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0),
+                            label_source="minimal_branch_runtime"),)
     manifest = manifest_for_rows(rows, parent_artifact="on-call-archive-sha")
     receipt = train_minimal_learned(rows, output_path=tmp_path / "minimal.pt",
                                     base_vla_sha256="c" * 64, manifest=manifest)
@@ -70,7 +73,10 @@ def test_native_policy_factory_loads_editor_and_minimal_artifacts(tmp_path):
     pytest.importorskip("torch")
     from arrow_policy_suite.learning import InterventionRow
     rows = (InterventionRow("ep", 0, 0, {"state": [0.0] * 8}, (0.0,) * 7,
-                            (0.2,) + (0.0,) * 6, False),)
+                            (0.2,) + (0.0,) * 6, False, source="minimal_branch",
+                            label_action=(0.1,) + (0.0,) * 6,
+                            label_mask=(1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0),
+                            label_source="minimal_branch_runtime"),)
     manifest = manifest_for_rows(rows, parent_artifact="on-call-archive-sha")
     editor_path = tmp_path / "editor.pt"
     train_minimal_learned(rows, output_path=editor_path, base_vla_sha256="d" * 64, manifest=manifest)

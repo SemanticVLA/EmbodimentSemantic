@@ -58,7 +58,10 @@ from .native_runtime import (
 )
 from .config import FrozenStudyManifest, ProtocolSeal, StudyConfig
 from .native_factory import NativeHostSpec, action_selector_for, build_native_host, build_policy
-from .native_legion_factory import build_host as build_native_legion_host
+from .native_legion_factory import (
+    build_host as build_native_legion_host,
+    build_minimal_branch_runner,
+)
 from .native_arrow_teacher import PerFrameArrowTeacher, build_rgbd_perception
 from .native_executor import NativeExecutionReceipt, execute_native, import_callable, production_preflight
 from .benchmark import (
@@ -105,7 +108,7 @@ __all__ = [
     "run_native_canary", "run_native_host_canary",
     "StudyConfig", "FrozenStudyManifest", "ProtocolSeal", "NativeHostSpec", "action_selector_for",
     "build_native_host", "build_policy", "NativeExecutionReceipt", "execute_native", "import_callable",
-    "production_preflight", "build_native_legion_host", "PerFrameArrowTeacher", "build_rgbd_perception", "DEFAULT_CASES", "EvaluationRow", "PolicyCase", "evaluate_suite",
+    "production_preflight", "build_native_legion_host", "build_minimal_branch_runner", "PerFrameArrowTeacher", "build_rgbd_perception", "DEFAULT_CASES", "EvaluationRow", "PolicyCase", "evaluate_suite",
     "evaluate_paired_suite", "rank_rows", "row_from_result", "AttemptIdentity",
     "CollectionAttempt", "CollectionManifest", "CollectionArchive", "MasterLogWriter", "TraceEpisode",
     "TraceView", "collect_on_call", "derive_trace_view", "make_collection_archive", "write_collection_archive", "write_master_log",

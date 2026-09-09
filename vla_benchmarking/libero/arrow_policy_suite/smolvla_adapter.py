@@ -460,6 +460,8 @@ class SmolVLAAdapter:
         task_description: str | None = None,
         producer: str = "smolvla",
         force_single_action_step: bool = False,
+        base_vla_sha256: str | None = None,
+        checkpoint_path: str | None = None,
     ) -> None:
         if policy is None and inference is None:
             raise TypeError("SmolVLAAdapter requires an injected policy or inference callable")
@@ -471,6 +473,11 @@ class SmolVLAAdapter:
         self.postprocessor = postprocessor
         self.task_description = task_description
         self.producer = producer
+        # Provenance is intentionally explicit and inert: the adapter does
+        # not derive or mutate these identities, while native factories can
+        # bind learned artifacts to the exact frozen base they loaded.
+        self.base_vla_sha256 = base_vla_sha256
+        self.checkpoint_path = checkpoint_path
         self._pending: deque[tuple[float, ...]] = deque()
         self._chunk_id = 0
         self._chunk_horizon = 0
@@ -505,6 +512,7 @@ class SmolVLAAdapter:
         device: str = "cuda",
         task_description: str | None = None,
         producer: str = "smolvla",
+        base_vla_sha256: str | None = None,
     ) -> "SmolVLAAdapter":
         """Load the repository's pinned local SmolVLA stack on demand.
 
@@ -532,6 +540,8 @@ class SmolVLAAdapter:
             task_description=task_description,
             producer=producer,
             force_single_action_step=True,
+            base_vla_sha256=base_vla_sha256,
+            checkpoint_path=str(checkpoint),
         )
 
     def reset(self) -> None:

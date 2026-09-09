@@ -14,10 +14,13 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from .contracts import ContractError, StepRecord, _safe, clip_action, state8
+from .contracts import ContractError, StepRecord, _safe, clip_action, digest as observation_digest, state8
 
 TRANSITION_SCHEMA = "arrow_policy_suite.interventions.v2"
 DATASET_VIEW_SCHEMA = "arrow_policy_suite.dataset_view.v1"
+PERSISTED_TRAINING_SCHEMA = "arrow_policy_suite.training_transitions.v1"
+MINIMAL_BRANCH_SCHEMA = "arrow_policy_suite.minimal_branch_labels.v1"
+_SHA256 = 64
 
 
 def _canonical(value: Any) -> bytes:
@@ -64,15 +67,41 @@ class InterventionRow:
     source: str = "on_call_teacher"
     metadata: Mapping[str, Any] = field(default_factory=dict)
     outcome: Mapping[str, Any] = field(default_factory=dict)
+    reset_id: str = ""
+    executed_action: tuple[float, ...] | None = None
+    observation_sha256: str = ""
+    transition_sha256: str = ""
+    label_action: tuple[float, ...] | None = None
+    label_mask: tuple[float, ...] | None = None
+    label_source: str = ""
 
     def __post_init__(self) -> None:
+        if not isinstance(self.observation, Mapping):
+            raise ContractError("intervention observation must be a mapping")
         _safe(self.observation)
         object.__setattr__(self, "base_action", clip_action(self.base_action))
         object.__setattr__(self, "teacher_action", clip_action(self.teacher_action))
+        if self.executed_action is not None:
+            object.__setattr__(self, "executed_action", clip_action(self.executed_action))
+        if self.label_action is not None:
+            object.__setattr__(self, "label_action", clip_action(self.label_action))
+            if not self.label_source:
+                raise ContractError("label_action requires a non-empty label_source")
+        if self.label_mask is not None:
+            mask = tuple(float(value) for value in self.label_mask)
+            if len(mask) != 7 or any(value not in {0.0, 1.0} for value in mask):
+                raise ContractError("label_mask must contain exactly seven binary values")
+            object.__setattr__(self, "label_mask", mask)
         if self.timestep < 0 or not self.episode_id:
             raise ContractError("invalid intervention row")
-        if self.source != "on_call_teacher":
-            raise ContractError("intervention rows must come from Arrow On-Call")
+        if self.reset_id is not None and not isinstance(self.reset_id, str):
+            raise ContractError("reset_id must be a string when supplied")
+        if self.source not in {"on_call_teacher", "minimal_branch"}:
+            raise ContractError("intervention rows must come from On-Call or Minimal runtime")
+        for value, name in ((self.observation_sha256, "observation_sha256"),
+                            (self.transition_sha256, "transition_sha256")):
+            if value and (len(value) != _SHA256 or value.lower() != value or any(c not in "0123456789abcdef" for c in value)):
+                raise ContractError(f"{name} must be a lowercase SHA-256 when supplied")
         _safe(self.metadata)
         _safe(self.outcome)
 
@@ -83,6 +112,15 @@ class InterventionRow:
     @property
     def executed_teacher(self) -> bool:
         return True
+
+    @property
+    def target_action(self) -> tuple[float, ...]:
+        """The label consumed by a residual learner, never an online teacher."""
+        return self.label_action if self.label_action is not None else self.teacher_action
+
+    @property
+    def target_kind(self) -> str:
+        return "minimal_branch_residual" if self.label_action is not None else "teacher_residual"
 
     def as_dict(self) -> dict[str, Any]:
         return _safe(self.__dict__)
@@ -100,7 +138,7 @@ class DatasetManifest:
     outcome_counts: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema not in {TRANSITION_SCHEMA, "arrow_policy_suite.interventions.v1"}:
+        if self.schema not in {TRANSITION_SCHEMA, "arrow_policy_suite.interventions.v1", PERSISTED_TRAINING_SCHEMA}:
             raise ContractError(f"unsupported dataset manifest schema: {self.schema}")
         if self.rows < 0 or not self.parent_artifact or not self.filter_name:
             raise ContractError("dataset manifest requires non-negative rows, parent, and filter")
@@ -178,9 +216,11 @@ def intervention_rows(
                           "policy": _record_policy_family(record),
                           "source_policy_family": "arrow_on_call",
                           "teacher_groups": list(getattr(record.decision, "teacher_groups", ())),
-                          "decision_metadata": decision_metadata,
-                          "cost": dict(getattr(record, "metadata", {}).get("cost", {}))},
-                outcome=outcome,
+                           "decision_metadata": decision_metadata,
+                           "cost": dict(getattr(record, "metadata", {}).get("cost", {}))},
+                outcome=outcome, reset_id=str(record.frame.metadata.get("reset_id", "")),
+                executed_action=tuple(getattr(record.decision, "action", record.teacher.action)),
+                observation_sha256=record.frame.digest,
             ))
     return tuple(sorted(rows, key=lambda row: (str(row.episode_id), row.timestep)))
 
@@ -205,8 +245,10 @@ def manifest_for_rows(rows: Sequence[InterventionRow], *, parent_artifact: str,
         raise ContractError("learning manifest requires a parent master artifact")
     ordered = tuple(sorted(rows, key=lambda row: (str(row.episode_id), row.timestep)))
     for row in ordered:
-        if row.source != "on_call_teacher" or row.metadata.get("source_policy_family", "arrow_on_call") != "arrow_on_call":
+        if row.source == "on_call_teacher" and row.metadata.get("source_policy_family", "arrow_on_call") != "arrow_on_call":
             raise ContractError("learning rows must remain executed On-Call teacher transitions")
+        if row.source == "minimal_branch" and not row.label_action:
+            raise ContractError("Minimal training rows require an explicit branch target action")
     content_hash = hashlib.sha256(_canonical([row.as_dict() for row in ordered])).hexdigest()
     counts = {"success": sum(bool(row.success_episode) for row in ordered),
               "failure": sum(not bool(row.success_episode) for row in ordered)}
@@ -261,6 +303,11 @@ def fit_with_callback(rows: Sequence[InterventionRow], fitter: Callable[[Sequenc
         for row in rows:
             if row.source != "on_call_teacher" or row.metadata.get("source_policy_family", "arrow_on_call") != "arrow_on_call":
                 raise ContractError(f"{policy} rows must remain executed On-Call teacher transitions")
+    if policy == "arrow_minimal_learned":
+        if manifest is None or manifest.rows != len(rows):
+            raise ContractError("arrow_minimal_learned rows do not match the source dataset manifest")
+        if any(row.source != "minimal_branch" or row.label_action is None for row in rows):
+            raise ContractError("Minimal-Learned requires persisted branch action labels")
     result = fitter(tuple(rows))
     cost = {"offline_rows": len(rows), "offline_episodes": len({r.episode_id for r in rows}),
             "success_rows": sum(bool(r.success_episode) for r in rows),
@@ -274,8 +321,314 @@ def fit_with_callback(rows: Sequence[InterventionRow], fitter: Callable[[Sequenc
     return payload
 
 
+@dataclass(frozen=True)
+class PersistedTrainingView:
+    """Strict, deterministic view over an immutable runtime artifact."""
+
+    path: str
+    rows: tuple[InterventionRow, ...]
+    manifest: DatasetManifest
+    source_sha256: str
+    filter_name: str
+    rejected: Mapping[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.manifest.rows != len(self.rows):
+            raise ContractError("persisted training manifest row count mismatch")
+        if len(self.source_sha256) != _SHA256 or self.source_sha256.lower() != self.source_sha256 or any(c not in "0123456789abcdef" for c in self.source_sha256):
+            raise ContractError("persisted training source hash must be a lowercase SHA-256")
+        if not self.filter_name:
+            raise ContractError("persisted training filter_name is required")
+        _safe(self.rejected)
+
+
+def _hash_field(value: Any, *, name: str, required: bool = False) -> str:
+    if value in (None, ""):
+        if required:
+            raise ContractError(f"persisted transition requires {name}")
+        return ""
+    result = str(value)
+    if len(result) != _SHA256 or result.lower() != result or any(c not in "0123456789abcdef" for c in result):
+        raise ContractError(f"persisted transition {name} must be a lowercase SHA-256")
+    return result
+
+
+def _action_field(value: Any, *, name: str, required: bool = True) -> tuple[float, ...] | None:
+    if value is None:
+        if required:
+            raise ContractError(f"persisted transition requires {name}")
+        return None
+    try:
+        return clip_action(value)
+    except (TypeError, ValueError) as exc:
+        raise ContractError(f"persisted transition {name} must be a seven-value action") from exc
+
+
+def _minimal_mask(value: Any) -> tuple[float, ...]:
+    if isinstance(value, bool):
+        raise ContractError("Minimal branch mask cannot be boolean")
+    if isinstance(value, int):
+        if value < 0 or value > 7:
+            raise ContractError("Minimal branch mask integer must be in [0, 7]")
+        return tuple(
+            float(bool(value & 1)) for _ in range(3)
+        ) + tuple(float(bool(value & 2)) for _ in range(3)) + (float(bool(value & 4)),)
+    if isinstance(value, Mapping):
+        groups = {str(key): bool(item) for key, item in value.items()}
+        return tuple(float(groups.get(group, False)) for group in ("translation", "translation", "translation", "rotation", "rotation", "rotation", "gripper"))
+    try:
+        values = tuple(float(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise ContractError("Minimal branch mask must be an integer, mapping, or binary vector") from exc
+    if len(values) == 3:
+        values = (values[0], values[0], values[0], values[1], values[1], values[1], values[2])
+    if len(values) != 7 or any(item not in {0.0, 1.0} for item in values):
+        raise ContractError("Minimal branch mask must expand to seven binary values")
+    return values
+
+
+def _source_and_context(raw: Mapping[str, Any], attempt: Mapping[str, Any] | None) -> tuple[str, Mapping[str, Any]]:
+    source = raw.get("source", raw.get("source_policy", ""))
+    if not source and attempt is not None:
+        source = attempt.get("source", "")
+    return str(source), attempt or {}
+
+
+def _row_from_persisted(raw: Mapping[str, Any], *, attempt: Mapping[str, Any] | None,
+                        variant: str, source_path: str) -> InterventionRow:
+    if not isinstance(raw, Mapping):
+        raise ContractError("persisted transition row must be an object")
+    schema = str(raw.get("schema", ""))
+    source, context = _source_and_context(raw, attempt)
+    task_id = raw.get("task_id", context.get("task_id"))
+    reset_id = raw.get("reset_id", context.get("reset_id"))
+    episode_id = raw.get("episode_id", context.get("episode_id"))
+    if task_id in (None, "") or reset_id in (None, "") or episode_id in (None, ""):
+        raise ContractError("persisted transition requires task_id, reset_id, and episode_id")
+    timestep = raw.get("timestep", raw.get("step"))
+    if isinstance(timestep, bool) or timestep is None:
+        raise ContractError("persisted transition requires a non-negative timestep")
+    try:
+        timestep = int(timestep)
+    except (TypeError, ValueError) as exc:
+        raise ContractError("persisted transition timestep must be an integer") from exc
+    if timestep < 0:
+        raise ContractError("persisted transition timestep must be non-negative")
+    observation = raw.get("observation")
+    if not isinstance(observation, Mapping):
+        raise ContractError("persisted transition requires an observation mapping")
+    state8(observation)
+    hashes = raw.get("hashes", {})
+    if hashes and not isinstance(hashes, Mapping):
+        raise ContractError("persisted transition hashes must be an object")
+    obs_hash = _hash_field(raw.get("observation_digest", raw.get("observation_sha256", raw.get("observation_hash", hashes.get("observation_sha256", hashes.get("observation_hash", hashes.get("observation")))))), name="observation_digest", required=True)
+    if observation_digest(observation) != obs_hash:
+        raise ContractError("persisted observation_digest does not match observation bytes")
+    transition_hash = _hash_field(raw.get("transition_sha256", raw.get("transition_hash", hashes.get("transition_sha256", hashes.get("transition_hash", hashes.get("transition"))))), name="transition_sha256")
+    base_value = raw.get("base_action", raw.get("base_proposal"))
+    if isinstance(base_value, Mapping):
+        base_value = base_value.get("action")
+    base_action = _action_field(base_value, name="base_action")
+    teacher = raw.get("teacher", raw.get("teacher_proposal"))
+    if teacher is not None and not isinstance(teacher, Mapping):
+        raise ContractError("persisted teacher must be an object")
+    teacher_action = _action_field(raw.get("teacher_action", teacher.get("action") if teacher else None), name="teacher_action", required=variant == "arrow_editor")
+    decision = raw.get("decision", {})
+    if decision and not isinstance(decision, Mapping):
+        raise ContractError("persisted decision must be an object")
+    executed_value = raw.get("executed_action", raw.get("executed", decision.get("action") if decision else None))
+    if isinstance(executed_value, Mapping):
+        executed_value = executed_value.get("action")
+    executed_action = _action_field(executed_value, name="executed_action")
+    outcome = raw.get("outcome", {})
+    if not isinstance(outcome, Mapping):
+        raise ContractError("persisted outcome must be an object")
+    success = bool(outcome.get("success", raw.get("success", False)))
+    terminal = bool(outcome.get("terminal", raw.get("terminal", False)))
+    if schema == "arrow_policy_suite.training_source.v1" and not source:
+        source = "on_call" if str(decision.get("policy_id", "")) == "arrow_on_call" else ""
+    if schema == "arrow_policy_suite.training_source.v1":
+        supplied_transition = raw.get("transition_sha256")
+        unsigned = dict(raw)
+        unsigned.pop("transition_sha256", None)
+        if supplied_transition != hashlib.sha256(_canonical(unsigned)).hexdigest():
+            raise ContractError("persisted training source transition hash mismatch")
+    if variant == "arrow_editor":
+        if source not in {"on_call", "on_call_teacher", "arrow_on_call"}:
+            raise ContractError("Editor training accepts only persisted Arrow On-Call transitions")
+        if teacher_action is None or executed_action != teacher_action:
+            raise ContractError("Editor transition must persist the executed teacher action")
+        if decision and not bool(decision.get("teacher_used", False)):
+            raise ContractError("Editor transition must mark teacher_used")
+        normalized_source = "on_call_teacher"
+        label_action = None
+        label_mask = None
+        label_source = "executed_on_call_teacher"
+    elif variant == "arrow_minimal_learned":
+        if not source.startswith("minimal") and source not in {"arrow_minimal", "arrow_minimal_runtime"}:
+            raise ContractError("Minimal-Learned accepts only persisted Minimal runtime transitions")
+        branch = raw.get("minimal_branch", raw.get("branch", raw.get("labels", raw)))
+        if not isinstance(branch, Mapping):
+            raise ContractError("Minimal transition requires a branch-label object")
+        selected = branch.get("selected_hybrid_action", branch.get("target_action", branch.get("hybrid_action", branch.get("selected_action", raw.get("selected_hybrid_action")))))
+        label_action = _action_field(selected, name="selected_hybrid_action")
+        mask_value = branch.get("selected_mask", branch.get("selected_mask_bits", branch.get("ownership_mask", branch.get("mask", raw.get("selected_mask", raw.get("selected_mask_bits", raw.get("mask")))))))
+        if mask_value is None:
+            raise ContractError("Minimal transition requires the selected branch mask")
+        label_mask = _minimal_mask(mask_value)
+        label_source = str(branch.get("label_source", "minimal_branch_runtime"))
+        if not label_source or label_source in {"implicit", "all_ones", "permissive"}:
+            raise ContractError("Minimal branch label_source must identify a real persisted branch")
+        normalized_source = "minimal_branch"
+        if teacher_action is None:
+            teacher_action = executed_action
+    else:
+        raise ContractError(f"unsupported persisted training variant: {variant}")
+    metadata = dict(raw.get("metadata", {})) if isinstance(raw.get("metadata", {}), Mapping) else {}
+    metadata.update({"source_policy_family": "arrow_on_call" if normalized_source == "on_call_teacher" else "arrow_minimal_runtime",
+                     "persisted_source": source, "source_path": source_path,
+                     "observation_digest": obs_hash})
+    if isinstance(raw.get("source_hashes"), Mapping):
+        metadata["source_hashes"] = dict(raw["source_hashes"])
+    if label_mask is not None:
+        metadata["minimal_label_mask"] = list(label_mask)
+    return InterventionRow(
+        episode_id=str(episode_id), task_id=task_id, timestep=timestep,
+        observation=observation, base_action=base_action, teacher_action=teacher_action or executed_action,
+        success_episode=success, source=normalized_source, metadata=metadata,
+        outcome={**dict(outcome), "success": success, "terminal": terminal}, reset_id=str(reset_id),
+        executed_action=executed_action, observation_sha256=obs_hash, transition_sha256=transition_hash,
+        label_action=label_action, label_mask=label_mask, label_source=label_source,
+    )
+
+
+def _persisted_records(root: Any, *, source_path: str) -> tuple[tuple[Mapping[str, Any], Mapping[str, Any] | None], ...]:
+    """Normalize archive, master-log, dataset-view, and minimal-label artifacts."""
+    entries: list[tuple[Mapping[str, Any], Mapping[str, Any] | None]] = []
+    values = root if isinstance(root, list) else [root]
+    for item in values:
+        if not isinstance(item, Mapping):
+            raise ContractError("persisted training artifact entries must be objects")
+        schema = str(item.get("schema", ""))
+        if schema in {"arrow_policy_suite.on_call_archive.v1"}:
+            attempts = item.get("attempts")
+            if not isinstance(attempts, list) or not attempts:
+                raise ContractError("On-Call archive requires a non-empty attempts list")
+            archive_hash = item.get("archive_sha256")
+            if archive_hash:
+                expected_archive = hashlib.sha256(_canonical({"schema": schema, "manifest": item.get("manifest", {}),
+                                                              "attempts": attempts})).hexdigest()
+                if archive_hash != expected_archive:
+                    raise ContractError("On-Call archive digest does not match contents")
+            for attempt_payload in attempts:
+                if not isinstance(attempt_payload, Mapping):
+                    raise ContractError("On-Call archive attempt must be an object")
+                attempt = attempt_payload.get("attempt", attempt_payload)
+                records = attempt_payload.get("records")
+                if not isinstance(attempt, Mapping) or not isinstance(records, list):
+                    raise ContractError("On-Call archive attempt requires attempt and records")
+                entries.extend((record, attempt) for record in records)
+        elif schema in {"arrow_policy_suite.master_log.v1", PERSISTED_TRAINING_SCHEMA, MINIMAL_BRANCH_SCHEMA, DATASET_VIEW_SCHEMA, ""} or "minimal" in schema or "training" in schema:
+            if schema == DATASET_VIEW_SCHEMA and "manifest" in item and "row" not in item and "rows" not in item:
+                # ``write_dataset_view`` emits a JSONL header followed by row
+                # objects.  The header is provenance, not a transition.
+                continue
+            if "row" in item:
+                row = item.get("row")
+                if not isinstance(row, Mapping):
+                    raise ContractError("dataset view row must be an object")
+                entries.append((row, None))
+            elif isinstance(item.get("records"), list):
+                attempt = item.get("attempt", item.get("context", {}))
+                if not isinstance(attempt, Mapping):
+                    raise ContractError("master-log attempt context must be an object")
+                entries.extend((record, attempt) for record in item["records"])
+            elif isinstance(item.get("rows", item.get("transitions")), list):
+                entries.extend((record, None) for record in item.get("rows", item.get("transitions")))
+            elif schema == "arrow_policy_suite.training_source.v1":
+                entries.append((item, None))
+            elif schema:
+                raise ContractError(f"persisted artifact schema {schema!r} has no records")
+            else:
+                entries.append((item, None))
+        else:
+            raise ContractError(f"unsupported persisted training artifact schema: {schema}")
+    if not entries:
+        raise ContractError("persisted training artifact contains no transitions")
+    return tuple(entries)
+
+
+def load_persisted_training_view(path: str | Path, *, variant: str,
+                                 task_ids: Sequence[int | str] | None = None,
+                                 reset_ids: Sequence[str] | None = None,
+    episode_ids: Sequence[str] | None = None,
+    require_success: bool = False,
+    eligible_only: bool = True,
+    parent_artifact: str | None = None,
+                                 filter_name: str | None = None) -> PersistedTrainingView:
+    """Load real persisted On-Call/Minimal rows with fixed, auditable filtering."""
+    target = Path(path)
+    if target.is_symlink() or not target.is_file():
+        raise ContractError(f"persisted training artifact is missing or is a symlink: {target}")
+    data = target.read_bytes()
+    source_sha = hashlib.sha256(data).hexdigest()
+    try:
+        root = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        try:
+            root = [json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ContractError(f"cannot parse persisted training artifact: {target}") from exc
+    pairs = _persisted_records(root, source_path=str(target))
+    allowed_tasks = None if task_ids is None else {str(value) for value in task_ids}
+    allowed_resets = None if reset_ids is None else {str(value) for value in reset_ids}
+    allowed_episodes = None if episode_ids is None else {str(value) for value in episode_ids}
+    rejected: dict[str, int] = {}
+    rows: list[InterventionRow] = []
+    for raw, attempt in pairs:
+        if eligible_only and str(raw.get("schema", "")) == "arrow_policy_suite.training_source.v1" and not bool(raw.get("eligible", False)):
+            rejected["ineligible_source_row"] = rejected.get("ineligible_source_row", 0) + 1
+            continue
+        row = _row_from_persisted(raw, attempt=attempt, variant=variant, source_path=str(target))
+        reason = None
+        if allowed_tasks is not None and str(row.task_id) not in allowed_tasks:
+            reason = "task_filter"
+        elif allowed_resets is not None and row.reset_id not in allowed_resets:
+            reason = "reset_filter"
+        elif allowed_episodes is not None and row.episode_id not in allowed_episodes:
+            reason = "episode_filter"
+        elif require_success and not row.success_episode:
+            reason = "success_filter"
+        if reason:
+            rejected[reason] = rejected.get(reason, 0) + 1
+            continue
+        rows.append(row)
+    rows.sort(key=lambda row: (str(row.task_id), row.reset_id, row.episode_id, row.timestep))
+    if not rows:
+        raise ContractError("persisted training filters selected zero transitions")
+    identities = [(row.episode_id, row.timestep) for row in rows]
+    if len(identities) != len(set(identities)):
+        raise ContractError("persisted training artifact contains duplicate episode/timestep rows")
+    resolved_filter = filter_name or f"persisted:{variant}:task={sorted(allowed_tasks) if allowed_tasks is not None else '*'}:reset={sorted(allowed_resets) if allowed_resets is not None else '*'}:episode={sorted(allowed_episodes) if allowed_episodes is not None else '*'}:success={require_success}:eligible={eligible_only}"
+    manifest = DatasetManifest(PERSISTED_TRAINING_SCHEMA, len(rows), tuple(sorted({row.episode_id for row in rows})),
+                               parent_artifact or source_sha, hashlib.sha256(_canonical([row.as_dict() for row in rows])).hexdigest(),
+                               resolved_filter, source_sha,
+                               {"success": sum(int(row.success_episode) for row in rows), "failure": sum(int(not row.success_episode) for row in rows),
+                                "rejected": sum(rejected.values())})
+    return PersistedTrainingView(str(target), tuple(rows), manifest, source_sha, resolved_filter, rejected)
+
+
+load_persisted_training_rows = load_persisted_training_view
+load_training_transitions = load_persisted_training_view
+load_persisted_transition_rows = load_persisted_training_view
+load_training_artifact = load_persisted_training_view
+
+
 __all__ = [
-    "TRANSITION_SCHEMA", "DATASET_VIEW_SCHEMA", "InterventionRow", "DatasetManifest", "DatasetView",
+    "TRANSITION_SCHEMA", "DATASET_VIEW_SCHEMA", "PERSISTED_TRAINING_SCHEMA", "MINIMAL_BRANCH_SCHEMA",
+    "InterventionRow", "DatasetManifest", "DatasetView", "PersistedTrainingView",
     "transition_eligibility", "shared_transition_filter", "intervention_rows", "eligible_intervention_rows",
     "state_only_routes", "manifest_for_rows", "write_dataset_view", "write_manifest", "fit_with_callback",
+    "load_persisted_training_view", "load_persisted_training_rows", "load_training_transitions",
+    "load_persisted_transition_rows", "load_training_artifact",
 ]

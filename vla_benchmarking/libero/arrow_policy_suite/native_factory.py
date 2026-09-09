@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
-from .contracts import ActionProposal, ContractError, ObservationFrame
+from .contracts import ActionProposal, ContractError, ObservationFrame, PolicyDecision
 from .native_host import NativeHost
 from .policies import make_policy
 
@@ -37,20 +37,22 @@ class _ControlPolicy:
         return None
 
 
-def _action_from_decision(decision: Any, frame: ObservationFrame) -> tuple[float, ...]:
-    action = getattr(decision, "action", None)
-    if action is None and isinstance(decision, ActionProposal):
-        action = decision.action
-    if action is None:
-        raise ContractError("policy decision exposes no action")
-    proposal_digest = getattr(decision, "observation_digest", None)
+def _validated_decision(decision: Any, frame: ObservationFrame) -> PolicyDecision:
+    if not isinstance(decision, PolicyDecision):
+        raise ContractError("policy selector must return a PolicyDecision")
+    proposal_digest = decision.observation_digest
     if proposal_digest is not None and proposal_digest != frame.digest:
         raise ContractError("policy decision is stale for the current observation")
-    return tuple(float(value) for value in action)
+    return decision
 
 
-def action_selector_for(policy_id: str, policy: Any | None = None) -> Callable[..., Sequence[float]]:
-    """Return the pure arbitration callback used by :class:`NativeHost`."""
+def action_selector_for(policy_id: str, policy: Any | None = None) -> Callable[..., Any]:
+    """Return the arbitration callback used by :class:`NativeHost`.
+
+    Reference controls intentionally return raw action tuples.  Policy-backed
+    selectors return the complete validated ``PolicyDecision`` so collection
+    retains the policy metadata and provenance alongside the executed action.
+    """
 
     name = str(policy_id)
     if name == "frozen_base":
@@ -60,10 +62,10 @@ def action_selector_for(policy_id: str, policy: Any | None = None) -> Callable[.
     if policy is None or not callable(getattr(policy, "decide", None)):
         raise ContractError(f"policy {name!r} requires a decide(frame, base, teacher) hook")
 
-    def select(base: ActionProposal, teacher: ActionProposal | None, frame: ObservationFrame | None = None) -> Sequence[float]:
+    def select(base: ActionProposal, teacher: ActionProposal | None, frame: ObservationFrame | None = None) -> Any:
         if frame is None:
             raise ContractError("policy arbitration requires the authoritative frame")
-        return _action_from_decision(policy.decide(frame, base, teacher), frame)
+        return _validated_decision(policy.decide(frame, base, teacher), frame)
 
     return select
 

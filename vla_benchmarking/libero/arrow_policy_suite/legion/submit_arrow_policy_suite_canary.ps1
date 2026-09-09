@@ -11,7 +11,13 @@ param(
     [Parameter(Mandatory = $true)][string]$ArchiveRoot,
     [ValidateSet('canary','collect','evaluate','engineering_smoke')][string]$Operation = 'canary',
     [ValidateSet('gpu_a40','gpu_v100')][string]$Partition = 'gpu_a40',
-    [ValidateRange(1,1200)][int]$Steps = 3,
+    [ValidatePattern('^[0-9]+-[0-9]{2}:[0-5][0-9]:[0-5][0-9]$')][string]$TimeLimit = '0-00:30:00',
+    [Nullable[int]]$Steps,
+    # Optional paired-reset identity.  Null means absent; never synthesize a
+    # task, seed, or simulator init-state value in this front door.
+    [ValidateRange(0,2147483647)][Nullable[int]]$TaskId,
+    [ValidateRange(0,2147483647)][Nullable[int]]$Seed,
+    [ValidateRange(0,2147483647)][Nullable[int]]$InitStateIndex,
     [string]$Checkpoint,
     [string]$Controller,
     [Alias('Python','MolmoPython')][string]$RuntimePython,
@@ -30,12 +36,41 @@ param(
     [string]$TraceRouteArtifact,
     [string]$TraceCalibrationArtifact,
     [ValidateSet('rgbd','simulator_assisted_rgbd')][string]$TraceGeometryVariant,
+    # Exactly one -LearnedArtifact is accepted for learned policies. Apprentice
+    # uses a directory bundle; Editor/Minimal-Learned use a checkpoint plus
+    # adjacent .json sidecar, validated by the sbatch contract.
+    [Alias('LearnedArtifacts','Input')][string[]]$LearnedArtifact = @(),
     [switch]$EngineeringSmoke
 )
 
 $ErrorActionPreference = 'Stop'
 if ($ExpectedCommit -notmatch '^[0-9a-f]{40}$') { throw 'ExpectedCommit must be a full lowercase commit SHA.' }
 if ($EngineeringSmoke) { $Operation = 'engineering_smoke' }
+if ($null -eq $Steps) {
+    if ($Operation -in @('collect', 'evaluate')) {
+        throw "Steps is required explicitly for $Operation; refusing a hidden horizon default."
+    }
+    $Steps = 3
+}
+if ([int64]$Steps -lt 1 -or [int64]$Steps -gt 1200) { throw 'Steps must be between 1 and 1200.' }
+if ($Operation -eq 'evaluate' -and $Steps -notin @(280, 1200)) {
+    throw 'Evaluate Steps must be one of the predeclared 280 or 1200 horizons.'
+}
+if ($TimeLimit -notmatch '^([0-9]+)-([0-9]{2}):([0-5][0-9]):([0-5][0-9])$') {
+    throw 'TimeLimit must use D-HH:MM:SS.'
+}
+$timeSeconds = ([int64]$matches[1] * 86400) + ([int64]$matches[2] * 3600) + ([int64]$matches[3] * 60) + [int64]$matches[4]
+if ($timeSeconds -lt 1 -or $timeSeconds -gt (7 * 86400)) {
+    throw 'TimeLimit must be between 00:00:01 and 7-00:00:00.'
+}
+$resetValues = @(
+    @{ Name = 'TaskId'; Value = $TaskId },
+    @{ Name = 'Seed'; Value = $Seed },
+    @{ Name = 'InitStateIndex'; Value = $InitStateIndex }
+)
+foreach ($reset in $resetValues) {
+    if ($null -ne $reset.Value -and [int64]$reset.Value -lt 0) { throw "$($reset.Name) must be non-negative." }
+}
 $hasRemoteRepoRoot = -not [string]::IsNullOrWhiteSpace($RemoteRepoRoot)
 if ($hasRemoteRepoRoot -and ($RemoteRepoRoot -notmatch '^/[A-Za-z0-9_./-]+$' -or $RemoteRepoRoot -match '(^|/)\.\.(/|$)')) { throw 'RemoteRepoRoot must be a safe absolute Linux path.' }
 if (-not $EngineeringSmoke -and [string]::IsNullOrWhiteSpace($RemoteConfig)) { throw 'RemoteConfig is required unless -EngineeringSmoke is selected.' }
@@ -75,6 +110,20 @@ foreach ($artifact in @(
 )) {
     if ($artifact.Value -and ($artifact.Value -notmatch '^/[A-Za-z0-9_./-]+$' -or $artifact.Value -match '(^|/)\.\.(/|$)')) { throw "$($artifact.Name) must be a safe absolute Linux path." }
 }
+$learnedPolicies = @('arrow_apprentice','arrow_editor','arrow_minimal_learned')
+foreach ($learnedArtifact in @($LearnedArtifact)) {
+    if ([string]::IsNullOrWhiteSpace($learnedArtifact) -or
+        $learnedArtifact -notmatch '^/[A-Za-z0-9_./-]+$' -or
+        $learnedArtifact -match '(^|/)\.\.(/|$)') {
+        throw 'LearnedArtifact must be a safe absolute Linux path.'
+    }
+}
+if ($Policy -in $learnedPolicies -and @($LearnedArtifact).Count -ne 1) {
+    throw "$Policy requires exactly one -LearnedArtifact; refusing a frozen-policy fallback."
+}
+if ($Policy -notin $learnedPolicies -and @($LearnedArtifact).Count -gt 0) {
+    throw '-LearnedArtifact is only valid for Apprentice, Editor, and Minimal-Learned policies.'
+}
 if ($Policy -in @('arrow_fast', 'arrow_trace')) {
     if ([string]::IsNullOrWhiteSpace($GraphFactory)) { throw 'GraphFactory is required for Fast and Trace policies.' }
     if ([string]::IsNullOrWhiteSpace($GraphContextRevision)) { throw 'GraphContextRevision is required for Fast and Trace policies.' }
@@ -103,7 +152,7 @@ if ($Policy -eq 'arrow_trace') {
         if ([string]::IsNullOrWhiteSpace($required.Value)) { throw "$($required.Name) is required for arrow_trace." }
     }
 }
-$teacherPolicies = @('teacher_only','arrow_together','arrow_on_call','arrow_apprentice','arrow_editor','arrow_minimal','arrow_minimal_runtime','arrow_minimal_learned','arrow_fast')
+$teacherPolicies = @('teacher_only','arrow_together','arrow_on_call','arrow_minimal','arrow_minimal_runtime','arrow_fast')
 if ($Policy -in $teacherPolicies) {
     if ([string]::IsNullOrWhiteSpace($RuntimePython) -or [string]::IsNullOrWhiteSpace($HfCache)) {
         throw 'RuntimePython and HfCache are required for teacher-dependent policies; frozen_base and arrow_trace do not select Molmo implicitly.'
@@ -154,7 +203,29 @@ if ($FastVlaManifestSha256) { $remoteLines += "export ARROW_SUITE_FAST_VLA_MANIF
 if ($TraceRouteArtifact) { $remoteLines += "export ARROW_SUITE_TRACE_ROUTE_ARTIFACT='$TraceRouteArtifact'" }
 if ($TraceCalibrationArtifact) { $remoteLines += "export ARROW_SUITE_TRACE_CALIBRATION_ARTIFACT='$TraceCalibrationArtifact'" }
 if ($TraceGeometryVariant) { $remoteLines += "export ARROW_SUITE_TRACE_GEOMETRY_VARIANT='$TraceGeometryVariant'" }
-$remoteLines += "sbatch --parsable --partition='$Partition' --export=ALL vla_benchmarking/libero/arrow_policy_suite/legion/run_arrow_policy_suite_canary.sbatch"
+if (@($LearnedArtifact).Count -gt 0) {
+    $remoteLines += "export ARROW_SUITE_LEARNED_ARTIFACTS='$(@($LearnedArtifact) -join ':')'"
+} else {
+    # Do not let an ambient login-shell value leak into an unrelated run.
+    $remoteLines += "export ARROW_SUITE_LEARNED_ARTIFACTS=''"
+}
+$resetEnvNames = @{
+    TaskId = 'ARROW_SUITE_TASK_ID'
+    Seed = 'ARROW_SUITE_SEED'
+    InitStateIndex = 'ARROW_SUITE_INIT_STATE_INDEX'
+}
+foreach ($reset in $resetValues) {
+    if (-not $resetEnvNames.ContainsKey([string]$reset.Name)) {
+        throw "Unknown reset identity parameter: $($reset.Name)"
+    }
+    $envName = [string]$resetEnvNames[[string]$reset.Name]
+    if ($null -ne $reset.Value) {
+        $remoteLines += "export $envName='$($reset.Value)'"
+    } else {
+        $remoteLines += "unset $envName"
+    }
+}
+$remoteLines += "sbatch --parsable --partition='$Partition' --export=ALL --time='$TimeLimit' vla_benchmarking/libero/arrow_policy_suite/legion/run_arrow_policy_suite_canary.sbatch"
 $remote = ($remoteLines -join "`n") + "`n"
 
 & "$PSScriptRoot\..\..\..\..\.codex\legion-local\Invoke-Legion.ps1" -RemoteCommand $remote

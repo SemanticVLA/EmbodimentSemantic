@@ -13,7 +13,7 @@ from arrow_policy_suite.contracts import ActionProposal, ObservationFrame, diges
 from arrow_policy_suite.interruptible_arrow import ArrowPerceptionUnavailable, InterruptibleArrow
 from arrow_policy_suite.libero_adapter import LiberoEnvironmentAdapter
 from arrow_policy_suite.native_host import NativeHost, _equal, _proposal_equal, _proposal_mismatch
-from arrow_policy_suite.libero_state import OffScreenRenderSnapshot
+from arrow_policy_suite.libero_state import OffScreenRenderSnapshot, OffScreenRenderState
 from arrow_policy_suite.native_arrow_teacher import PerFrameArrowTeacher
 from arrow_policy_suite.policies import OnCallPolicy
 from arrow_policy_suite.smolvla_adapter import SmolVLAAdapter
@@ -258,6 +258,54 @@ def test_render_cache_projection_detects_state_mutation_but_ignores_image_redraw
     mismatch = _proposal_mismatch(left, state_mutated)
     assert mismatch is not None
     assert mismatch[0] == "$.proposal_wrapper_fields._last_obs.state"
+
+
+def test_production_observation_redraw_ignores_agentview_and_wrist_but_detects_state():
+    class Sim:
+        def __init__(self):
+            self.value = 0.0
+
+        def get_state(self):
+            return self.value
+
+        def set_state(self, state):
+            self.value = float(state)
+
+        def forward(self):
+            return None
+
+    class RenderEnv:
+        def __init__(self):
+            self.sim = Sim()
+            self._elapsed_steps = 0
+            self._last_obs = None
+
+    env = RenderEnv()
+    render_count = {"value": 0}
+
+    def production_observation(_environment):
+        render_count["value"] += 1
+        observation = {
+            "agentview": np.full((2, 2, 3), render_count["value"], dtype=np.uint8),
+            "wrist": np.full((2, 2, 3), render_count["value"] + 1, dtype=np.uint8),
+            "state": [float(env._elapsed_steps)] + [0.0] * 7,
+        }
+        env._last_obs = observation
+        return observation
+
+    provider = OffScreenRenderState(env, observation_fn=production_observation)
+    first = provider.snapshot()
+    second = provider.snapshot()
+    assert _proposal_equal(first, second)
+
+    env._elapsed_steps = 1
+    changed = provider.snapshot()
+    assert not _proposal_equal(first, changed)
+    mismatch = _proposal_mismatch(first, changed, path="environment")
+    assert mismatch is not None
+    assert "state" in mismatch[0] or "elapsed_steps" in mismatch[0]
+    assert "wrist" not in mismatch[0]
+    assert "agentview" not in mismatch[0]
 
 
 def test_proposal_mismatch_honors_purity_excluded_dataclass_field():

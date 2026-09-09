@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+import hashlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arrow_policy_suite.cli import _load_config, main
+import arrow_policy_suite.cli as cli
 from arrow_policy_suite.config import StudyConfig
 from arrow_policy_suite.splits import ResetIdentity, build_split_manifest, write_split_manifest
 
@@ -144,3 +146,127 @@ def test_loader_round_trips_signed_config_and_frozen_study_for_preflight_and_can
     assert main(["canary", "--config", str(frozen_path)]) == 0
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["config"]["manifest_digest"] == receipt["config"]["frozen_study"]["composite_sha256"]
+
+
+def test_learned_handoff_requires_immutable_sidecar_and_preserves_hashes(tmp_path, capsys):
+    checkpoint = tmp_path / "editor.pt"
+    sidecar = tmp_path / "editor.pt.json"
+    checkpoint.write_bytes(b"checkpoint")
+    sidecar.write_text('{"schema":"arrow_policy_suite.native_residual.v1"}\n', encoding="utf-8")
+
+    assert main([
+        "canary", "--policy", "arrow_editor", "--input", str(checkpoint),
+    ]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["runtime_privileges"] == {"teacher_required": False, "teacher_free": True}
+    assert receipt["inputs"] == [str(checkpoint.resolve())]
+    learned = receipt["learned_artifacts"][0]
+    assert learned["path"] == str(checkpoint.resolve())
+    assert learned["sha256"] == hashlib.sha256(b"checkpoint").hexdigest()
+    assert learned["sidecar"]["path"] == str(sidecar.resolve())
+    assert learned["sidecar"]["sha256"] == hashlib.sha256(sidecar.read_bytes()).hexdigest()
+
+    checkpoint.unlink()
+    assert main([
+        "canary", "--policy", "arrow_editor", "--input", str(checkpoint),
+    ]) == 2
+    blocked = json.loads(capsys.readouterr().out)
+    assert blocked["status"] == "BLOCKED"
+
+
+def test_apprentice_handoff_accepts_one_immutable_bundle_and_records_manifest(tmp_path, capsys):
+    bundle = tmp_path / "apprentice_bundle"
+    bundle.mkdir()
+    payload = bundle / "adapter_model.safetensors"
+    payload.write_bytes(b"weights")
+    inventory = {payload.name: hashlib.sha256(payload.read_bytes()).hexdigest()}
+    inventory_hash = hashlib.sha256(
+        (json.dumps(inventory, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    ).hexdigest()
+    manifest = bundle / "apprentice_manifest.json"
+    manifest.write_text(json.dumps({
+        "checkpoint_inventory": inventory,
+        "checkpoint_sha256": inventory_hash,
+        "adapter_only": True,
+    }, sort_keys=True) + "\n", encoding="utf-8")
+
+    assert main(["canary", "--policy", "arrow_apprentice", "--input", str(bundle)]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    learned = receipt["learned_artifacts"][0]
+    assert learned["path"] == str(bundle.resolve())
+    assert learned["bundle_manifest"]["path"] == str(manifest.resolve())
+    assert learned["bundle_manifest"]["inventory_sha256"] == inventory_hash
+    assert learned["bundle_manifest"]["payload_files"] == 1
+
+    second = tmp_path / "second_bundle"
+    second.mkdir()
+    (second / "apprentice_manifest.json").write_text(manifest.read_text(encoding="utf-8"), encoding="utf-8")
+    (second / "payload").write_bytes(b"other")
+    assert main([
+        "canary", "--policy", "arrow_apprentice", "--input", str(bundle),
+        "--input", str(second),
+    ]) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "BLOCKED"
+
+
+def test_learned_and_runtime_minimal_privileges_are_distinct(tmp_path, capsys):
+    checkpoint = tmp_path / "minimal.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    (tmp_path / "minimal.pt.json").write_text("{}\n", encoding="utf-8")
+
+    assert main(["canary", "--policy", "arrow_minimal_runtime"]) == 0
+    runtime = json.loads(capsys.readouterr().out)
+    assert runtime["runtime_privileges"]["teacher_required"] is True
+    assert runtime["runtime_privileges"]["teacher_free"] is False
+
+    assert main(["canary", "--policy", "arrow_minimal_learned", "--input", str(checkpoint)]) == 0
+    learned = json.loads(capsys.readouterr().out)
+    assert learned["runtime_privileges"]["teacher_required"] is False
+    assert learned["runtime_privileges"]["teacher_free"] is True
+
+
+def test_cli_receipt_preserves_explicit_launcher_reset_identity(monkeypatch, capsys):
+    monkeypatch.setenv("ARROW_SUITE_TASK_ID", "3")
+    monkeypatch.setenv("ARROW_SUITE_SEED", "17")
+    monkeypatch.setenv("ARROW_SUITE_INIT_STATE_INDEX", "2")
+    assert main(["canary"]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["launch_identity"] == {"task_id": 3, "seed": 17, "init_state_index": 2}
+
+    monkeypatch.delenv("ARROW_SUITE_TASK_ID")
+    monkeypatch.delenv("ARROW_SUITE_SEED")
+    monkeypatch.delenv("ARROW_SUITE_INIT_STATE_INDEX")
+    assert main(["canary"]) == 0
+    assert json.loads(capsys.readouterr().out)["launch_identity"] == {}
+
+
+def test_collect_accepts_launcher_contract_and_dispatches_only_when_execute(tmp_path, monkeypatch, capsys):
+    config = _config(tmp_path / "study.json")
+    assert main(["collect", "--config", str(config)]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "READY_TO_COLLECT"
+
+    called = {}
+    def fake_execute(args):
+        called["args"] = args
+        return 17
+    monkeypatch.setattr(cli, "_cmd_execute", fake_execute)
+    assert main([
+        "collect", "--config", str(config), "--factory", "example.factory:build",
+        "--execute", "--policy", "arrow_on_call", "--run-dir", str(tmp_path / "run"),
+        "--output", str(tmp_path / "receipt.json"), "--steps", "3",
+    ]) == 17
+    assert called["args"].config == str(config)
+    assert called["args"].policy == "arrow_on_call"
+
+
+def test_execute_collect_and_evaluate_require_explicit_predeclared_horizons(tmp_path, capsys):
+    config = _config(tmp_path / "study.json")
+    common = [
+        "--config", str(config), "--factory", "example.factory:build",
+        "--execute", "--policy", "arrow_on_call", "--run-dir", str(tmp_path / "run"),
+    ]
+    assert main(["collect", *common]) == 2
+    assert "explicit --steps" in json.loads(capsys.readouterr().out)["errors"][0]
+    assert main(["evaluate", *common, "--steps", "3"]) == 2
+    assert "280 or 1200" in json.loads(capsys.readouterr().out)["errors"][0]

@@ -27,6 +27,7 @@ COLLECTION_SCHEMA = "arrow_policy_suite.collection.v1"
 MASTER_LOG_SCHEMA = "arrow_policy_suite.master_log.v1"
 TRACE_SCHEMA = "arrow_policy_suite.trace_view.v1"
 COLLECTION_ARCHIVE_SCHEMA = "arrow_policy_suite.on_call_archive.v1"
+TRAINING_SOURCE_SCHEMA = "arrow_policy_suite.training_source.v1"
 
 
 def _canonical(value: Any) -> bytes:
@@ -40,6 +41,56 @@ def _digest(value: Any) -> str:
 def _call_hook(hook: Callable[[Mapping[str, Any]], Any] | None, payload: Mapping[str, Any]) -> None:
     if hook is not None:
         hook(payload)
+
+
+def _proposal_payload(proposal: Any) -> dict[str, Any] | None:
+    if proposal is None:
+        return None
+    return {
+        "policy_id": str(getattr(proposal, "policy_id", "unknown")),
+        "action": list(getattr(proposal, "action", ())),
+        "timestep": int(getattr(proposal, "timestep", getattr(proposal, "step", 0))),
+        "observation_digest": getattr(proposal, "observation_digest", None),
+        "metadata": dict(getattr(proposal, "metadata", {}) or {}),
+        "provenance": dict(getattr(proposal, "provenance", {}) or {}),
+    }
+
+
+def _decision_payload(decision: Any) -> dict[str, Any]:
+    metadata = dict(getattr(decision, "metadata", {}) or {})
+    action = getattr(decision, "action", None)
+    if action is None:
+        action = getattr(getattr(decision, "proposal", None), "action", ())
+    return {
+        "policy_id": str(getattr(decision, "policy_id", getattr(getattr(decision, "proposal", None), "policy_id", "unknown"))),
+        "action": list(action),
+        "observation_digest": getattr(decision, "observation_digest", getattr(getattr(decision, "proposal", None), "observation_digest", None)),
+        "teacher_used": bool(getattr(decision, "teacher_used", False) or metadata.get("teacher_used", False)),
+        "teacher_groups": list(getattr(decision, "teacher_groups", metadata.get("teacher_groups", ())) or ()),
+        "metadata": metadata,
+        "provenance": dict(getattr(decision, "provenance", {}) or {}),
+    }
+
+
+def _outcome_payload(record: Any) -> dict[str, Any]:
+    """Keep outcomes useful to trainers without serializing simulator internals."""
+    raw = getattr(record, "result", getattr(record, "raw_result", None))
+    values: dict[str, Any] = {}
+    if isinstance(raw, Mapping):
+        for key in ("reward", "return", "score", "success", "task_success", "is_success",
+                    "terminal", "terminated", "truncated", "done"):
+            if key in raw:
+                values[key] = raw[key]
+    elif isinstance(raw, tuple):
+        if len(raw) >= 2 and isinstance(raw[1], (int, float)):
+            values["reward"] = raw[1]
+        if len(raw) >= 3:
+            values["terminal"] = bool(raw[2])
+        if len(raw) >= 4:
+            values["truncated"] = bool(raw[3])
+    values.update({"success": bool(getattr(record, "success", False)),
+                   "terminal": bool(getattr(record, "terminal", False))})
+    return _safe(values)
 
 
 @dataclass(frozen=True)
@@ -141,6 +192,7 @@ class CollectionManifest:
     eligible_episode_ids: tuple[str, ...]
     discarded_reasons: Mapping[str, int]
     parent_artifact: str = ""
+    training_source_sha256: str = ""
 
     def _payload(self) -> dict[str, Any]:
         return {
@@ -154,6 +206,7 @@ class CollectionManifest:
             "eligible_episode_ids": list(self.eligible_episode_ids),
             "discarded_reasons": dict(self.discarded_reasons),
             "parent_artifact": self.parent_artifact,
+            "training_source_sha256": self.training_source_sha256,
         }
 
     @property
@@ -197,6 +250,231 @@ class CollectionArchive:
                 "attempts": list(self.attempts), "archive_sha256": self.archive_sha256}
 
 
+def training_source_payload(
+    record: Any,
+    *,
+    identity: AttemptIdentity | Mapping[str, Any] | None = None,
+    source_hashes: Mapping[str, str] | None = None,
+    eligible: bool | None = None,
+    episode_success: bool | None = None,
+    episode_complete: bool | None = None,
+) -> dict[str, Any]:
+    """Return one loadable, policy-facing training transition.
+
+    This is intentionally narrower than the master log.  ``ObservationFrame``
+    already exposes the canonical student observation, so simulator state and
+    raw environment diagnostics never cross this artifact boundary.
+    """
+    frame = getattr(record, "frame", None)
+    next_frame = getattr(record, "next_frame", None)
+    if frame is None or next_frame is None or not hasattr(frame, "observation"):
+        raise ContractError("training source records require before/after observation frames")
+    observation = _safe(frame.observation)
+    next_observation = _safe(next_frame.observation)
+    # The frame contract is the final privilege boundary.  This also makes
+    # malformed hand-built records fail before they are persisted.
+    from .contracts import assert_student_observation
+    assert_student_observation(observation, path="training_source.observation")
+    assert_student_observation(next_observation, path="training_source.next_observation")
+    decision = _decision_payload(getattr(record, "decision", None))
+    teacher = _proposal_payload(getattr(record, "teacher", None))
+    teacher_used = bool(decision["teacher_used"])
+    decision_metadata = decision["metadata"]
+    executed_by = str(getattr(record, "executed_by", ""))
+    if not executed_by:
+        executed_by = "arrow" if teacher_used else "vla"
+    resolved_episode_success = bool(getattr(record, "success", False)) if episode_success is None else bool(episode_success)
+    resolved_episode_complete = bool(getattr(record, "terminal", False)) if episode_complete is None else bool(episode_complete)
+    minimal_branch: dict[str, Any] | None = None
+    if decision["policy_id"] == "arrow_minimal" and decision_metadata.get("variant") == "runtime_oracle":
+        selected_mask = decision_metadata.get("branch_selected_mask")
+        try:
+            valid_mask = not isinstance(selected_mask, bool) and 0 <= int(selected_mask) <= 7
+        except (TypeError, ValueError):
+            valid_mask = False
+        branch_fallback = bool(decision_metadata.get("branch_fallback", True))
+        evaluated = int(decision_metadata.get("branch_masks_evaluated", 0) or 0)
+        reused = bool(decision_metadata.get("branch_reuse", False))
+        # Initial decisions must carry the complete eight-mask/160-step
+        # sandbox receipt. Subsequent real burst steps may reuse that receipt,
+        # but never synthesize labels for a full-teacher fallback.
+        real_label = valid_mask and not branch_fallback and (evaluated == 8 or reused)
+        if real_label:
+            minimal_branch = {
+                "selected_hybrid_action": list(getattr(record, "action", decision["action"])),
+                "selected_mask": int(selected_mask),
+                "label_source": "minimal_branch_runtime",
+                "branch_steps": int(decision_metadata.get("branch_steps", 0) or 0),
+                "branch_cloned_steps": int(decision_metadata.get("branch_cloned_steps", 0) or 0),
+                "branch_masks_evaluated": evaluated,
+                "branch_reuse": reused,
+            }
+        if eligible is None:
+            eligible = bool(real_label)
+    if eligible is None:
+        eligible = executed_by in {"arrow", "hybrid"} and teacher is not None and teacher_used and decision["policy_id"] == "arrow_on_call"
+    eligibility_reasons: list[str] = []
+    if not resolved_episode_success:
+        eligibility_reasons.append("episode_not_successful")
+    if not resolved_episode_complete:
+        eligibility_reasons.append("episode_not_complete")
+    if decision["policy_id"] == "arrow_minimal" and decision_metadata.get("variant") == "runtime_oracle" and minimal_branch is None:
+        eligibility_reasons.append("no_real_minimal_branch_label")
+    if decision["policy_id"] == "arrow_on_call":
+        if teacher is None:
+            eligibility_reasons.append("no_teacher_proposal")
+        if not teacher_used:
+            eligibility_reasons.append("teacher_action_not_executed")
+    # Episode-level outcome is authoritative. A caller may add a stricter
+    # eligibility filter, but cannot mark a failed/incomplete episode eligible.
+    eligible = bool(eligible) and not eligibility_reasons
+    if isinstance(identity, AttemptIdentity):
+        identity_payload = identity.as_dict()
+        task_id, reset_id, episode_id = identity.task_id, identity.reset_id, identity.episode_id
+        seed = identity.seed
+        init_state_index = None
+        reset_digest = _digest(identity.reset_identity) if identity.reset_identity else None
+    else:
+        identity_payload = dict(identity or {})
+        task_id = identity_payload.get("task_id", frame.metadata.get("task_id"))
+        reset_value_id = identity_payload.get("reset_id", frame.metadata.get("reset_id"))
+        reset_id = str(reset_value_id) if reset_value_id not in (None, "") else ""
+        episode_id = str(identity_payload.get("episode_id", frame.episode_id or frame.metadata.get("episode_id", "")))
+        seed = identity_payload.get("seed", frame.metadata.get("seed"))
+        init_state_index = identity_payload.get("init_state_index", frame.metadata.get("init_state_index"))
+        reset_value = identity_payload.get("reset_identity")
+        reset_digest = identity_payload.get("reset_identity_sha256")
+        if reset_digest is None:
+            reset_digest = _digest(reset_value) if reset_value is not None else frame.metadata.get("reset_identity")
+    if task_id in (None, "") or not reset_id or not episode_id:
+        raise ContractError("training source records require explicit task, reset, and episode identity")
+    resolved_hashes = dict(source_hashes or {})
+    for hash_name in ("config_sha256", "model_sha256", "controller_sha256", "checkpoint_sha256",
+                      "protocol_seal_sha256"):
+        resolved_hashes.setdefault(hash_name, frame.metadata.get(hash_name))
+    payload: dict[str, Any] = {
+        "schema": TRAINING_SOURCE_SCHEMA,
+        "task_id": task_id,
+        "seed": seed,
+        "init_state_index": init_state_index,
+        "reset_id": reset_id,
+        "episode_id": episode_id,
+        "timestep": int(getattr(frame, "timestep", getattr(frame, "step", 0))),
+        "identity": {"task_id": task_id, "seed": seed, "init_state_index": init_state_index,
+                     "reset_id": reset_id, "episode_id": episode_id,
+                     "reset_identity_sha256": reset_digest},
+        "observation": observation,
+        "observation_digest": frame.digest,
+        "next_observation": next_observation,
+        "next_observation_digest": next_frame.digest,
+        "base_proposal": _proposal_payload(getattr(record, "base", None)),
+        "teacher_proposal": teacher,
+        "decision": decision,
+        "executed_action": list(getattr(record, "action", decision["action"])),
+        "executed_by": executed_by,
+        "outcome": _outcome_payload(record),
+        "episode_success": resolved_episode_success,
+        "episode_complete": resolved_episode_complete,
+        "eligible": bool(eligible),
+        "eligibility_reasons": eligibility_reasons,
+        "source_hashes": resolved_hashes,
+    }
+    payload["outcome"].update({
+        "success": resolved_episode_success,
+        "terminal": resolved_episode_complete,
+        "episode_success": resolved_episode_success,
+        "episode_complete": resolved_episode_complete,
+    })
+    if decision["policy_id"] == "arrow_minimal" and decision_metadata.get("variant") == "runtime_oracle":
+        payload["source"] = "minimal_branch" if minimal_branch is not None else "arrow_minimal_runtime"
+    if minimal_branch is not None:
+        payload["minimal_branch"] = minimal_branch
+    payload["hashes"] = {
+        "observation_sha256": frame.digest,
+        "next_observation_sha256": next_frame.digest,
+        "base_proposal_sha256": _digest(payload["base_proposal"]),
+        "teacher_proposal_sha256": _digest(payload["teacher_proposal"]) if teacher is not None else None,
+        "decision_sha256": _digest(decision),
+        "outcome_sha256": _digest(payload["outcome"]),
+    }
+    payload["transition_sha256"] = _digest(payload)
+    return payload
+
+
+class TrainingSourceWriter:
+    """Append-only JSONL writer for downstream learned-artifact builders."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._count = 0
+
+    def append(self, record: Any, *, identity: AttemptIdentity | Mapping[str, Any] | None = None,
+               source_hashes: Mapping[str, str] | None = None, eligible: bool | None = None,
+               episode_success: bool | None = None, episode_complete: bool | None = None) -> dict[str, Any]:
+        payload = training_source_payload(
+            record, identity=identity, source_hashes=source_hashes, eligible=eligible,
+            episode_success=episode_success, episode_complete=episode_complete,
+        )
+        with self.path.open("ab") as handle:
+            handle.write(_canonical(payload))
+            handle.flush()
+            os.fsync(handle.fileno())
+        self._count += 1
+        return payload
+
+    def append_attempt(self, attempt: CollectionAttempt, *, source_hashes: Mapping[str, str] | None = None) -> int:
+        episode_success = bool(getattr(attempt.result.stats, "success", False))
+        episode_complete = bool(getattr(attempt.result.stats, "terminal", False))
+        for record in attempt.records:
+            self.append(record, identity=attempt.identity, source_hashes=source_hashes,
+                        episode_success=episode_success, episode_complete=episode_complete)
+        return len(attempt.records)
+
+    @property
+    def count(self) -> int:
+        return self._count
+
+    def sha256(self) -> str:
+        digest = hashlib.sha256()
+        if not self.path.exists():
+            return digest.hexdigest()
+        with self.path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+
+def load_training_source(path: str | Path, *, eligible_only: bool = False) -> tuple[Mapping[str, Any], ...]:
+    """Load and verify the append-only transition artifact."""
+    target = Path(path)
+    if not target.is_file():
+        raise ContractError(f"training source artifact does not exist: {target}")
+    rows: list[Mapping[str, Any]] = []
+    with target.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ContractError(f"invalid training source JSON at line {line_number}") from exc
+            if row.get("schema") != TRAINING_SOURCE_SCHEMA:
+                raise ContractError(f"unsupported training source schema at line {line_number}")
+            supplied = row.get("transition_sha256")
+            unsigned = dict(row)
+            unsigned.pop("transition_sha256", None)
+            if supplied != _digest(unsigned):
+                raise ContractError(f"training source digest mismatch at line {line_number}")
+            from .contracts import assert_student_observation
+            assert_student_observation(row.get("observation", {}), path=f"training_source[{line_number}].observation")
+            assert_student_observation(row.get("next_observation", {}), path=f"training_source[{line_number}].next_observation")
+            if eligible_only and not bool(row.get("eligible", False)):
+                continue
+            rows.append(row)
+    return tuple(rows)
+
+
 @dataclass(frozen=True)
 class TraceEpisode:
     task_id: int | str
@@ -238,6 +516,8 @@ def default_on_call_eligibility(result: EpisodeResult) -> tuple[bool, tuple[str,
     reasons: list[str] = []
     if not bool(result.stats.success):
         reasons.append("episode_not_successful")
+    if not bool(result.stats.terminal):
+        reasons.append("episode_not_complete")
     if not result.records:
         reasons.append("episode_has_no_steps")
     if not any(
@@ -302,7 +582,10 @@ def _record_payload(record: StepRecord) -> dict[str, Any]:
             "teacher_used": bool(getattr(decision, "teacher_used", False) or decision_metadata.get("teacher_used", False)),
             "teacher_groups": list(getattr(decision, "teacher_groups", decision_metadata.get("teacher_groups", ()))),
             "metadata": decision_metadata,
+            "provenance": dict(getattr(decision, "provenance", {}) or {}),
         },
+        "executed_by": str(getattr(record, "executed_by", "")),
+        "executed_action": list(getattr(record, "action", decision_action)),
         "next_observation": record.next_frame.observation,
         "next_observation_digest": record.next_frame.digest,
         "result": getattr(record, "result", getattr(record, "raw_result", None)),
@@ -374,6 +657,8 @@ def collect_on_call(
     config: StudyConfig | None = None,
     reset_ids: Mapping[int | str, Sequence[str]] | None = None,
     master_log: str | Path | MasterLogWriter | None = None,
+    training_source: str | Path | TrainingSourceWriter | None = None,
+    source_hashes: Mapping[str, str] | None = None,
     manifest_path: str | Path | None = None,
     parent_artifact: str = "",
     eligibility: Callable[[EpisodeResult], tuple[bool, Sequence[str]]] = default_on_call_eligibility,
@@ -402,6 +687,8 @@ def collect_on_call(
             reserved.update(str(reset) for reset in config.test_reset_ids.get(task, ()))
             reserved.update(str(reset) for reset in config.validation_reset_ids.get(task, ()))
     writer = master_log if isinstance(master_log, MasterLogWriter) else MasterLogWriter(master_log) if master_log else None
+    source_writer = (training_source if isinstance(training_source, TrainingSourceWriter)
+                     else TrainingSourceWriter(training_source) if training_source else None)
     collected: list[CollectionAttempt] = []
     seen: set[tuple[str, str, str]] = set()
     discarded: dict[str, int] = {}
@@ -439,6 +726,8 @@ def collect_on_call(
             seen.add(attempt.identity.key)
             if writer is not None:
                 writer.append(attempt)
+            if source_writer is not None:
+                source_writer.append_attempt(attempt, source_hashes=source_hashes)
             collected.append(attempt)
             task_counts[str(task_id)]["attempted"] += 1
             if attempt.eligible:
@@ -448,6 +737,7 @@ def collect_on_call(
                     discarded[reason] = discarded.get(reason, 0) + 1
     config_manifest = config.manifest() if config is not None else {"schema": "unconfigured"}
     log_digest = writer.sha256() if writer is not None else _digest([_attempt_payload(attempt) for attempt in collected])
+    training_source_digest = source_writer.sha256() if source_writer is not None else ""
     manifest = CollectionManifest(
         COLLECTION_SCHEMA,
         _digest(config_manifest),
@@ -459,6 +749,7 @@ def collect_on_call(
         tuple(item.identity.episode_id for item in collected if item.eligible),
         discarded,
         parent_artifact,
+        training_source_digest,
     )
     if manifest_path is not None:
         _write_immutable(manifest_path, manifest.as_dict())
@@ -509,6 +800,15 @@ def write_master_log(path: str | Path, attempts: Iterable[CollectionAttempt]) ->
     return target
 
 
+def write_training_source_artifact(path: str | Path, attempts: Sequence[CollectionAttempt], *,
+                                   source_hashes: Mapping[str, str] | None = None) -> TrainingSourceWriter:
+    """Append all records from supplied attempts without overwriting ``path``."""
+    writer = TrainingSourceWriter(path)
+    for attempt in attempts:
+        writer.append_attempt(attempt, source_hashes=source_hashes)
+    return writer
+
+
 def make_collection_archive(attempts: Sequence[CollectionAttempt], manifest: CollectionManifest) -> CollectionArchive:
     """Build a complete archive from the exact attempts used for a manifest."""
     values = tuple(_attempt_payload(attempt) for attempt in attempts)
@@ -532,7 +832,9 @@ build_trace_view = derive_trace_view
 
 __all__ = [
     "AttemptIdentity", "CollectionAttempt", "CollectionManifest", "CollectionArchive", "MasterLogWriter",
+    "TrainingSourceWriter", "TRAINING_SOURCE_SCHEMA", "training_source_payload", "load_training_source",
     "TraceEpisode", "TraceView", "COLLECTION_SCHEMA", "MASTER_LOG_SCHEMA", "TRACE_SCHEMA", "COLLECTION_ARCHIVE_SCHEMA",
     "collect_on_call", "collect_on_call_attempts", "default_on_call_eligibility",
-    "derive_trace_view", "build_trace_view", "write_master_log", "make_collection_archive", "write_collection_archive",
+    "derive_trace_view", "build_trace_view", "write_master_log", "write_training_source_artifact",
+    "make_collection_archive", "write_collection_archive",
 ]

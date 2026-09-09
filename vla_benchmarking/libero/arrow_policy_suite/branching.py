@@ -50,10 +50,13 @@ class BranchRunner:
 
     def __init__(self, environment: BranchEnvironment, *, masks: Sequence[int] = range(8),
                  horizon: int = 20, action_selector: Callable[[int, int, Any], Sequence[float]] | None = None,
+                 proposal_fn: Callable[[int, int, Any], Any] | None = None,
                  policy: StatefulPolicy | None = None,
                  policies: Sequence[StatefulPolicy] | None = None,
                  rng_snapshot: Callable[[], Any] | None = None,
                  rng_restore: Callable[[Any], None] | None = None,
+                 composite_snapshot: Callable[[], Any] | None = None,
+                 composite_restore: Callable[[Any], None] | None = None,
                  require_state_isolation: bool = False,
                  outcome_fn: Callable[[int, Sequence[Sequence[float]], Sequence[Any]], Mapping[str, Any]] | None = None) -> None:
         if horizon <= 0:
@@ -64,6 +67,11 @@ class BranchRunner:
             raise ContractError("branch masks must be unique values in [0, 7]")
         self.horizon = horizon
         self.action_selector = action_selector
+        self.proposal_fn = proposal_fn
+        if (composite_snapshot is None) != (composite_restore is None):
+            raise ContractError("composite_snapshot and composite_restore must be provided as a pair")
+        self.composite_snapshot = composite_snapshot
+        self.composite_restore = composite_restore
         # ``policy`` is the original single-policy spelling.  ``policies`` is
         # the Minimal-Runtime spelling: VLA, Arrow, and Minimal state are all
         # restored before every branch.  Keep one canonical ordered tuple so
@@ -98,31 +106,56 @@ class BranchRunner:
         self.outcome_fn = outcome_fn
         self.cloned_steps = 0
 
+    @property
+    def is_real(self) -> bool:
+        """Whether this runner owns a restorable sandbox and executes branches."""
+        return callable(getattr(self.environment, "step", None)) and (
+            self.composite_snapshot is not None or callable(getattr(self.environment, "snapshot", None))
+        )
+
     def run_all(self) -> tuple[BranchResult, ...]:
         self.cloned_steps = 0
-        baseline = copy.deepcopy(self.environment.snapshot())
-        if baseline is None:
-            raise ContractError("branch environment snapshot() must return a state")
-        policy_baseline = tuple(copy.deepcopy(component.snapshot_state()) for component in self.policies)
-        rng_baseline = copy.deepcopy(self.rng_snapshot()) if self.rng_snapshot is not None else None
+        if self.composite_snapshot is not None:
+            baseline = copy.deepcopy(self.composite_snapshot())
+            if baseline is None:
+                raise ContractError("composite branch snapshot must return a state")
+            policy_baseline = ()
+            rng_baseline = None
+        else:
+            baseline = copy.deepcopy(self.environment.snapshot())
+            if baseline is None:
+                raise ContractError("branch environment snapshot() must return a state")
+            policy_baseline = tuple(copy.deepcopy(component.snapshot_state()) for component in self.policies)
+            rng_baseline = copy.deepcopy(self.rng_snapshot()) if self.rng_snapshot is not None else None
         results: list[BranchResult] = []
         try:
             for mask in self.masks:
-                self.environment.restore(copy.deepcopy(baseline))
-                for component, state in zip(self.policies, policy_baseline):
-                    component.restore_state(copy.deepcopy(state))
-                if self.rng_restore is not None:
-                    self.rng_restore(copy.deepcopy(rng_baseline))
+                if self.composite_restore is not None:
+                    self.composite_restore(copy.deepcopy(baseline))
+                else:
+                    self.environment.restore(copy.deepcopy(baseline))
+                    for component, state in zip(self.policies, policy_baseline):
+                        component.restore_state(copy.deepcopy(state))
+                    if self.rng_restore is not None:
+                        self.rng_restore(copy.deepcopy(rng_baseline))
                 actions: list[tuple[float, ...]] = []
                 raws: list[Any] = []
                 score = 0.0
                 terminated = False
                 started = time.perf_counter()
                 for index in range(self.horizon):
-                    if self.action_selector is None:
+                    if self.proposal_fn is not None:
+                        proposal = self.proposal_fn(mask, index, baseline)
+                        if isinstance(proposal, ActionProposal):
+                            action = proposal.action
+                        elif isinstance(proposal, Mapping) and "action" in proposal:
+                            action = proposal["action"]
+                        else:
+                            action = proposal
+                    elif self.action_selector is None:
                         action = (0.0,) * ACTION_DIM
                     else:
-                        action = validate_action(self.action_selector(mask, index, baseline))
+                        action = self.action_selector(mask, index, baseline)
                     action = validate_action(action)
                     raw = self.environment.step(action)
                     self.cloned_steps += 1
@@ -140,18 +173,24 @@ class BranchRunner:
                 results.append(BranchResult(
                     mask, tuple(actions), tuple(raws), score, terminated,
                     metadata={
+                        **outcome_metadata,
                         "cloned_steps": len(actions),
+                        "fresh_proposals": len(actions),
+                        "fresh_actions": len(actions),
+                        "mask_hold_steps": len(actions),
                         "branch_latency_seconds": time.perf_counter() - started,
                         "mask": mask,
-                        **outcome_metadata,
                     },
                 ))
         finally:
-            self.environment.restore(copy.deepcopy(baseline))
-            for component, state in zip(self.policies, policy_baseline):
-                component.restore_state(copy.deepcopy(state))
-            if self.rng_restore is not None:
-                self.rng_restore(copy.deepcopy(rng_baseline))
+            if self.composite_restore is not None:
+                self.composite_restore(copy.deepcopy(baseline))
+            else:
+                self.environment.restore(copy.deepcopy(baseline))
+                for component, state in zip(self.policies, policy_baseline):
+                    component.restore_state(copy.deepcopy(state))
+                if self.rng_restore is not None:
+                    self.rng_restore(copy.deepcopy(rng_baseline))
         if not results:
             raise ContractError("no branch masks configured")
         return tuple(results)

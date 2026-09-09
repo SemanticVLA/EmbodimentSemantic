@@ -15,10 +15,9 @@ import copy
 from dataclasses import fields, is_dataclass
 import inspect
 import random
-from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence
 
-from .contracts import ActionProposal, ContractError, ObservationFrame, digest, validate_action
+from .contracts import ActionProposal, ContractError, ObservationFrame, PolicyDecision, digest, validate_action
 from .interruptible_arrow import ArrowPerceptionUnavailable
 from .splits import ResetIdentity
 
@@ -304,6 +303,22 @@ class NativeStep:
     proposal_state_unchanged: bool
     success: bool = False
     terminal: bool = False
+    # The immutable policy result that selected ``action``.  The default keeps
+    # old hand-built NativeStep fixtures source-compatible; NativeHost always
+    # populates and validates this field before returning a step.
+    decision: PolicyDecision | None = None
+
+    def __post_init__(self) -> None:
+        if self.executed_by not in {"vla", "arrow", "hybrid"}:
+            raise ContractError("native step executed_by must be vla, arrow, or hybrid")
+        if self.decision is None:
+            return
+        if not isinstance(self.decision, PolicyDecision):
+            raise ContractError("native step decision must be a PolicyDecision")
+        if self.decision.observation_digest is not None and self.decision.observation_digest != self.frame.digest:
+            raise ContractError("native step decision is stale for the current frame")
+        if tuple(self.decision.action) != tuple(self.action):
+            raise ContractError("native step action differs from its PolicyDecision")
 
 
 @dataclass(frozen=True)
@@ -433,24 +448,44 @@ class NativeHost:
     snapshot = snapshot_state
     restore = restore_state
 
-    def _select_action(self, frame: ObservationFrame, base: ActionProposal, teacher: ActionProposal | None) -> tuple[tuple[float, ...], str]:
+    def _select_action(
+        self, frame: ObservationFrame, base: ActionProposal, teacher: ActionProposal | None,
+    ) -> tuple[tuple[float, ...], str, PolicyDecision]:
+        policy_id = str(getattr(self.policy, "policy_id", "native_action"))
         if self.action_selector is None:
-            return base.action, "vla"
+            return base.action, "vla", PolicyDecision(base.action, policy_id, frame.digest)
         selector = self.action_selector
         try:
             parameters = inspect.signature(selector).parameters
         except (TypeError, ValueError):
             parameters = None
         if parameters is not None and len(parameters) >= 3:
-            action = selector(base, teacher, frame)
+            selected = selector(base, teacher, frame)
         else:
-            action = selector(base, teacher)
+            selected = selector(base, teacher)
+        decision: PolicyDecision | None = selected if isinstance(selected, PolicyDecision) else None
+        if decision is not None:
+            if decision.observation_digest is not None and decision.observation_digest != frame.digest:
+                raise ContractError("policy decision is stale for the current observation")
+            action = decision.action
+        else:
+            action = selected
         normalized = validate_action(action)
         if normalized == base.action:
-            return normalized, "vla"
-        if teacher is not None and normalized == teacher.action:
-            return normalized, "arrow"
-        return normalized, "hybrid"
+            executed_by = "vla"
+        elif teacher is not None and normalized == teacher.action:
+            executed_by = "arrow"
+        else:
+            executed_by = "hybrid"
+        if decision is None:
+            # Raw-action controls and legacy selectors remain supported, but
+            # their action is still retained in the common PolicyDecision
+            # contract consumed by collection and training artifact writers.
+            metadata = {"teacher_used": executed_by == "arrow"}
+            decision = PolicyDecision(normalized, policy_id, frame.digest, executed_by == "arrow", (), metadata)
+        elif tuple(decision.action) != normalized:
+            raise ContractError("policy decision action failed normalized validation")
+        return normalized, executed_by, decision
 
     @staticmethod
     def _flags(result: Any, success_fn: Callable[[Any], bool] | None, terminal_fn: Callable[[Any], bool] | None) -> tuple[bool, bool]:
@@ -523,7 +558,7 @@ class NativeHost:
                     "proposal producers advanced environment state at "
                     f"{path} ({left_type} != {right_type})"
                 )
-            action, executed_by = self._select_action(frame, base, teacher)
+            action, executed_by, decision = self._select_action(frame, base, teacher)
             result = self.environment.step(action)
             self.timestep += 1
             next_frame = self._make_frame()
@@ -533,7 +568,11 @@ class NativeHost:
                 if callable(check_success):
                     checked = check_success()
                     success = bool(checked.get("success", checked.get("task_success", checked.get("is_success", False)))) if isinstance(checked, Mapping) else bool(checked)
-            record = SimpleNamespace(frame=frame, base=base, teacher=teacher, next_frame=next_frame, result=result, success=success, terminal=terminal, decision=SimpleNamespace(action=action))
+            record = NativeStep(
+                frame, base, teacher, action, result, next_frame,
+                self.last_teacher_status, executed_by, proposal_unchanged,
+                success, terminal, decision,
+            )
             if executed_by == "vla":
                 commit = getattr(self.vla, "commit", None)
                 if callable(commit):
@@ -563,7 +602,7 @@ class NativeHost:
                     commit(record)
             # Never allow a proposal to mutate the environment.  The one
             # actual step above is the sole environment transition.
-            return NativeStep(frame, base, teacher, action, result, next_frame, self.last_teacher_status, executed_by, proposal_unchanged, success, terminal)
+            return record
         except BaseException as original_error:
             try:
                 self._restore(transaction)
