@@ -9,10 +9,11 @@ resets, or closes it implicitly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .contracts import ContractError, Environment, clip_action, digest, state8
+from .libero_state import _without_rendered_observations
 from .splits import ResetIdentity
 
 
@@ -141,10 +142,13 @@ def _observation_from_step(result: Any) -> Mapping[str, Any] | None:
 
 @dataclass(frozen=True)
 class LiberoSnapshot:
-    """Adapter snapshot retaining the raw environment payload and observation."""
+    """Adapter snapshot retaining raw state and a purity-safe observation view."""
 
     payload: Any
-    observation: Mapping[str, Any]
+    # Keep the full canonical observation for backwards-compatible snapshot
+    # inspection, but exclude renderer bytes from proposal-purity checks.
+    observation: Mapping[str, Any] = field(metadata={"proposal_purity": False})
+    proposal_observation: Mapping[str, Any] = field(default_factory=dict)
 
 
 class LiberoEnvironmentAdapter(Environment):
@@ -298,7 +302,10 @@ class LiberoEnvironmentAdapter(Environment):
             raise AdapterUnavailableError(
                 "LIBERO snapshot is unavailable; inject snapshot_hook for interruptible rollouts"
             )
-        return LiberoSnapshot(hook(), dict(self._observation))
+        observation = dict(self._observation)
+        return LiberoSnapshot(
+            hook(), observation, _without_rendered_observations(observation)
+        )
 
     def restore(self, snapshot: LiberoSnapshot | Any) -> None:
         payload = snapshot.payload if isinstance(snapshot, LiberoSnapshot) else snapshot
