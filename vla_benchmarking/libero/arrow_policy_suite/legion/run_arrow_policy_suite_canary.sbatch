@@ -70,6 +70,11 @@ fi
 
 ENGINEERING_SMOKE="${ARROW_SUITE_ENGINEERING_SMOKE:-0}"
 operation="${ARROW_SUITE_OPERATION:-canary}"
+if [[ "$ENGINEERING_SMOKE" != 1 && ( "$operation" == collect || "$operation" == evaluate ) ]]; then
+  for name in ARROW_SUITE_TASK_ID ARROW_SUITE_SEED ARROW_SUITE_INIT_STATE_INDEX; do
+    [[ -n "${!name:-}" ]] || die "$name is required explicitly for $operation; refusing a hidden reset default"
+  done
+fi
 learned_artifacts=()
 if [[ -n "${ARROW_SUITE_LEARNED_ARTIFACTS:-}" ]]; then
   IFS=: read -r -a learned_artifacts <<< "$ARROW_SUITE_LEARNED_ARTIFACTS"
@@ -209,7 +214,7 @@ archive_on_exit() {
       -f "$ARCHIVE_ROOT/run/COMPLETED" &&
       -s "$ARCHIVE_ROOT/run/native_run/run_manifest.json" &&
       -s "$ARCHIVE_ROOT/inventory.sha256" ]]; then status=VERIFIED; fi
-    printf 'schema=arrow_policy_suite_canary_archive.v1\nstatus=%s\njob_id=%s\nrepo_commit=%s\nrun_root=%s\narchive_root=%s\n' "$status" "$SLURM_JOB_ID" "$actual_commit" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
+    printf 'schema=arrow_policy_suite_canary_archive.v1\nexperiment_evidence=false\nstatus=%s\njob_id=%s\nrepo_commit=%s\nrun_root=%s\narchive_root=%s\n' "$status" "$SLURM_JOB_ID" "$actual_commit" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
   fi
   [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]] && workload_rc=$archive_rc
   exit "$workload_rc"
@@ -384,6 +389,10 @@ if not path.is_file() or path.stat().st_size == 0:
 value = json.loads(path.read_text(encoding="utf-8"))
 if value.get("status") != "COMPLETED":
     raise SystemExit("native canary did not complete")
+if value.get("experiment_evidence") is not False:
+    raise SystemExit("native execution receipt must be marked experiment_evidence=false")
+if value.get("manifest", {}).get("experiment_evidence") is not False:
+    raise SystemExit("native run manifest must be marked experiment_evidence=false")
 print("VERIFIED native Arrow policy canary")
 PY
 touch "$RUN_ROOT/COMPLETED"

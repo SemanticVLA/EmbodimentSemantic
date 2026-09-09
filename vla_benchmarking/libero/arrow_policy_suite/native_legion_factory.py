@@ -423,6 +423,22 @@ def _env(name: str, default: str | None = None) -> str | None:
     return None if value is None or not str(value).strip() else str(value).strip()
 
 
+def _identity_int(name: str, *, operation: str, default: int) -> int:
+    """Resolve launcher identity without hidden collect/evaluate defaults."""
+    raw = _env(name)
+    if raw is None:
+        if operation in {"collect", "evaluate"}:
+            raise ContractError(f"{name} is required explicitly for {operation}")
+        return int(default)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ContractError(f"{name} must be an integer") from exc
+    if value < 0:
+        raise ContractError(f"{name} must be non-negative")
+    return value
+
+
 def _callable(spec: str, *, label: str) -> Callable[..., Any]:
     if ":" not in spec:
         raise ContractError(f"{label} must be module:callable")
@@ -505,8 +521,12 @@ def build_host(*, config: Any, operation: str, policy_id: str, run_dir: str | Pa
     declared_base_hash = _env("ARROW_SUITE_BASE_VLA_SHA256")
     if declared_base_hash is not None and declared_base_hash != base_vla_sha256:
         raise ContractError("ARROW_SUITE_BASE_VLA_SHA256 does not match the loaded base checkpoint")
-    task_id = int(_env("ARROW_SUITE_TASK_ID", str(config.task_ids[0])))
-    seed = int(_env("ARROW_SUITE_SEED", str(config.learned_seeds[0])))
+    task_id = _identity_int(
+        "ARROW_SUITE_TASK_ID", operation=operation, default=int(config.task_ids[0])
+    )
+    seed = _identity_int(
+        "ARROW_SUITE_SEED", operation=operation, default=int(config.learned_seeds[0])
+    )
     resolution = int(_env("ARROW_SUITE_RESOLUTION", str(config.image_resolution[0])))
     init_state_raw = _env("ARROW_SUITE_INIT_STATE_INDEX")
     if init_state_raw is None:

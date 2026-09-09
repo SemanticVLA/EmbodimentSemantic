@@ -117,7 +117,12 @@ def test_native_executor_runs_explicit_factory_and_writes_create_only_manifest(t
     )
     assert receipt.status == "COMPLETED"
     assert receipt.steps == 2
-    assert json.loads((tmp_path / "run" / "run_manifest.json").read_text())["git_revision"]
+    manifest = json.loads((tmp_path / "run" / "run_manifest.json").read_text())
+    persisted_receipt = json.loads((tmp_path / "receipt.json").read_text())
+    assert manifest["git_revision"]
+    assert manifest["experiment_evidence"] is False
+    assert persisted_receipt["experiment_evidence"] is False
+    assert persisted_receipt["manifest"]["experiment_evidence"] is False
     with pytest.raises(Exception):
         execute_native(_factory, config=seal.config, operation="canary", policy_id="teacher_only", run_dir=tmp_path / "run", max_steps=1)
 

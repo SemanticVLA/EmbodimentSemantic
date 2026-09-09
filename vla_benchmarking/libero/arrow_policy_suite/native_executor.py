@@ -257,6 +257,7 @@ class NativeExecutionReceipt:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": "arrow_policy_suite.native_execution.v1",
+            "experiment_evidence": False,
             "status": self.status,
             "operation": self.operation,
             "policy_id": self.policy_id,
@@ -350,6 +351,7 @@ def execute_native(
     target.mkdir(parents=True)
     manifest: dict[str, Any] = {
         "schema": "arrow_policy_suite.native_run.v1",
+        "experiment_evidence": False,
         "git_revision": _git_revision(),
         "config_sha256": config.config_sha256(),
         "identity_seal_sha256": config.identity_seal_sha256(),

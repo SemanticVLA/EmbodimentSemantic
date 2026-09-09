@@ -228,6 +228,8 @@ def test_submit_forwards_explicit_paired_reset_identity_without_defaults():
     assert "[Nullable[int]]$InitStateIndex" in SUBMIT
     assert "unset $envName" in SUBMIT
     assert "must be a non-negative integer" in SBATCH
+    assert "is required explicitly for $Operation; refusing a hidden reset default" in SUBMIT
+    assert "is required explicitly for $operation; refusing a hidden reset default" in SBATCH
 
 
 def test_submit_forwards_bounded_explicit_slurm_time_limit():
@@ -311,6 +313,9 @@ def test_sbatch_resolves_array_log_name_and_has_engineering_smoke_marker():
     assert "ARROW_SUITE_ENGINEERING_SMOKE" in SBATCH
     assert '"experiment_evidence": False' in SBATCH
     assert "arrow_policy_suite.engineering_smoke.v1" in SBATCH
+    assert "experiment_evidence=false" in SBATCH
+    assert "native execution receipt must be marked experiment_evidence=false" in SBATCH
+    assert "native run manifest must be marked experiment_evidence=false" in SBATCH
 
 
 def test_sbatch_uses_canonical_controller_hash_not_raw_file_hash():

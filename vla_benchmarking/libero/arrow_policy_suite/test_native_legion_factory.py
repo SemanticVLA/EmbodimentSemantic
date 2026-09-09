@@ -9,11 +9,29 @@ from arrow_policy_suite.contracts import ActionProposal, ObservationFrame
 from arrow_policy_suite.native_legion_factory import (
     _artifact_sha256,
     _build_minimal_branch_runner,
+    _identity_int,
     _LiveMinimalPolicy,
     _learned_artifact,
     _runtime_trace_callbacks,
     _vision_endpoint_detector,
 )
+
+
+@pytest.mark.parametrize("operation", ("collect", "evaluate"))
+def test_native_factory_requires_explicit_task_and_seed_for_runs(monkeypatch, operation):
+    monkeypatch.delenv("ARROW_SUITE_TASK_ID", raising=False)
+    monkeypatch.delenv("ARROW_SUITE_SEED", raising=False)
+    with pytest.raises(Exception, match="TASK_ID.*required explicitly"):
+        _identity_int("ARROW_SUITE_TASK_ID", operation=operation, default=7)
+    with pytest.raises(Exception, match="SEED.*required explicitly"):
+        _identity_int("ARROW_SUITE_SEED", operation=operation, default=11)
+
+
+def test_native_factory_identity_default_is_canary_only(monkeypatch):
+    monkeypatch.delenv("ARROW_SUITE_TASK_ID", raising=False)
+    assert _identity_int("ARROW_SUITE_TASK_ID", operation="canary", default=7) == 7
+    monkeypatch.setenv("ARROW_SUITE_TASK_ID", "3")
+    assert _identity_int("ARROW_SUITE_TASK_ID", operation="collect", default=7) == 3
 
 
 def test_native_factory_requests_wrist_camera_for_canonical_vla_observation():

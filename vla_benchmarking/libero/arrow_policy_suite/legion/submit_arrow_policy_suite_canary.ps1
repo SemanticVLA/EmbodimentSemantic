@@ -71,6 +71,13 @@ $resetValues = @(
 foreach ($reset in $resetValues) {
     if ($null -ne $reset.Value -and [int64]$reset.Value -lt 0) { throw "$($reset.Name) must be non-negative." }
 }
+if ($Operation -in @('collect', 'evaluate')) {
+    foreach ($reset in $resetValues) {
+        if ($null -eq $reset.Value) {
+            throw "$($reset.Name) is required explicitly for $Operation; refusing a hidden reset default."
+        }
+    }
+}
 $hasRemoteRepoRoot = -not [string]::IsNullOrWhiteSpace($RemoteRepoRoot)
 if ($hasRemoteRepoRoot -and ($RemoteRepoRoot -notmatch '^/[A-Za-z0-9_./-]+$' -or $RemoteRepoRoot -match '(^|/)\.\.(/|$)')) { throw 'RemoteRepoRoot must be a safe absolute Linux path.' }
 if (-not $EngineeringSmoke -and [string]::IsNullOrWhiteSpace($RemoteConfig)) { throw 'RemoteConfig is required unless -EngineeringSmoke is selected.' }
