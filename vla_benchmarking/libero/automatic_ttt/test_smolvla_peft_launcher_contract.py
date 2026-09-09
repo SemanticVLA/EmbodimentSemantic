@@ -1,5 +1,9 @@
+import json
 import re
+import sys
 from pathlib import Path
+
+import pytest
 
 
 LAUNCHER = Path(__file__).parent / "legion" / "run_smolvla_peft_arrow_task.sbatch"
@@ -71,6 +75,69 @@ def test_embedded_launcher_python_heredocs_compile():
     assert blocks, "launcher must contain embedded Python validation blocks"
     for index, block in enumerate(blocks):
         compile(block, f"{LAUNCHER}:heredoc-{index}", "exec")
+
+
+def test_runtime_evidence_validation_maps_optimizer_lr_to_base_lr_and_rejects_missing(tmp_path, monkeypatch):
+    """The runtime optimizer field is ``lr`` while the sealed contract uses ``base_lr``."""
+    text = LAUNCHER.read_text(encoding="utf-8")
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", text, flags=re.DOTALL)
+    block = next(
+        block for block in blocks
+        if 'value.get("optimizer_hyperparameters", {})' in block
+    )
+    settings = {
+        "STEPS": "3",
+        "PEAK_LR": "5e-5",
+        "WEIGHT_DECAY": "1e-5",
+        "OPTIMIZER_EPS": "1e-8",
+        "GRAD_CLIP": "10.0",
+        "SCHEDULER_NAME": "cosine_decay_with_warmup",
+        "SCHEDULER_WARMUP_STEPS": "0",
+        "SCHEDULER_DECAY_STEPS": "3",
+        "SCHEDULER_DECAY_LR": "2.5e-6",
+    }
+    for key, value in settings.items():
+        monkeypatch.setenv(key, value)
+    expected = {
+        "updates": 3,
+        "base_lr": 5e-5,
+        "weight_decay": 1e-5,
+        "betas": [0.9, 0.95],
+        "eps": 1e-8,
+        "grad_clip_norm": 10.0,
+        "scheduler": "cosine_decay_with_warmup",
+        "warmup_steps": 0,
+        "decay_steps": 3,
+        "decay_lr": 2.5e-6,
+    }
+    runtime = tmp_path / "runtime_evidence.json"
+    runtime.write_text(json.dumps({
+        "attestation_status": "VERIFIED",
+        "updates_observed": 3,
+        "optimizer_class": "torch.optim.adamw.AdamW",
+        "scheduler_class": "torch.optim.lr_scheduler.LambdaLR",
+        "expected_contract": expected,
+        "optimizer_hyperparameters": {
+            "lr": 5e-5, "weight_decay": 1e-5, "eps": 1e-8,
+            "grad_clip_norm": 10.0, "betas": [0.9, 0.95],
+        },
+        "optimizer_scheduler_objects_checked": True,
+        "lr_milestones_consistent": True,
+        "all_losses_finite": True,
+        "all_grad_norms_finite": True,
+        "min_learning_rate": 2.5e-6,
+        "max_learning_rate": 5e-5,
+        "last_learning_rate": 2.5e-6,
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(LAUNCHER), str(runtime)])
+
+    exec(compile(block, f"{LAUNCHER}:runtime-validation", "exec"), {})
+
+    missing_lr = json.loads(runtime.read_text(encoding="utf-8"))
+    del missing_lr["optimizer_hyperparameters"]["lr"]
+    runtime.write_text(json.dumps(missing_lr) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="runtime optimizer evidence mismatch"):
+        exec(compile(block, f"{LAUNCHER}:runtime-validation-missing-lr", "exec"), {})
 
 
 def test_all_task_wrapper_seals_one_demo_and_skips_baseline():

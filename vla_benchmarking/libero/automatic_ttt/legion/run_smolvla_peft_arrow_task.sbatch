@@ -419,7 +419,9 @@ if value.get("optimizer_class") != "torch.optim.adamw.AdamW": raise SystemExit("
 if value.get("scheduler_class", "").split(".")[-1] not in {"LambdaLR", "SequentialLR", "CosineAnnealingLR"}: raise SystemExit("runtime scheduler class is not approved")
 if value.get("expected_contract") != expected: raise SystemExit(f"runtime evidence contract mismatch: {value.get('expected_contract')!r}")
 opt = value.get("optimizer_hyperparameters", {})
-if any(abs(float(opt.get(k, "nan")) - expected[k]) > 1e-12 for k in ("lr", "weight_decay", "eps", "grad_clip_norm")): raise SystemExit("runtime optimizer evidence mismatch")
+for optimizer_key, expected_key in (("lr", "base_lr"), ("weight_decay", "weight_decay"), ("eps", "eps"), ("grad_clip_norm", "grad_clip_norm")):
+    observed = float(opt.get(optimizer_key, "nan"))
+    if not math.isfinite(observed) or abs(observed - expected[expected_key]) > 1e-12: raise SystemExit("runtime optimizer evidence mismatch")
 if [float(x) for x in opt.get("betas", [])] != expected["betas"]: raise SystemExit("runtime AdamW betas mismatch")
 if not value.get("optimizer_scheduler_objects_checked") or not value.get("lr_milestones_consistent"): raise SystemExit("runtime object/milestone attestation missing")
 if not value.get("all_losses_finite") or not value.get("all_grad_norms_finite"): raise SystemExit("non-finite runtime metrics")
