@@ -1,0 +1,271 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from arrow_policy_suite.contracts import ActionProposal, ObservationFrame, digest
+from arrow_policy_suite.interruptible_arrow import ArrowPerceptionUnavailable, InterruptibleArrow
+from arrow_policy_suite.libero_adapter import LiberoEnvironmentAdapter
+from arrow_policy_suite.native_host import NativeHost, _equal
+from arrow_policy_suite.libero_state import OffScreenRenderSnapshot
+from arrow_policy_suite.native_arrow_teacher import PerFrameArrowTeacher
+from arrow_policy_suite.policies import OnCallPolicy
+from arrow_policy_suite.smolvla_adapter import SmolVLAAdapter
+from arrow_policy_suite.splits import ResetIdentity
+
+
+class Env:
+    def __init__(self):
+        self.value = 0.0
+        self.steps = 0
+
+    def observe(self):
+        return {"state": [self.value] + [0.0] * 7}
+
+    def step(self, action):
+        self.value += float(action[0])
+        self.steps += 1
+        return {"terminal": False, "success": False}
+
+    def snapshot_state(self):
+        return self.value, self.steps
+
+    def restore_state(self, state):
+        self.value, self.steps = state
+
+
+class StatefulArrow:
+    def __init__(self):
+        self.calls = 0
+        self.commits = 0
+
+    def propose(self, frame, _context=None):
+        self.calls += 1
+        return {"action": (0.4,) + (0.0,) * 6}
+
+    def commit(self, _record):
+        self.commits += 1
+
+    def snapshot_state(self):
+        return self.calls, self.commits
+
+    def restore_state(self, state):
+        self.calls, self.commits = state
+
+
+def _vla(calls):
+    def inference(_observation, _step):
+        calls.append(1)
+        return [[0.1] + [0.0] * 6, [0.2] + [0.0] * 6]
+
+    inference.__arrow_stateless__ = True
+    return SmolVLAAdapter(inference=inference)
+
+
+def test_native_host_same_frame_one_step_owner_and_queue_invalidation():
+    env = Env()
+    calls = []
+    vla = _vla(calls)
+    arrow = InterruptibleArrow(StatefulArrow(), perception=lambda frame: frame.metadata["graph_context"])
+    host = NativeHost(
+        env, vla, arrow,
+        graph_context_fn=lambda _frame: {"triplet": "hand-source-destination"},
+        action_selector=lambda _base, teacher: teacher.action,
+    )
+    records = host.run(max_steps=3)
+    assert len(records) == 3
+    assert env.steps == 3
+    assert all(record.frame is record.frame for record in records)
+    assert all(record.executed_by == "arrow" for record in records)
+    assert all(record.teacher_status.available for record in records)
+    # External actions invalidate the two-row VLA chunk, forcing inference on
+    # every new frame rather than applying an action for a stale state.
+    assert len(calls) == 3
+    assert records[0].frame.metadata["graph_context"]["triplet"] == "hand-source-destination"
+
+
+def test_native_host_none_teacher_is_not_a_fault():
+    env = Env()
+
+    class NoArrow:
+        def propose(self, _frame):
+            return None
+
+        def snapshot_state(self):
+            return 0
+
+        def restore_state(self, _state):
+            return None
+
+    vla = _vla([])
+    host = NativeHost(env, vla, NoArrow())
+    record = host.step()
+    assert record.teacher is None
+    assert not record.teacher_status.available
+    assert record.teacher_status.reason == "perception_unavailable"
+    assert env.steps == 1
+
+
+def test_native_host_invalidates_interruptible_teacher_when_base_wins_two_steps():
+    env = Env()
+    vla = _vla([])
+    teacher = PerFrameArrowTeacher(
+        lambda _frame: {"waypoints": [[0.01, 0.0, 0.0]] * 6},
+        gripper_dwell_steps=1,
+    )
+    # Together/base arbitration intentionally ignores a valid teacher action;
+    # the host must interrupt that pending proposal before timestep two.
+    host = NativeHost(env, vla, teacher, action_selector=lambda base, _teacher: base.action)
+    records = host.run(max_steps=2)
+    assert len(records) == 2
+    assert env.steps == 2
+    assert all(record.executed_by == "vla" for record in records)
+
+
+def test_on_call_intervenes_from_per_frame_phase_error_without_success_labels():
+    """A stalled Arrow phase must cause a real takeover in one rollout."""
+
+    class FlatEnv(Env):
+        def step(self, _action):
+            self.steps += 1
+            # Keep the EEF fixed so the teacher's frame-derived phase error is
+            # deliberately stalled.  No evaluator success signal is supplied.
+            return {"terminal": False}
+
+    class FlatVLA:
+        policy_id = "vla"
+
+        def propose(self, frame):
+            return ActionProposal((0.0,) * 7, "vla", frame.timestep, observation_digest=frame.digest)
+
+        def snapshot_state(self):
+            return 0
+
+        def restore_state(self, _state):
+            return None
+
+    env = FlatEnv()
+    teacher = PerFrameArrowTeacher(
+        lambda _frame: {
+            "candidate_id": "stalling-candidate",
+            "waypoints": [[0.20, 0.0, 0.0]] * 6,
+            "provenance": {"source": "synthetic-rgbd"},
+        },
+        gripper_dwell_steps=1,
+    )
+    policy = OnCallPolicy()
+
+    def select(base, arrow, frame):
+        decision = policy.decide(frame, base, arrow)
+        return decision.action
+
+    host = NativeHost(env, FlatVLA(), teacher, policy=policy, action_selector=select)
+    records = host.run(max_steps=45)
+    assert len(records) == 45
+    assert all(record.teacher is not None for record in records)
+    assert all(isinstance(record.teacher.metadata.get("phase_error"), float) for record in records)
+    executed = [record.executed_by for record in records]
+    assert executed[:20] == ["vla"] * 20
+    assert executed[20] == "arrow"
+    assert any(value == "arrow" for value in executed[20:])
+
+
+def test_snapshot_structural_equality_handles_mujoco_arrays():
+    left = OffScreenRenderSnapshot("get_state", {"qpos": np.array([1.0, 2.0])},
+                                   {}, {}, {}, {}, "digest")
+    right = OffScreenRenderSnapshot("get_state", {"qpos": np.array([1.0, 2.0])},
+                                    {}, {}, {}, {}, "digest")
+    changed = OffScreenRenderSnapshot("get_state", {"qpos": np.array([1.0, 3.0])},
+                                      {}, {}, {}, {}, "digest")
+    assert _equal(left, right)
+    assert not _equal(left, changed)
+
+
+def test_interruptible_arrow_distinguishes_unavailable_from_fault():
+    controller = StatefulArrow()
+    unavailable = InterruptibleArrow(controller, perception=lambda _frame: None)
+    frame = ObservationFrame({"state": [0.0] * 8})
+    assert unavailable.propose(frame) is None
+    assert unavailable.last_availability.available is False
+
+    def fault(_frame):
+        raise ValueError("real controller fault")
+
+    broken = InterruptibleArrow(controller, perception=fault)
+    with pytest.raises(ValueError, match="real controller fault"):
+        broken.propose(frame)
+
+
+def test_native_host_rolls_back_environment_and_components_on_commit_fault():
+    env = Env()
+    calls = []
+    vla = _vla(calls)
+
+    class FaultArrow(StatefulArrow):
+        def commit(self, _record):
+            self.commits += 1
+            raise RuntimeError("commit fault")
+
+    arrow = InterruptibleArrow(FaultArrow())
+    host = NativeHost(env, vla, arrow, action_selector=lambda _base, teacher: teacher.action)
+    with pytest.raises(RuntimeError, match="commit fault"):
+        host.step()
+    assert env.steps == 0
+    assert env.value == 0.0
+    assert host.timestep == 0
+    # The injected inference's external telemetry list is intentionally not
+    # part of the adapter state; the queued/model state itself is restored.
+    assert calls == [1]
+
+
+def test_native_host_rejects_producer_that_mutates_environment_before_step():
+    env = Env()
+
+    class MutatingVLA:
+        def propose(self, frame):
+            env.value += 0.5
+            return ActionProposal((0.0,) * 7, policy_id="vla", timestep=frame.timestep, observation_digest=frame.digest)
+
+        def snapshot_state(self):
+            return 0
+
+        def restore_state(self, _state):
+            return None
+
+    with pytest.raises(Exception, match="advanced environment state"):
+        NativeHost(env, MutatingVLA()).step()
+    assert env.value == 0.0
+    assert env.steps == 0
+
+
+def test_live_adapter_binds_reset_identity_and_checks_digest():
+    class Raw:
+        def __init__(self):
+            self.value = -1.0
+
+        def observe(self):
+            return {"state": [self.value] + [0.0] * 7}
+
+        def reset(self, **_kwargs):
+            self.value = 0.0
+            return self.observe()
+
+        def step(self, action):
+            self.value += action[0]
+            return {"observation": self.observe()}
+
+    expected = {"state": [0.0] + [0.0] * 7}
+    identity = ResetIdentity(
+        task_id=0, episode_id="task0-test", seed=7, reset_index=1,
+        observation_sha256=digest(expected), environment_fingerprint="fake-env",
+        replay_key="reset-7",
+    )
+    adapter = LiberoEnvironmentAdapter.from_reset_identity(Raw(), identity)
+    assert adapter.reset_identity == identity
+    assert digest(adapter.observe()) == identity.observation_sha256
