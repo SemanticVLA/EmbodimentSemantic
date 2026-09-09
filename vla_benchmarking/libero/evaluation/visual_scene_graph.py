@@ -182,6 +182,56 @@ def draw_scene_graph_arrows(
     return canvas
 
 
+def overlay_visual_relations(
+    image: np.ndarray,
+    bboxes: dict[str, Iterable[int | float]],
+    source_relations: Iterable[tuple[str, str, str]],
+    *,
+    condition: str,
+    subject: str | None,
+    goal_object: str,
+    line_width: int,
+    head_length: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Apply the canonical live visual treatment to one policy image.
+
+    Both online evaluation and automatic-TTT dataset collection call this
+    function.  Sharing this final selection/rendering boundary prevents the
+    training path from silently using a different arrow geometry, color, or
+    rasterization rule than evaluation.
+    """
+
+    relations = select_visual_relations(
+        bboxes,
+        source_relations,
+        condition=condition,
+        subject=subject,
+        goal_object=goal_object,
+    )
+    drawn, skipped = drawable_relations(bboxes, relations)
+    source = np.asarray(image)
+    overlaid = draw_scene_graph_arrows(
+        source,
+        bboxes,
+        relations,
+        line_width=line_width,
+        head_length=head_length,
+        copy_image=True,
+    )
+    changed_pixels = int(np.count_nonzero(np.any(overlaid != source, axis=2)))
+    return overlaid, {
+        "condition": condition,
+        "subject": subject,
+        "goal_object": goal_object,
+        "selected_relations": [list(item) for item in relations],
+        "drawn_relations": [list(item) for item in drawn],
+        "skipped_relations_missing_bbox": [list(item) for item in skipped],
+        "changed_pixels": changed_pixels,
+        "line_width": int(line_width),
+        "head_length": int(head_length),
+    }
+
+
 class VisualRelationAuditLogger:
     """Thread-safe JSONL logger for relations considered by the visual overlay."""
 
@@ -324,25 +374,20 @@ class VisualGraphVecEnvWrapper:
             bboxes = context["bboxes"]
             task_id = getattr(sub_env, "task_id", None)
             task_goal_object = resolve_task_goal_object(task_id, self.goal_object)
-            relations = select_visual_relations(
+            arrow_subject = (
+                self.arrow_subject
+                if self.arrow_subject is not None
+                else self.live_generator.scene_graph_subject_filter
+            )
+            overlaid, overlay_audit = overlay_visual_relations(
+                batch_images[observation_index],
                 bboxes,
                 source_relations,
                 condition=self.condition,
-                subject=(
-                    self.arrow_subject
-                    if self.arrow_subject is not None
-                    else self.live_generator.scene_graph_subject_filter
-                ),
+                subject=arrow_subject,
                 goal_object=task_goal_object,
-            )
-            drawn, skipped = drawable_relations(bboxes, relations)
-            overlaid = draw_scene_graph_arrows(
-                batch_images[observation_index],
-                bboxes,
-                relations,
                 line_width=self.line_width,
                 head_length=self.head_length,
-                copy_image=False,
             )
             batch_images[observation_index] = overlaid
             self._latest_overlaid[env_index] = overlaid.copy()
@@ -362,9 +407,10 @@ class VisualGraphVecEnvWrapper:
                         "goal_object": task_goal_object if self.condition == VISUAL_GOAL_ARROW_CONDITION else None,
                         "visible_bboxes": sorted(bboxes),
                         "relations": [list(item) for item in source_relations],
-                        "selected_relations": [list(item) for item in relations],
-                        "drawn_relations": [list(item) for item in drawn],
-                        "skipped_relations_missing_bbox": [list(item) for item in skipped],
+                        "selected_relations": overlay_audit["selected_relations"],
+                        "drawn_relations": overlay_audit["drawn_relations"],
+                        "skipped_relations_missing_bbox": overlay_audit["skipped_relations_missing_bbox"],
+                        "changed_pixels": overlay_audit["changed_pixels"],
                     }
                 )
 

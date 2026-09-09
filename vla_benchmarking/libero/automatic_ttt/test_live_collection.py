@@ -402,3 +402,95 @@ def test_fresh_collection_discards_controller_timeout_and_tries_next_seed(tmp_pa
     assert manifest["discarded_failure_categories"] == {"controller_motion_timeout": 1}
     assert not (tmp_path / "failed_episodes.jsonl").exists()
     assert not (tmp_path / ".accepted_episode_cache" / "seed-3000.json").exists()
+
+
+def test_fresh_collection_records_attempt_local_observation_transform_evidence(tmp_path):
+    class FreshEnv(_LiveEnv):
+        def reset(self, *, seed, task_id, episode_index):
+            self.reset_count += 1
+            return _observation(0)
+
+        def step(self, action):
+            self.step_count += 1
+            return _observation(self.step_count), 0.0, True, {"success": True}
+
+    class Transform:
+        def __init__(self):
+            self.frames_seen = 0
+
+        def __call__(self, observation):
+            self.frames_seen += 1
+            result = dict(observation)
+            result["agentview"] = np.asarray(result["agentview"]).copy()
+            result["agentview"][0, 0] = (0, 166, 107)
+            return result
+
+        def audit_summary(self):
+            return {"frames_seen": self.frames_seen, "images_retained_by_transform": 0}
+
+    created_transforms = []
+
+    def transform_factory(_environment, _episode):
+        value = Transform()
+        created_transforms.append(value)
+        return value
+
+    def teacher_factory(_episode, _output):
+        def recover(view, _request):
+            view.step((0.0,) * 7)
+            return {
+                "transitions": list(view.executed_transitions),
+                "success": True,
+                "status": "teacher_success",
+                "metadata": {"evaluator_success": True},
+            }
+
+        return ArrowGraspControllerTeacher(recover)
+
+    def export(accepted, dataset_root):
+        (dataset_root / "meta").mkdir(parents=True)
+        info = dataset_root / "meta" / "info.json"
+        info.write_text('{"total_frames": 1}\n', encoding="utf-8")
+        manifest = dataset_root.parent / "dataset_manifest.json"
+        manifest.write_text(json.dumps({
+            "dataset_root": str(dataset_root),
+            "source_accepted_episodes": str(accepted),
+            "source_accepted_episodes_sha256": hashlib.sha256(accepted.read_bytes()).hexdigest(),
+            "files": [{"path": "meta/info.json", "sha256": hashlib.sha256(info.read_bytes()).hexdigest()}],
+        }) + "\n", encoding="utf-8")
+        return {
+            "dataset_root": str(dataset_root),
+            "dataset_manifest_path": str(manifest),
+            "dataset_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        }
+
+    result = collect_fresh_arrow_demonstrations(
+        task_id=0,
+        task_description="pick up the bowl",
+        policy_id="smolvla_visual_arrow",
+        environment_factory=lambda _episode: FreshEnv(),
+        reset_environment=lambda env, ep: env.reset(seed=ep.seed, task_id=ep.task_id, episode_index=0),
+        close_environment=lambda env: env.close(),
+        teacher_factory=teacher_factory,
+        output_root=tmp_path,
+        accepted_target=1,
+        adaptation_seed_start=3000,
+        max_attempts=1,
+        teacher_step_budget=2,
+        source_state_fn=lambda _env, _obs: SourceState.SOURCE_UNHELD,
+        controller_config_hash="a" * 64,
+        dataset_exporter=export,
+        observation_transform_factory=transform_factory,
+        reset_identity_fn=lambda _env, task_id: {
+            "task_id": task_id,
+            "selected_init_state_index": 10,
+            "init_state_sha256": "b" * 64,
+        },
+    )
+
+    assert result.accepted_count == 1
+    assert len(created_transforms) == 1
+    accepted = json.loads(result.accepted_path.read_text(encoding="utf-8"))
+    summary = accepted["metadata"]["student_observation_transform"]
+    assert summary == {"frames_seen": 2, "images_retained_by_transform": 0}
+    assert accepted["transitions"][0]["observation"]["agentview"][0][0] == [0, 166, 107]

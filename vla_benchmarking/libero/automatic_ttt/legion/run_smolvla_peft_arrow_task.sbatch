@@ -35,6 +35,20 @@ PEFT_TASK_ID="${PEFT_TASK_ID:-${SLURM_ARRAY_TASK_ID:-}}"
 TASK_ID="$PEFT_TASK_ID"; TASK_IDS_JSON="[$TASK_ID]"; TASK_SCOPE="task_${TASK_ID}"
 [[ "${PEFT_VLA:-smolvla}" == smolvla ]] || die 'this launcher supports PEFT_VLA=smolvla only'
 VLA_NAME=smolvla
+PEFT_STUDENT_VISUAL_CONDITION="${PEFT_STUDENT_VISUAL_CONDITION:-none}"
+case "$PEFT_STUDENT_VISUAL_CONDITION" in
+  none)
+    STUDENT_POLICY_VARIANT=smolvla_fresh_arrow_clean_peft
+    COLLECTOR_FACTORY=vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect
+    ARTIFACT_NAMESPACE=peft_arrow
+    ;;
+  visual_goal_arrow)
+    STUDENT_POLICY_VARIANT=smolvla_fresh_arrow_visual_goal_peft
+    COLLECTOR_FACTORY=vla_benchmarking.libero.automatic_ttt.smolvla_visual_arrow_factory:collect
+    ARTIFACT_NAMESPACE=peft_arrow_visual
+    ;;
+  *) die 'PEFT_STUDENT_VISUAL_CONDITION must be none or visual_goal_arrow' ;;
+esac
 
 # Keep the historical 50-demo protocol as the default.  The one-shot pilot
 # selects one complete Arrow trajectory at runtime without deleting baseline
@@ -109,11 +123,11 @@ for name, expected in data.get("files", {}).items():
     if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected: raise SystemExit(f"base manifest hash mismatch: {name}")
 PY
 
-LABEL="${PEFT_LABEL:-smolvla_task${TASK_ID}_arrow_peft}"
+LABEL="${PEFT_LABEL:-smolvla_task${TASK_ID}_${PEFT_STUDENT_VISUAL_CONDITION}_arrow_peft}"
 [[ "$LABEL" =~ ^[A-Za-z0-9_.-]{1,96}$ ]] || die 'PEFT_LABEL is not safe'
-SCRATCH_ROOT="${PEFT_SCRATCH_ROOT:-${SCRATCH_FLASH:?SCRATCH_FLASH is required}/EmbodimentSemantic_runtime/peft_arrow}"
+SCRATCH_ROOT="${PEFT_SCRATCH_ROOT:-${SCRATCH_FLASH:?SCRATCH_FLASH is required}/EmbodimentSemantic_runtime/$ARTIFACT_NAMESPACE}"
 RUN_ROOT="${PEFT_RUN_ROOT:-$SCRATCH_ROOT/${LABEL}_${SLURM_JOB_ID}}"
-ARCHIVE_ROOT="${PEFT_ARCHIVE_ROOT:-$HOME/EmbodimentSemantic_archive/peft_arrow/$VLA_NAME/$TASK_SCOPE/${LABEL}_${SLURM_JOB_ID}}"
+ARCHIVE_ROOT="${PEFT_ARCHIVE_ROOT:-$HOME/EmbodimentSemantic_archive/$ARTIFACT_NAMESPACE/$VLA_NAME/$TASK_SCOPE/${LABEL}_${SLURM_JOB_ID}}"
 for path in "$RUN_ROOT" "$ARCHIVE_ROOT"; do [[ "$path" = /* && "$path" != / && ! -L "$path" ]] || die "unsafe output path: $path"; done
 RUN_ROOT="$(realpath -m -- "$RUN_ROOT")"; ARCHIVE_ROOT="$(realpath -m -- "$ARCHIVE_ROOT")"
 case "$RUN_ROOT" in "$REPO_ROOT"|"$REPO_ROOT"/*) die 'RUN_ROOT overlaps REPO_ROOT' ;; esac
@@ -175,18 +189,44 @@ archive_on_exit() {
   if [[ -d "$ARCHIVE_ROOT" ]]; then
     find "$ARCHIVE_ROOT" -type f ! -name archive_status.env ! -name inventory.sha256 ! -name tree_sha256 -print0 | sort -z | xargs -0 -r sha256sum > "$ARCHIVE_ROOT/inventory.sha256" || archive_rc=$?
     sha256sum "$ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$ARCHIVE_ROOT/tree_sha256" || archive_rc=$?
-    printf 'schema=smolvla_peft_arrow_task_job.v3\njob_id=%s\nstatus=%s\nworkload_exit_code=%s\nrepo_commit=%s\nvla=%s\ntask_scope=%s\ntask_id=%s\narrow_demos=%s\nsteps=%s\nbatch_size=%s\nrun_root=%s\narchive_root=%s\n' "$SLURM_JOB_ID" "$([[ "$workload_rc" -eq 0 && "$archive_rc" -eq 0 ]] && echo VERIFIED || echo PRESERVED_FAILURE)" "$workload_rc" "$ACTUAL_COMMIT" "$VLA_NAME" "$TASK_SCOPE" "$TASK_ID" "$ARROW_DEMOS" "$STEPS" "$PEFT_BATCH_SIZE" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
+    printf 'schema=smolvla_peft_arrow_task_job.v4\njob_id=%s\nstatus=%s\nworkload_exit_code=%s\nrepo_commit=%s\nvla=%s\nstudent_policy_variant=%s\nstudent_visual_condition=%s\ntask_scope=%s\ntask_id=%s\narrow_demos=%s\nsteps=%s\nbatch_size=%s\nrun_root=%s\narchive_root=%s\n' "$SLURM_JOB_ID" "$([[ "$workload_rc" -eq 0 && "$archive_rc" -eq 0 ]] && echo VERIFIED || echo PRESERVED_FAILURE)" "$workload_rc" "$ACTUAL_COMMIT" "$VLA_NAME" "$STUDENT_POLICY_VARIANT" "$PEFT_STUDENT_VISUAL_CONDITION" "$TASK_SCOPE" "$TASK_ID" "$ARROW_DEMOS" "$STEPS" "$PEFT_BATCH_SIZE" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
   fi
   if [[ "$TMP_ROOT" == "/tmp/peft-${SLURM_JOB_ID}" && -e "$TMP_ROOT" ]]; then rm -rf -- "$TMP_ROOT" || archive_rc=$?; fi
   [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]] && workload_rc=$archive_rc; exit "$workload_rc"
 }
 trap archive_on_exit EXIT
 
-export RUN_ROOT VLA_NAME TASK_ID TASK_IDS_JSON TASK_SCOPE ARROW_DEMOS PEFT_ARROW_DEMOS PEFT_SKIP_BASELINE EVAL_EPISODES EVAL_SEED STEPS MAX_ATTEMPTS VLA_STEP_BUDGET ARROW_STEP_BUDGET EPISODE_HORIZON RESOLUTION EVAL_CAMERAS PEFT_BATCH_SIZE PEFT_R LORA_ALPHA LORA_DROPOUT LORA_BIAS LORA_INIT LORA_RSLORA LORA_FAN_IN_FAN_OUT ACTION_SIDE_TARGET_REGEX OPTIMIZER_NAME WEIGHT_DECAY PEAK_LR OPTIMIZER_BETAS OPTIMIZER_EPS GRAD_CLIP SCHEDULER_NAME SCHEDULER_WARMUP_STEPS SCHEDULER_DECAY_STEPS SCHEDULER_DECAY_LR SAVE_FREQ NUM_WORKERS PREFETCH_FACTOR PERSISTENT_WORKERS LOG_FREQ TOLERANCE_S BASE_POLICY BASE_POLICY_REVISION ACTUAL_COMMIT LIBERO_COMMIT COLLECTION_MANIFEST
+export RUN_ROOT VLA_NAME TASK_ID TASK_IDS_JSON TASK_SCOPE ARROW_DEMOS PEFT_ARROW_DEMOS PEFT_SKIP_BASELINE EVAL_EPISODES EVAL_SEED STEPS MAX_ATTEMPTS VLA_STEP_BUDGET ARROW_STEP_BUDGET EPISODE_HORIZON RESOLUTION EVAL_CAMERAS PEFT_BATCH_SIZE PEFT_R LORA_ALPHA LORA_DROPOUT LORA_BIAS LORA_INIT LORA_RSLORA LORA_FAN_IN_FAN_OUT ACTION_SIDE_TARGET_REGEX OPTIMIZER_NAME WEIGHT_DECAY PEAK_LR OPTIMIZER_BETAS OPTIMIZER_EPS GRAD_CLIP SCHEDULER_NAME SCHEDULER_WARMUP_STEPS SCHEDULER_DECAY_STEPS SCHEDULER_DECAY_LR SAVE_FREQ NUM_WORKERS PREFETCH_FACTOR PERSISTENT_WORKERS LOG_FREQ TOLERANCE_S BASE_POLICY BASE_POLICY_REVISION ACTUAL_COMMIT LIBERO_COMMIT COLLECTION_MANIFEST PEFT_STUDENT_VISUAL_CONDITION STUDENT_POLICY_VARIANT COLLECTOR_FACTORY ARTIFACT_NAMESPACE
 export TRAIN_META_ROOT
 printf '[%s] preflight task %s\n' "$(date +'%F %T')" "$TASK_ID"
 "$PYTHON" -c 'import torch, lerobot, peft, accelerate, h5py, cv2, PIL, numpy, robosuite; from importlib.metadata import version; from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig; assert version("lerobot") == "0.5.2", version("lerobot"); assert version("peft") == "0.18.0", version("peft"); c=SmolVLAConfig(); required=("optimizer_lr","optimizer_betas","optimizer_eps","optimizer_weight_decay","optimizer_grad_clip_norm","scheduler_warmup_steps","scheduler_decay_steps","scheduler_decay_lr","chunk_size","n_action_steps","num_steps"); assert all(hasattr(c,n) for n in required); print("imports/native optimizer fields OK", torch.__version__, lerobot.__version__, peft.__version__)'
 "$PYTHON" -c 'import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)' || die 'CUDA is unavailable on allocated node'
+
+STUDENT_VISUAL_CONTRACT_JSON=null
+STUDENT_VISUAL_CONTRACT_SHA256=none
+if [[ "$PEFT_STUDENT_VISUAL_CONDITION" == visual_goal_arrow ]]; then
+  readarray -t visual_contract_fields < <("$PYTHON" - <<'PY'
+import json
+from vla_benchmarking.libero.automatic_ttt.visual_arrow_policy import (
+    VISUAL_ARROW_POLICY_CONTRACT,
+    VISUAL_ARROW_POLICY_CONTRACT_SHA256,
+    VISUAL_ARROW_POLICY_ID,
+)
+print(json.dumps(VISUAL_ARROW_POLICY_CONTRACT, sort_keys=True, separators=(",", ":")))
+print(VISUAL_ARROW_POLICY_CONTRACT_SHA256)
+print(VISUAL_ARROW_POLICY_ID)
+PY
+  )
+  [[ "${#visual_contract_fields[@]}" -eq 3 ]] || die 'cannot resolve visual-arrow policy contract'
+  STUDENT_VISUAL_CONTRACT_JSON="${visual_contract_fields[0]}"
+  STUDENT_VISUAL_CONTRACT_SHA256="${visual_contract_fields[1]}"
+  [[ "${visual_contract_fields[2]}" == "$STUDENT_POLICY_VARIANT" ]] || die 'visual-arrow policy id mismatch'
+  export VISUAL_CONDITION=visual_goal_arrow DISABLE_VISUAL_PROMPT_HINT=1
+  export VISUAL_ARROW_WIDTH=1 VISUAL_ARROW_HEAD_LENGTH=16
+else
+  unset VISUAL_CONDITION VISUAL_ARROWS DISABLE_VISUAL_PROMPT_HINT VISUAL_ARROW_WIDTH VISUAL_ARROW_HEAD_LENGTH || true
+fi
+export STUDENT_VISUAL_CONTRACT_JSON STUDENT_VISUAL_CONTRACT_SHA256
 
 # A failed run may have completed collection, training, and evaluation before
 # failing while publishing its immutable artifact.  When an explicit source
@@ -319,7 +359,7 @@ if [[ -z "$COLLECTION_MANIFEST" ]]; then
     --vla-step-budget "$VLA_STEP_BUDGET" --arrow-step-budget "$ARROW_STEP_BUDGET" --resolution "$RESOLUTION" \
     --controller-config-hash "$CONTROLLER_CONFIG_HASH" --collection-mode fresh_arrow \
     --reserved-eval-contract "$EVAL_RESET_CONTRACT" \
-    --factory vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect
+    --factory "$COLLECTOR_FACTORY"
   COLLECTION_MANIFEST="$COLLECTION_ROOT/collection_manifest.json"
 fi
 use_smolvla_cache
@@ -330,6 +370,10 @@ import json, pathlib, sys
 from vla_benchmarking.libero.automatic_ttt.peft_artifacts import load_arrow_collection_manifest
 value = load_arrow_collection_manifest(sys.argv[1], task_id=int(sys.argv[2]), expected_successes=int(sys.argv[5]))
 if value["controller_config_hash"] != sys.argv[4].lower(): raise SystemExit("collection controller hash differs from active config")
+raw = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if __import__('os').environ["PEFT_STUDENT_VISUAL_CONDITION"] == "visual_goal_arrow":
+    from vla_benchmarking.libero.automatic_ttt.visual_arrow_policy import validate_visual_arrow_collection_manifest
+    validate_visual_arrow_collection_manifest(raw)
 pathlib.Path(sys.argv[3]).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 DATASET_ROOT="$($PYTHON - "$COLLECTION_INFO" <<'PY'
@@ -384,6 +428,10 @@ collection = json.loads(pathlib.Path(os.environ["COLLECTION_INFO"]).read_text(en
 payload = {
     "schema":"smolvla_peft_arrow_task.v5", "method":"fresh_arrow_behavior_cloning_peft",
     "vla":"smolvla", "task_id":int(os.environ["TASK_ID"]), "task_ids":[int(os.environ["TASK_ID"])],
+    "student_policy_variant":os.environ["STUDENT_POLICY_VARIANT"],
+    "student_visual_condition":os.environ["PEFT_STUDENT_VISUAL_CONDITION"],
+    "student_visual_contract":json.loads(os.environ["STUDENT_VISUAL_CONTRACT_JSON"]),
+    "student_visual_contract_sha256":os.environ["STUDENT_VISUAL_CONTRACT_SHA256"],
     "training_scope":"task_specific", "arrow_demos":int(os.environ["ARROW_DEMOS"]), "collection_mode":"fresh_arrow", "collection_manifest":os.environ["COLLECTION_MANIFEST"],
     "evaluation_mode":"adapted_only" if os.environ["PEFT_SKIP_BASELINE"] == "1" else "paired",
     "collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]), "controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],
@@ -408,7 +456,7 @@ PY
 
 "$PYTHON" - "$TRAIN_META_ROOT/training_plan.json" <<'PY'
 import hashlib, json, os, pathlib
-payload={"schema":"smolvla_peft_arrow_task_training.v6","method":"fresh_arrow_behavior_cloning_peft","training_scope":"task_specific","vla":"smolvla","task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])],"base_policy":os.environ["BASE_POLICY"],"base_policy_revision":os.environ["BASE_POLICY_REVISION"],"collection_manifest":os.environ["COLLECTION_MANIFEST"],"collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"dataset_root":os.environ["DATASET_ROOT"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"peft": {"r":16,"lora_alpha":8,"lora_dropout":0.0,"bias":"none","init_lora_weights":True,"use_rslora":False,"fan_in_fan_out":False,"target_modules":os.environ["ACTION_SIDE_TARGET_REGEX"],"modules_to_save":[]},"action_semantics":{"chunk_size":50,"n_action_steps":1,"n_obs_steps":1,"num_steps":10},"dataloader":{"num_workers":4,"prefetch_factor":4,"persistent_workers":True,"tolerance_s":0.0001},"precision":{"use_amp":False,"accelerate_mixed_precision":"no"},"episode_horizon":280,"resolution":256,"eval_cameras":os.environ["EVAL_CAMERAS"].split(","),"optimizer":{"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,"scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},"eval_seeds":list(range(1000,1010)),"repo_commit":os.environ["ACTUAL_COMMIT"]}
+payload={"schema":"smolvla_peft_arrow_task_training.v7","method":"fresh_arrow_behavior_cloning_peft","training_scope":"task_specific","vla":"smolvla","task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])],"student_policy_variant":os.environ["STUDENT_POLICY_VARIANT"],"student_visual_condition":os.environ["PEFT_STUDENT_VISUAL_CONDITION"],"student_visual_contract":json.loads(os.environ["STUDENT_VISUAL_CONTRACT_JSON"]),"student_visual_contract_sha256":os.environ["STUDENT_VISUAL_CONTRACT_SHA256"],"base_policy":os.environ["BASE_POLICY"],"base_policy_revision":os.environ["BASE_POLICY_REVISION"],"collection_manifest":os.environ["COLLECTION_MANIFEST"],"collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"dataset_root":os.environ["DATASET_ROOT"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"peft": {"r":16,"lora_alpha":8,"lora_dropout":0.0,"bias":"none","init_lora_weights":True,"use_rslora":False,"fan_in_fan_out":False,"target_modules":os.environ["ACTION_SIDE_TARGET_REGEX"],"modules_to_save":[]},"action_semantics":{"chunk_size":50,"n_action_steps":1,"n_obs_steps":1,"num_steps":10},"dataloader":{"num_workers":4,"prefetch_factor":4,"persistent_workers":True,"tolerance_s":0.0001},"precision":{"use_amp":False,"accelerate_mixed_precision":"no"},"episode_horizon":280,"resolution":256,"eval_cameras":os.environ["EVAL_CAMERAS"].split(","),"optimizer":{"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,"scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},"eval_seeds":list(range(1000,1010)),"repo_commit":os.environ["ACTUAL_COMMIT"]}
 pathlib.Path(os.sys.argv[1]).write_text(json.dumps(payload,indent=2,sort_keys=True)+"\n",encoding="utf-8")
 PY
 "$PYTHON" "$AUDITOR" --generate-expected --base-policy "$BASE_POLICY" --output "$TRAIN_META_ROOT/expected_adapter_inventory.json"
@@ -418,7 +466,7 @@ printf '[%s] training task %s for %s optimizer steps (requested_epochs=%s)\n' "$
 TRAINING_RUNTIME_EVIDENCE="$TRAIN_META_ROOT/runtime_evidence.json" "$PYTHON" "$TRAINER" \
   --policy.push_to_hub=false --peft.method_type=LORA --peft.r=16 \
   --peft.target_modules="$ACTION_SIDE_TARGET_REGEX" --peft.full_training_modules="[]" \
-  --dataset.repo_id="local/arrow_grasp_task_${TASK_ID}" --dataset.root="$DATASET_ROOT" --output_dir="$TRAIN_ROOT" \
+  --dataset.repo_id="local/arrow_grasp_${PEFT_STUDENT_VISUAL_CONDITION}_task_${TASK_ID}" --dataset.root="$DATASET_ROOT" --output_dir="$TRAIN_ROOT" \
   --steps="$STEPS" --save_freq="$SAVE_FREQ" --eval_freq=0 --batch_size="$PEFT_BATCH_SIZE" --seed=1000 \
   --num_workers="$NUM_WORKERS" --prefetch_factor="$PREFETCH_FACTOR" --persistent_workers="$PERSISTENT_WORKERS" \
   --log_freq="$LOG_FREQ" --tolerance_s="$TOLERANCE_S" --cudnn_deterministic=true --policy.device=cuda --policy.path="$BASE_POLICY" \
@@ -499,6 +547,27 @@ validate_randomization_audit(items[0].parent, manifest)
 print(items[0])
 PY
 )"
+if [[ "$PEFT_STUDENT_VISUAL_CONDITION" == visual_goal_arrow ]]; then
+  "$PYTHON" - "$ADAPTED_EVAL_FILE" "$TASK_ID" <<'PY'
+import json, pathlib, sys
+eval_info = pathlib.Path(sys.argv[1])
+task_id = int(sys.argv[2])
+audit = eval_info.parent / "visual_relation_audit.jsonl"
+if not audit.is_file():
+    raise SystemExit(f"visual-arrow evaluation audit is missing: {audit}")
+rows = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines() if line.strip()]
+if not rows:
+    raise SystemExit("visual-arrow evaluation audit is empty")
+for row in rows:
+    if row.get("condition") != "visual_goal_arrow" or row.get("task_id") != task_id:
+        raise SystemExit("visual-arrow evaluation audit has the wrong condition/task")
+    if row.get("line_width") != 1 or row.get("head_length") != 16:
+        raise SystemExit("visual-arrow evaluation audit has the wrong rasterization contract")
+if not any(int(row.get("changed_pixels", 0)) > 0 for row in rows):
+    raise SystemExit("visual-arrow evaluation produced no visible arrow pixels")
+print("VERIFIED visual arrows reached adapted policy observations", len(rows))
+PY
+fi
 export CHECKPOINT_DIR BASELINE_EVAL_FILE ADAPTED_EVAL_FILE ARCHIVE_ROOT
 
 if [[ "$PEFT_SKIP_BASELINE" == 1 ]]; then
@@ -554,7 +623,7 @@ else:
     eval_counts={"mode":"paired","baseline":baseline,"adapted":adapted,"seeds":list(range(1000,1010))}
 manifest=save_peft_adapter(
     os.environ["CHECKPOINT_DIR"],os.environ["ARCHIVE_ROOT"],vla="smolvla",task_id=int(os.environ["TASK_ID"]),
-    run_id=f"smolvla_task{os.environ['TASK_ID']}_arrow{os.environ['COLLECTION_SUCCESS_COUNT']}_steps{os.environ['STEPS']}_job{os.environ.get('SLURM_JOB_ID','unknown')}",
+    run_id=f"{os.environ['STUDENT_POLICY_VARIANT']}_task{os.environ['TASK_ID']}_arrow{os.environ['COLLECTION_SUCCESS_COUNT']}_steps{os.environ['STEPS']}_job{os.environ.get('SLURM_JOB_ID','unknown')}",
     base_checkpoint=os.environ["BASE_POLICY"],base_checkpoint_revision=os.environ["BASE_POLICY_REVISION"],
     collection_manifest=os.environ["COLLECTION_MANIFEST"],collection_success_count=int(os.environ["COLLECTION_SUCCESS_COUNT"]),controller_config_hash=os.environ["CONTROLLER_CONFIG_HASH"],checkpoint_step=int(os.environ["STEPS"]),seed=1000,
     train_counts={"successful_trajectories":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"training_scope":"task_specific","runtime_evidence_source_path":os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json","runtime_evidence_source_sha256":os.environ["RUNTIME_EVIDENCE_SHA256"]},
@@ -562,7 +631,7 @@ manifest=save_peft_adapter(
     optimizer={"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,"scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},
     runtime_evidence=os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json",
     git_commit=os.environ["ACTUAL_COMMIT"],runtime_versions={n:pkg(n) for n in ("python","torch","lerobot","peft","accelerate")})
-summary={"schema":"smolvla_peft_arrow_task_summary.v5","training_scope":"task_specific","vla":"smolvla","task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])] ,"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","evaluation_mode":"adapted_only" if baseline is None else "paired","collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"optimizer_steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"global_batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"baseline":baseline if baseline is not None else {"status":"SKIPPED","reason":"PEFT_SKIP_BASELINE=1"},"adapted":adapted,"comparison_available":baseline is not None,"improvement_claim_supported":False,"success_delta":(adapted["success_rate"]-baseline["success_rate"] if baseline is not None else None),"adapter_artifact":asdict(manifest)}
+summary={"schema":"smolvla_peft_arrow_task_summary.v6","training_scope":"task_specific","vla":"smolvla","student_policy_variant":os.environ["STUDENT_POLICY_VARIANT"],"student_visual_condition":os.environ["PEFT_STUDENT_VISUAL_CONDITION"],"student_visual_contract":json.loads(os.environ["STUDENT_VISUAL_CONTRACT_JSON"]),"student_visual_contract_sha256":os.environ["STUDENT_VISUAL_CONTRACT_SHA256"],"task_id":int(os.environ["TASK_ID"]),"trained_task_ids":[int(os.environ["TASK_ID"])] ,"source_kind":"arrow_grasp_controller_fresh_demonstration","collection_mode":"fresh_arrow","evaluation_mode":"adapted_only" if baseline is None else "paired","collection_success_count":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"collection_manifest_sha256":hashlib.sha256(pathlib.Path(os.environ["COLLECTION_MANIFEST"]).read_bytes()).hexdigest(),"controller_config_hash":os.environ["CONTROLLER_CONFIG_HASH"],"dataset_frames":int(os.environ["DATASET_FRAMES"]),"optimizer_steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"global_batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"baseline":baseline if baseline is not None else {"status":"SKIPPED","reason":"PEFT_SKIP_BASELINE=1"},"adapted":adapted,"comparison_available":baseline is not None,"improvement_claim_supported":False,"success_delta":(adapted["success_rate"]-baseline["success_rate"] if baseline is not None else None),"adapter_artifact":asdict(manifest)}
 root=pathlib.Path(os.environ["RUN_ROOT"]); (root/"experiment_summary.json").write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n",encoding="utf-8"); (root/"ADAPTER_ARTIFACT_PATH.json").write_text(json.dumps(manifest.artifact_path)+"\n",encoding="utf-8")
 PY
 touch "$RUN_ROOT/COMPLETED"

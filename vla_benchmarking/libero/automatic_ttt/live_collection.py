@@ -96,10 +96,33 @@ class CanonicalLiveEnvironment:
     delegates only to this exact raw environment object.
     """
 
-    def __init__(self, raw_environment: Any, *, initial_observation: Any, instruction: str) -> None:
+    def __init__(
+        self,
+        raw_environment: Any,
+        *,
+        initial_observation: Any,
+        instruction: str,
+        observation_transform: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    ) -> None:
         self._raw_environment = raw_environment
         self._instruction = instruction
-        self._observation = canonical_student_observation(initial_observation, instruction=instruction)
+        self._observation_transform = observation_transform
+        self._observation = self._project_observation(initial_observation)
+
+    def _project_observation(self, raw_observation: Any) -> Mapping[str, Any]:
+        observation = canonical_student_observation(
+            raw_observation, instruction=self._instruction
+        )
+        if self._observation_transform is not None:
+            observation = self._observation_transform(observation)
+            if not isinstance(observation, Mapping):
+                raise ContractError("observation_transform must return a mapping")
+            validate_student_observation_schema(
+                observation,
+                require_complete=True,
+                schema=CANONICAL_OBSERVATION_SCHEMA,
+            )
+        return observation
 
     @property
     def raw_environment(self) -> Any:
@@ -129,7 +152,7 @@ class CanonicalLiveEnvironment:
     def _step_and_update(self, action: Sequence[float]) -> tuple[tuple[Any, ...], Mapping[str, Any]]:
         result = self._raw_environment.step(action)
         observation, rest = _extract_step_observation(result)
-        self._observation = canonical_student_observation(observation, instruction=self._instruction)
+        self._observation = self._project_observation(observation)
         return _replace_step_observation(result, observation, rest), observation
 
     def __getattr__(self, name: str) -> Any:
@@ -652,6 +675,9 @@ def collect_fresh_arrow_demonstrations(
     reserved_eval_init_state_indices: Sequence[int] | None = None,
     reserved_eval_init_state_hashes: Sequence[str] | None = None,
     reset_identity_fn: Callable[[Any, int], Mapping[str, Any]] | None = None,
+    observation_transform_factory: Callable[
+        [Any, EpisodeSpec], Callable[[Mapping[str, Any]], Mapping[str, Any]]
+    ] | None = None,
 ) -> CollectionResult:
     """Collect successful Arrow rollouts, each from a fresh reset.
 
@@ -709,6 +735,7 @@ def collect_fresh_arrow_demonstrations(
             task_description=task_description, policy_id=policy_id, split="train",
         )
         raw_environment = None
+        observation_transform = None
         # Controller diagnostics are attempt-local.  Removing this directory
         # on both success and failure prevents failed trajectories from
         # becoming an implicit training/raw-trace dataset.
@@ -732,8 +759,15 @@ def collect_fresh_arrow_demonstrations(
                 raise ContractError("fresh Arrow reset identity overlaps reserved evaluation index")
             if reserved_hashes and digest in {value.lower() for value in reserved_hashes}:
                 raise ContractError("fresh Arrow reset identity hash overlaps reserved evaluation hash")
+            if observation_transform_factory is not None:
+                observation_transform = observation_transform_factory(raw_environment, episode)
+                if not callable(observation_transform):
+                    raise ContractError("observation_transform_factory must return a callable")
             environment = CanonicalLiveEnvironment(
-                raw_environment, initial_observation=reset_observation, instruction=task_description
+                raw_environment,
+                initial_observation=reset_observation,
+                instruction=task_description,
+                observation_transform=observation_transform,
             )
             source_state = source_state_fn(environment, environment.observe())
             if source_state not in {SourceState.SOURCE_UNHELD, SourceState.SOURCE_HELD}:
@@ -779,13 +813,24 @@ def collect_fresh_arrow_demonstrations(
             transitions = list(result.transitions)
             if not transitions or any(row.actor.value != "arrow_grasp_controller" for row in transitions):
                 raise ContractError("fresh Arrow accepted trace contains a non-Arrow transition")
+            transform_summary: Mapping[str, Any] | None = None
+            summarize_transform = getattr(observation_transform, "audit_summary", None)
+            if callable(summarize_transform):
+                transform_summary = summarize_transform()
+                if not isinstance(transform_summary, Mapping):
+                    raise ContractError("observation transform audit_summary must return a mapping")
+            accepted_metadata = {
+                **dict(metadata), "collection_mode": "fresh_arrow", "vla_called": False
+            }
+            if transform_summary is not None:
+                accepted_metadata["student_observation_transform"] = dict(transform_summary)
             accepted_row = {
                 "episode_id": episode.episode_id, "task_id": int(task_id), "seed": seed,
                 "source_kind": FRESH_SOURCE_KIND, "method_label": FRESH_PEFT_METHOD_LABEL,
                 "collection_mode": "fresh_arrow", "transitions": [row.to_json() for row in transitions],
                 "evaluator_receipt": receipt,
                 "reset_identity": reset_identity,
-                "metadata": _json_safe({**dict(metadata), "collection_mode": "fresh_arrow", "vla_called": False}),
+                "metadata": _json_safe(accepted_metadata),
             }
             cache.add_success(accepted_row)
         finally:
@@ -800,6 +845,7 @@ def collect_fresh_arrow_demonstrations(
                 # retained here.
                 accepted_row = transitions = result = request = view = teacher = None
                 metadata = receipt = environment = reset_observation = raw_environment = None
+                observation_transform = None
                 shutil.rmtree(attempt_output, ignore_errors=True)
                 print(
                     f"accepted={cache.accepted_count}/{accepted_target} attempted={cache.attempted_count}",

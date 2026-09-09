@@ -10,6 +10,7 @@ from vla_benchmarking.libero.evaluation.visual_scene_graph import (
     VisualGraphVecEnvWrapper,
     draw_scene_graph_arrows,
     goal_arrow_prompt_hint,
+    overlay_visual_relations,
     select_visual_relations,
 )
 
@@ -94,6 +95,31 @@ def test_goal_arrow_selector_keeps_only_target_to_goal():
     )
 
     assert selected == [("target", "goal", "plate_1")]
+
+
+def test_shared_visual_overlay_reports_exact_rasterized_change():
+    image = np.zeros((64, 64, 3), dtype=np.uint8)
+    bboxes = {
+        "target": [4, 28, 12, 36],
+        "plate_1": [52, 28, 60, 36],
+    }
+
+    rendered, audit = overlay_visual_relations(
+        image,
+        bboxes,
+        [("target", "is_left_of", "plate_1")],
+        condition="visual_goal_arrow",
+        subject="target",
+        goal_object="plate_1",
+        line_width=1,
+        head_length=8,
+    )
+
+    assert audit["drawn_relations"] == [["target", "goal", "plate_1"]]
+    assert audit["skipped_relations_missing_bbox"] == []
+    assert audit["changed_pixels"] == int(np.count_nonzero(np.any(rendered != image, axis=2)))
+    assert audit["changed_pixels"] > 0
+    assert not image.any()
 
 
 def test_goal_arrow_prompt_hint_uses_goal_object_name():

@@ -15,10 +15,10 @@ def test_array_launcher_is_task_specific_and_five_epoch_budget() -> None:
     assert "--array=" not in source
     assert "single_sequential_job" in source
     all_tasks = ALL_TASKS.read_text(encoding="utf-8")
-    assert "for task_id in 0 1 2 3 4 5 6 7 8 9" in all_tasks
+    assert 'for task_id in $(seq "$FIRST_TASK_ID" 9); do' in all_tasks
     assert 'export PEFT_TASK_ID="$task_id"' in all_tasks
     assert "unset PEFT_TASK_IDS PEFT_ARROW_COLLECTION_MANIFEST" in all_tasks
-    assert "arrow_demos=50" in source
+    assert "arrow_demos=1" in source
     assert "collection_mode=fresh_arrow" in source
     assert "requested_epochs=5" in source
     assert "optimizer_steps=derived_from_dataset" in source
@@ -45,10 +45,11 @@ def test_array_launcher_has_immutable_canary_gate_and_separate_roots() -> None:
     assert "if ($Mode -eq 'submit' -and -not $ConfirmExpensiveRun)" in source
 
 
-def test_canary_validates_collection_training_reload_and_paired_eval() -> None:
+def test_canary_validates_collection_training_reload_and_adapted_eval() -> None:
     source = CANARY.read_text(encoding="utf-8")
     assert "--accepted-target 1" in source
-    assert "--factory vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect" in source
+    assert "COLLECTOR_FACTORY=vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect" in source
+    assert '--factory "$COLLECTOR_FACTORY"' in source
     assert "load_arrow_collection_manifest" in source
     assert "expected_successes=1" in source
     assert 'value.get("collection_mode") != "fresh_arrow"' in source
@@ -58,13 +59,12 @@ def test_canary_validates_collection_training_reload_and_paired_eval() -> None:
     assert "--steps=2 --save_freq=2 --eval_freq=0 --batch_size=8" in source
     assert 'v.get("updates_observed") != 2' in source
     assert '"optimizer_updates":2' in source
-    assert 'for phase in baseline adapted' in source
     assert "validate_eval_info" in source
     assert "validate_randomization_audit" in source
-    assert "baseline/adapted reset identities differ" in source
+    assert "adapted sealed reset identity matches skip-mode reservation" in source
     assert "N_ACTION_STEPS=checkpoint LIBERO_EPISODE_LENGTH=280 EVAL_RESOLUTION=256" in source
     assert "EVAL_CAMERAS=agentview_image,robot0_eye_in_hand_image" in source
-    assert '"paired_eval_seeds":[1000]' in source
+    assert '"adapted_eval_seeds":[1000]' in source
     assert "inventory.sha256" in source
     assert "tree_sha256" in source
     assert "status=VERIFIED" in source

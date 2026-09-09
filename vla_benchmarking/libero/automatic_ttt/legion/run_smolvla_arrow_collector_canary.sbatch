@@ -25,6 +25,20 @@ export PYTHONDONTWRITEBYTECODE=1
 export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1
 die() { printf 'smolvla Arrow collector canary: %s\n' "$*" >&2; exit 2; }
 
+PEFT_STUDENT_VISUAL_CONDITION="${PEFT_STUDENT_VISUAL_CONDITION:-none}"
+case "$PEFT_STUDENT_VISUAL_CONDITION" in
+  none)
+    STUDENT_POLICY_VARIANT=smolvla_fresh_arrow_clean_peft
+    COLLECTOR_FACTORY=vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect
+    ;;
+  visual_goal_arrow)
+    STUDENT_POLICY_VARIANT=smolvla_fresh_arrow_visual_goal_peft
+    COLLECTOR_FACTORY=vla_benchmarking.libero.automatic_ttt.smolvla_visual_arrow_factory:collect
+    ;;
+  *) die 'PEFT_STUDENT_VISUAL_CONDITION must be none or visual_goal_arrow' ;;
+esac
+export PEFT_STUDENT_VISUAL_CONDITION STUDENT_POLICY_VARIANT COLLECTOR_FACTORY
+
 [[ -n "${SLURM_JOB_ID:-}" && "$SLURM_JOB_ID" =~ ^[0-9]+$ ]] || die 'submit with sbatch'
 [[ -n "${REPO_ROOT:-}" ]] || die 'REPO_ROOT is required'
 [[ "${PEFT_EXPECTED_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die 'PEFT_EXPECTED_COMMIT must be a 40-character SHA'
@@ -73,8 +87,8 @@ archive_on_exit() {
           -s "$ARCHIVE_ROOT/inventory.sha256" && -s "$ARCHIVE_ROOT/tree_sha256" ]]; then
       status=VERIFIED
     fi
-    printf 'schema=smolvla_arrow_collector_canary_job.v1\nstatus=%s\njob_id=%s\nrepo_commit=%s\ncontroller_config_hash=%s\nrun_root=%s\narchive_root=%s\n' \
-      "$status" "$SLURM_JOB_ID" "$actual_commit" "$PEFT_CANARY_CONTROLLER_HASH" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
+    printf 'schema=smolvla_arrow_collector_canary_job.v2\nstatus=%s\njob_id=%s\nrepo_commit=%s\nstudent_policy_variant=%s\nstudent_visual_condition=%s\ncontroller_config_hash=%s\nrun_root=%s\narchive_root=%s\n' \
+      "$status" "$SLURM_JOB_ID" "$actual_commit" "$STUDENT_POLICY_VARIANT" "$PEFT_STUDENT_VISUAL_CONDITION" "$PEFT_CANARY_CONTROLLER_HASH" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
   fi
   [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]] && workload_rc=$archive_rc
   exit "$workload_rc"
@@ -122,6 +136,23 @@ ARROW_HF_CACHE="${ARROW_HF_CACHE:-$HOME/EmbodimentSemantic_runtime/EmbodimentSem
 export HF_HOME="$ARROW_HF_CACHE" HF_HUB_CACHE="$ARROW_HF_CACHE/hub" TRANSFORMERS_CACHE="$ARROW_HF_CACHE/transformers" HF_MODULES_CACHE="$ARROW_HF_CACHE/modules"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 export SMOLVLA_BASE_POLICY="$BASE_POLICY" ARROW_CONTROLLER_CONFIG="$CONTROLLER_CONFIG"
+if [[ "$PEFT_STUDENT_VISUAL_CONDITION" == visual_goal_arrow ]]; then
+  export VISUAL_CONDITION=visual_goal_arrow DISABLE_VISUAL_PROMPT_HINT=1
+  export VISUAL_ARROW_WIDTH=1 VISUAL_ARROW_HEAD_LENGTH=16
+  "$PYTHON" - <<'PY'
+from vla_benchmarking.libero.automatic_ttt.visual_arrow_policy import (
+    VISUAL_ARROW_POLICY_CONTRACT,
+    VISUAL_ARROW_POLICY_ID,
+)
+if VISUAL_ARROW_POLICY_ID != "smolvla_fresh_arrow_visual_goal_peft":
+    raise SystemExit("visual-arrow policy id mismatch")
+if VISUAL_ARROW_POLICY_CONTRACT["modified_student_field"] != "agentview":
+    raise SystemExit("visual-arrow image contract mismatch")
+print("visual-arrow train/eval policy contract verified")
+PY
+else
+  unset VISUAL_CONDITION VISUAL_ARROWS DISABLE_VISUAL_PROMPT_HINT VISUAL_ARROW_WIDTH VISUAL_ARROW_HEAD_LENGTH || true
+fi
 # Python multiprocessing creates AF_UNIX sockets below TMPDIR. Keep this path
 # short enough for Linux's 108-byte sockaddr_un limit; RUN_ROOT is much longer.
 TMP_ROOT="/tmp/peft-canary-${SLURM_JOB_ID}"
@@ -162,7 +193,7 @@ PY
   --accepted-target 1 --adaptation-seed-start 3000 --max-attempts 10 --vla-step-budget 280 --arrow-step-budget 1200 --resolution 256 \
   --controller-config-hash "$PEFT_CANARY_CONTROLLER_HASH" --collection-mode fresh_arrow \
   --reserved-eval-contract "$EVAL_RESET_CONTRACT" \
-  --factory vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect
+  --factory "$COLLECTOR_FACTORY"
 
 MANIFEST="$COLLECTION_ROOT/collection_manifest.json"
 [[ -s "$MANIFEST" && ! -L "$MANIFEST" ]] || die 'collector did not produce an immutable manifest'
@@ -176,6 +207,9 @@ if value.get("controller_config_hash") != controller_hash:
 if value.get("collection_mode") != "fresh_arrow":
     raise SystemExit("canary collection mode is not fresh_arrow")
 raw = json.loads(pathlib.Path(manifest).read_text(encoding="utf-8"))
+if __import__("os").environ["PEFT_STUDENT_VISUAL_CONDITION"] == "visual_goal_arrow":
+    from vla_benchmarking.libero.automatic_ttt.visual_arrow_policy import validate_visual_arrow_collection_manifest
+    validate_visual_arrow_collection_manifest(raw)
 if raw.get("starts_from_reset") is not True or raw.get("vla_called") is not False:
     raise SystemExit("canary did not prove fresh-reset Arrow-only collection")
 payload = {
@@ -216,7 +250,7 @@ export HF_HOME="$SMOLVLA_HF_CACHE" HF_HUB_CACHE="$SMOLVLA_HF_CACHE/hub" TRANSFOR
 TRAINING_RUNTIME_EVIDENCE="$TRAIN_META/runtime_evidence.json" "$PYTHON" "$TRAINER" \
   --policy.push_to_hub=false --peft.method_type=LORA --peft.r=16 \
   --peft.target_modules='(model\.vlm_with_expert\.lm_expert\..*\.(q|v)_proj|model\.(state_proj|action_in_proj|action_out_proj|action_time_mlp_in|action_time_mlp_out))' --peft.full_training_modules='[]' \
-  --dataset.repo_id=local/arrow_grasp_task_0_canary --dataset.root="$DATASET_ROOT" --output_dir="$TRAIN_ROOT" \
+  --dataset.repo_id="local/arrow_grasp_${PEFT_STUDENT_VISUAL_CONDITION}_task_0_canary" --dataset.root="$DATASET_ROOT" --output_dir="$TRAIN_ROOT" \
   --steps=2 --save_freq=2 --eval_freq=0 --batch_size=8 --seed=1000 \
   --num_workers=4 --prefetch_factor=4 --persistent_workers=true --log_freq=1 --tolerance_s=0.0001 --cudnn_deterministic=true \
   --policy.device=cuda --policy.path="$BASE_POLICY" --policy.use_amp=false --policy.n_obs_steps=1 --policy.chunk_size=50 --policy.n_action_steps=1 --policy.num_steps=10 \
@@ -291,11 +325,32 @@ if str(identity.get("init_state_sha256", "")).lower() != str(contract["reserved_
 print("VERIFIED canary adapted sealed reset identity matches skip-mode reservation")
 PY
 
-"$PYTHON" - "$RUN_ROOT/collector_canary_marker.json" "$PEFT_EXPECTED_COMMIT" "$PEFT_CANARY_CONTROLLER_HASH" "$CHECKPOINT_DIR" <<'PY'
+if [[ "$PEFT_STUDENT_VISUAL_CONDITION" == visual_goal_arrow ]]; then
+  "$PYTHON" - "$RUN_ROOT/eval_adapted" <<'PY'
+import json, pathlib, sys
+items = sorted(pathlib.Path(sys.argv[1]).rglob("visual_relation_audit.jsonl"))
+if len(items) != 1:
+    raise SystemExit(f"expected one visual-arrow audit, found {len(items)}")
+rows = [json.loads(line) for line in items[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+if not rows:
+    raise SystemExit("visual-arrow canary evaluation audit is empty")
+for row in rows:
+    if row.get("condition") != "visual_goal_arrow" or row.get("task_id") != 0:
+        raise SystemExit("visual-arrow canary audit has the wrong condition/task")
+    if row.get("line_width") != 1 or row.get("head_length") != 16:
+        raise SystemExit("visual-arrow canary audit has the wrong rasterization contract")
+if not any(int(row.get("changed_pixels", 0)) > 0 for row in rows):
+    raise SystemExit("visual-arrow canary evaluation produced no visible arrow pixels")
+print("VERIFIED visual arrows reached canary evaluation observations", len(rows))
+PY
+fi
+
+"$PYTHON" - "$RUN_ROOT/collector_canary_marker.json" "$PEFT_EXPECTED_COMMIT" "$PEFT_CANARY_CONTROLLER_HASH" "$CHECKPOINT_DIR" "$STUDENT_POLICY_VARIANT" "$PEFT_STUDENT_VISUAL_CONDITION" <<'PY'
 import json,pathlib,sys
-path,commit,controller,checkpoint=sys.argv[1:]
-payload={"schema":"smolvla_arrow_peft_e2e_canary.v1","status":"passed","repo_commit":commit,
+path,commit,controller,checkpoint,policy_variant,visual_condition=sys.argv[1:]
+payload={"schema":"smolvla_arrow_peft_e2e_canary.v2","status":"passed","repo_commit":commit,
          "controller_contract_sha256":controller,"task_id":0,"accepted_successes":1,
+         "student_policy_variant":policy_variant,"student_visual_condition":visual_condition,
          "optimizer_updates":2,"adapter_checkpoint":str(pathlib.Path(checkpoint).resolve()),
          "eval_mode":"adapted_only","comparison_available":False,"improvement_claim_supported":False,
          "adapted_eval_seeds":[1000],"production_requested_epochs":5}

@@ -24,7 +24,9 @@ def test_launcher_is_scalar_task_specific_and_manifest_driven():
     assert "--adaptation-seed-start 3000" in text
     assert '--max-attempts "$MAX_ATTEMPTS"' in text
     assert "MAX_ATTEMPTS=500" in text
-    assert "--factory vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect" in text
+    assert "COLLECTOR_FACTORY=vla_benchmarking.libero.automatic_ttt.smolvla_arrow_factory:collect" in text
+    assert 'COLLECTOR_FACTORY=vla_benchmarking.libero.automatic_ttt.smolvla_visual_arrow_factory:collect' in text
+    assert '--factory "$COLLECTOR_FACTORY"' in text
     assert "COLLECTION_ROOT=\"$RUN_ROOT/collection\"" in text
     assert 'if [[ -z "$COLLECTION_MANIFEST" ]]; then' in text
     assert 'COLLECTION_MANIFEST="$COLLECTION_ROOT/collection_manifest.json"' in text
@@ -77,6 +79,14 @@ def test_embedded_launcher_python_heredocs_compile():
     assert blocks, "launcher must contain embedded Python validation blocks"
     for index, block in enumerate(blocks):
         compile(block, f"{LAUNCHER}:heredoc-{index}", "exec")
+
+
+def test_embedded_canary_python_heredocs_compile():
+    text = CANARY.read_text(encoding="utf-8")
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", text, flags=re.DOTALL)
+    assert blocks, "canary must contain embedded Python validation blocks"
+    for index, block in enumerate(blocks):
+        compile(block, f"{CANARY}:heredoc-{index}", "exec")
 
 
 def test_runtime_evidence_validation_maps_optimizer_lr_to_base_lr_and_rejects_missing(tmp_path, monkeypatch):
@@ -289,3 +299,27 @@ def test_canary_uses_short_tmpdir_for_torch_multiprocessing_sockets():
     assert 'TMP_ROOT="/tmp/peft-canary-${SLURM_JOB_ID}"' in canary
     assert 'export TMPDIR="$TMP_ROOT"' in canary
     assert 'TMPDIR="$RUN_ROOT/tmp"' not in canary
+
+
+def test_visual_arrow_policy_is_separate_and_matched_in_training_and_evaluation():
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    canary = CANARY.read_text(encoding="utf-8")
+    all_tasks = (LAUNCHER.parent / "run_smolvla_peft_visual_arrow_all_tasks.sbatch").read_text(encoding="utf-8")
+
+    assert 'PEFT_STUDENT_VISUAL_CONDITION="${PEFT_STUDENT_VISUAL_CONDITION:-none}"' in launcher
+    assert "smolvla_fresh_arrow_clean_peft" in launcher
+    assert "smolvla_fresh_arrow_visual_goal_peft" in launcher
+    assert 'export VISUAL_CONDITION=visual_goal_arrow DISABLE_VISUAL_PROMPT_HINT=1' in launcher
+    assert 'export VISUAL_ARROW_WIDTH=1 VISUAL_ARROW_HEAD_LENGTH=16' in launcher
+    assert "validate_visual_arrow_collection_manifest" in launcher
+    assert "visual_relation_audit.jsonl" in launcher
+    assert 'row.get("changed_pixels", 0)' in launcher
+
+    assert 'export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1 PEFT_STUDENT_VISUAL_CONDITION=visual_goal_arrow' in all_tasks
+    assert 'for task_id in $(seq "$PEFT_START_TASK_ID" 9); do' in all_tasks
+    assert 'bash "$RUNNER"' in all_tasks
+    assert "run_smolvla_peft_arrow_task.sbatch" in all_tasks
+    assert "PEFT_STUDENT_VISUAL_CONDITION" in canary
+    assert '--factory "$COLLECTOR_FACTORY"' in canary
+    assert "validate_visual_arrow_collection_manifest" in canary
+    assert "visual_relation_audit.jsonl" in canary

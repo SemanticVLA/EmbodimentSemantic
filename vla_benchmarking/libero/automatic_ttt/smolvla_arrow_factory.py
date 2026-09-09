@@ -636,6 +636,7 @@ def build_collection_factory(
     vla_step_budget: int = DEFAULT_VLA_STEP_BUDGET,
     arrow_step_budget: int = DEFAULT_ARROW_STEP_BUDGET,
     collection_mode: str = "same_episode_takeover",
+    student_visual_condition: str | None = None,
 ) -> Callable[..., Mapping[str, Any]]:
     """Build the CLI-compatible collection callable after runtime preflight."""
 
@@ -648,6 +649,8 @@ def build_collection_factory(
         )
     if int(vla_step_budget) <= 0 or int(arrow_step_budget) <= 0:
         raise ValueError("VLA and Arrow step budgets must be positive")
+    if student_visual_condition not in {None, "visual_goal_arrow"}:
+        raise ValueError("student_visual_condition must be None or visual_goal_arrow")
 
     def collect(**kwargs: Any) -> Mapping[str, Any]:
         task_id = int(kwargs["task_id"])
@@ -675,6 +678,35 @@ def build_collection_factory(
             prepare(environment)
             return environment
 
+        observation_transform_factory = None
+        visual_provenance: dict[str, Any] = {
+            "student_policy_id": "smolvla_fresh_arrow_clean_peft",
+            "student_visual_condition": "none",
+        }
+        if student_visual_condition == "visual_goal_arrow":
+            from .visual_arrow_policy import (
+                VISUAL_ARROW_POLICY_CONTRACT,
+                VISUAL_ARROW_POLICY_CONTRACT_SHA256,
+                VISUAL_ARROW_POLICY_ID,
+                make_live_visual_goal_arrow_transform,
+            )
+
+            def make_visual_transform(environment: Any, episode: EpisodeSpec) -> Any:
+                return make_live_visual_goal_arrow_transform(
+                    environment,
+                    task_id=int(episode.task_id),
+                    task_description=episode.task_description,
+                    resolution=int(resolution),
+                )
+
+            observation_transform_factory = make_visual_transform
+            visual_provenance = {
+                "student_policy_id": VISUAL_ARROW_POLICY_ID,
+                "student_visual_condition": "visual_goal_arrow",
+                "student_visual_contract": VISUAL_ARROW_POLICY_CONTRACT,
+                "student_visual_contract_sha256": VISUAL_ARROW_POLICY_CONTRACT_SHA256,
+            }
+
         provenance = {
                 "runtime": "smolvla_arrow_factory",
                 "base_policy_revision": PINNED_BASE_POLICY_REVISION,
@@ -685,6 +717,7 @@ def build_collection_factory(
                 "arrow_step_budget": int(arrow_step_budget),
                 "max_attempts": int(kwargs.get("max_attempts", DEFAULT_MAX_ATTEMPTS)),
                 "fps": 20,
+                **visual_provenance,
                 "provenance_categories": {
                     "resolution": "SMOLVLA_PINNED", "vla_step_budget": "SMOLVLA_PINNED",
                     "arrow_step_budget": "CONTROLLER_PINNED", "max_attempts": "OPERATIONAL",
@@ -704,6 +737,7 @@ def build_collection_factory(
                 reserved_eval_init_state_indices=kwargs.get("reserved_eval_init_state_indices"),
                 reserved_eval_init_state_hashes=kwargs.get("reserved_eval_init_state_hashes"),
                 attempt_cleanup_fn=getattr(session, "cleanup_attempt", None),
+                observation_transform_factory=observation_transform_factory,
                 provenance={**provenance, "collection_mode": "fresh_arrow", "vla_loaded": False,
                             "vla_called": False, "method": "successful_arrow_behavior_cloning"},
             )
