@@ -314,6 +314,87 @@ def _to_rows(value: Any) -> tuple[tuple[float, ...], ...]:
     return tuple(normalized)
 
 
+def _native_image_tensor(value: Any, *, name: str) -> Any:
+    """Convert one canonical RGB image to the tensor contract of SmolVLA.
+
+    The checkpoint-owned LeRobot pipeline starts with ``AddBatchDimension``;
+    unlike the vanilla observation processor it does not convert NumPy HWC
+    images to tensors or move channels.  ``ObservationFrame`` also freezes
+    NumPy arrays, so passing its image through directly both emits a
+    non-writable-tensor warning and leaves the model with ``B,H,W,C``.  Keep
+    this conversion at the native SmolVLA boundary, where the expected
+    ``B,C,H,W``/``[0, 1]`` contract is explicit.
+
+    A floating-point tensor is treated as already normalized, which avoids
+    applying the uint8 scaling twice when a caller has already prepared the
+    LeRobot representation.
+    """
+
+    try:
+        import numpy as np
+        import torch
+    except ImportError as exc:  # pragma: no cover - native runtime boundary
+        raise ContractError("native SmolVLA image preparation requires NumPy and PyTorch") from exc
+
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach().clone()
+    else:
+        # ``np.array(copy=True)`` is intentional: ObservationFrame protects
+        # its arrays with write=False, while torch.as_tensor would otherwise
+        # retain the read-only backing buffer.
+        try:
+            array = np.array(value, copy=True, order="C")
+            tensor = torch.from_numpy(array)
+        except (TypeError, ValueError) as exc:
+            raise ContractError(f"{name} must be an RGB image array or tensor") from exc
+
+    channels = (1, 3, 4)
+    if tensor.ndim == 3:
+        if tensor.shape[-1] in channels and tensor.shape[0] not in channels:
+            tensor = tensor.permute(2, 0, 1)
+        elif tensor.shape[0] not in channels:
+            raise ContractError(f"{name} must be HWC or CHW with an RGB channel dimension, got {tuple(tensor.shape)}")
+        tensor = tensor.unsqueeze(0)
+    elif tensor.ndim == 4:
+        if tensor.shape[-1] in channels and tensor.shape[1] not in channels:
+            tensor = tensor.permute(0, 3, 1, 2)
+        elif tensor.shape[1] not in channels:
+            raise ContractError(f"{name} must be BHWC or BCHW with an RGB channel dimension, got {tuple(tensor.shape)}")
+    else:
+        raise ContractError(f"{name} must be a 3-D or 4-D image, got {tuple(tensor.shape)}")
+
+    if tensor.shape[1] != 3:
+        raise ContractError(f"{name} must have three RGB channels, got {tuple(tensor.shape)}")
+    if tensor.dtype == torch.uint8 or not tensor.is_floating_point():
+        tensor = tensor.to(dtype=torch.float32) / 255.0
+    else:
+        tensor = tensor.to(dtype=torch.float32)
+    return tensor.contiguous()
+
+
+def _native_state_tensor(value: Any) -> Any:
+    """Convert canonical 8-D state to the batched tensor expected by SmolVLA."""
+
+    try:
+        import numpy as np
+        import torch
+    except ImportError as exc:  # pragma: no cover - native runtime boundary
+        raise ContractError("native SmolVLA state preparation requires NumPy and PyTorch") from exc
+
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach().clone()
+    else:
+        try:
+            tensor = torch.from_numpy(np.array(value, dtype=np.float32, copy=True, order="C"))
+        except (TypeError, ValueError) as exc:
+            raise ContractError("SmolVLA observation.state must be numeric") from exc
+    if tensor.ndim == 1:
+        tensor = tensor.unsqueeze(0)
+    if tensor.ndim != 2 or tensor.shape[-1] != 8:
+        raise ContractError(f"SmolVLA observation.state must have shape [batch, 8], got {tuple(tensor.shape)}")
+    return tensor.to(dtype=torch.float32).contiguous()
+
+
 class SmolVLAAdapter:
     """Adapt native SmolVLA inference to ``VLA.propose/commit/reset``."""
 
@@ -435,9 +516,13 @@ class SmolVLAAdapter:
                     "native SmolVLA select_action requires checkpoint-owned preprocessor and postprocessor"
                 )
             native_payload = {
-                "observation.images.image": payload.get("agentview"),
-                "observation.images.image2": payload.get("wrist"),
-                "observation.state": payload.get("state"),
+                "observation.images.image": _native_image_tensor(
+                    payload.get("agentview"), name="observation.images.image"
+                ),
+                "observation.images.image2": _native_image_tensor(
+                    payload.get("wrist"), name="observation.images.image2"
+                ),
+                "observation.state": _native_state_tensor(payload.get("state")),
                 "task": payload.get("instruction", self.task_description),
             }
             return self.postprocessor(select_action(self.preprocessor(native_payload)))

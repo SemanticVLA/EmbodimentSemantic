@@ -6,7 +6,9 @@ import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -103,6 +105,78 @@ def test_native_lerobot_queue_and_single_step_setting_round_trip():
     assert policy.config.n_action_steps == 1
     assert random.random() == expected
     assert adapter.rollback_complete
+
+
+def test_native_smolvla_converts_readonly_hwc_images_to_batched_chw_tensors():
+    captured = {}
+
+    class NativePolicy:
+        def select_action(self, batch):
+            captured["batch"] = batch
+            return torch.zeros((1, 7), dtype=torch.float32)
+
+    def preprocessor(payload):
+        captured["payload"] = payload
+        return payload
+
+    adapter = SmolVLAAdapter(
+        policy=NativePolicy(),
+        preprocessor=preprocessor,
+        postprocessor=lambda value: value,
+    )
+    image = np.full((256, 256, 3), 128, dtype=np.uint8)
+    frame = ObservationFrame(
+        {
+            "agentview": image,
+            "wrist": image.copy(),
+            "state": np.zeros(8, dtype=np.float32),
+            "instruction": "pick up the bowl",
+        },
+        timestep=0,
+    )
+
+    proposal = adapter.propose(frame)
+    adapter.commit(SimpleNamespace(base=proposal))
+
+    payload = captured["payload"]
+    for key in ("observation.images.image", "observation.images.image2"):
+        value = payload[key]
+        assert tuple(value.shape) == (1, 3, 256, 256)
+        assert value.dtype == torch.float32
+        assert value.is_contiguous()
+        assert value.isfinite().all()
+        assert float(value.min()) == pytest.approx(128.0 / 255.0)
+    assert tuple(payload["observation.state"].shape) == (1, 8)
+    assert payload["task"] == "pick up the bowl"
+
+
+def test_native_smolvla_does_not_rescale_already_prepared_bchw_images():
+    captured = {}
+
+    class NativePolicy:
+        def select_action(self, batch):
+            captured["batch"] = batch
+            return torch.zeros((1, 7), dtype=torch.float32)
+
+    def preprocessor(payload):
+        captured["payload"] = payload
+        return payload
+
+    image = torch.full((1, 3, 256, 256), 0.5, dtype=torch.float32)
+    adapter = SmolVLAAdapter(
+        policy=NativePolicy(),
+        preprocessor=preprocessor,
+        postprocessor=lambda value: value,
+    )
+    frame = ObservationFrame(
+        {"agentview": image, "wrist": image, "state": torch.zeros(8), "instruction": "pick"},
+        timestep=0,
+    )
+    proposal = adapter.propose(frame)
+    adapter.commit(SimpleNamespace(base=proposal))
+
+    assert torch.allclose(captured["payload"]["observation.images.image"], image)
+    assert tuple(captured["payload"]["observation.state"].shape) == (1, 8)
 
 
 def test_processor_pipeline_state_dictionary_is_rollback_covered():
