@@ -154,7 +154,11 @@ archive_on_exit() {
     find "$ARCHIVE_ROOT" -type f ! -name inventory.sha256 ! -name tree_sha256 -print0 | sort -z | xargs -0 -r sha256sum > "$ARCHIVE_ROOT/inventory.sha256" || archive_rc=$?
     sha256sum "$ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$ARCHIVE_ROOT/tree_sha256" || archive_rc=$?
     status=PRESERVED_FAILURE
-    if [[ "$workload_rc" -eq 0 && -s "$ARCHIVE_ROOT/run/run_manifest.json" && -s "$ARCHIVE_ROOT/inventory.sha256" ]]; then status=VERIFIED; fi
+    if [[ "$workload_rc" -eq 0 && -f "$RUN_ROOT/COMPLETED" &&
+      -s "$RUN_ROOT/native_run/run_manifest.json" &&
+      -f "$ARCHIVE_ROOT/run/COMPLETED" &&
+      -s "$ARCHIVE_ROOT/run/native_run/run_manifest.json" &&
+      -s "$ARCHIVE_ROOT/inventory.sha256" ]]; then status=VERIFIED; fi
     printf 'schema=arrow_policy_suite_canary_archive.v1\nstatus=%s\njob_id=%s\nrepo_commit=%s\nrun_root=%s\narchive_root=%s\n' "$status" "$SLURM_JOB_ID" "$actual_commit" "$RUN_ROOT" "$ARCHIVE_ROOT" > "$ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
   fi
   [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]] && workload_rc=$archive_rc
@@ -174,19 +178,67 @@ if [[ -n "${ARROW_SUITE_HF_CACHE:-}" ]]; then
   [[ "$HF_CACHE" != / && ! -L "$HF_CACHE" ]] || die 'HF cache must resolve to a non-root non-symlink directory'
   MOLMO_REVISION='188130f961c8e0888a34e11121a1423c461a01ba'
   SMOLVLM_REVISION='7b375e1b73b11138ff12fe22c8f2822d8fe03467'
-  MOLMO_SNAPSHOT=''
-  SMOLVLM_SNAPSHOT=''
+  MOLMO_MODEL_DIR=''
+  SMOLVLM_MODEL_DIR=''
+  MOLMO_LAYOUT_ROOT=''
+  SMOLVLM_LAYOUT_ROOT=''
+  MODEL_CACHE_ROOT=''
   for cache_layout in hub transformers; do
-    candidate="$HF_CACHE/$cache_layout/models--allenai--MolmoPoint-8B/snapshots/$MOLMO_REVISION"
-    [[ -d "$candidate" ]] && MOLMO_SNAPSHOT="$candidate"
-    candidate="$HF_CACHE/$cache_layout/models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots/$SMOLVLM_REVISION"
-    [[ -d "$candidate" ]] && SMOLVLM_SNAPSHOT="$candidate"
+    layout_root="$HF_CACHE/$cache_layout"
+    molmo_snapshot="$layout_root/models--allenai--MolmoPoint-8B/snapshots/$MOLMO_REVISION"
+    smolvlm_snapshot="$layout_root/models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots/$SMOLVLM_REVISION"
+    [[ -f "$smolvlm_snapshot/config.json" && -f "$smolvlm_snapshot/processor_config.json" ]] && {
+      SMOLVLM_MODEL_DIR="$layout_root/models--HuggingFaceTB--SmolVLM2-500M-Instruct"
+      SMOLVLM_LAYOUT_ROOT="$layout_root"
+    }
+    if [[ -d "$molmo_snapshot" && -f "$molmo_snapshot/config.json" &&
+      -f "$molmo_snapshot/processor_config.json" &&
+      -f "$molmo_snapshot/preprocessor_config.json" &&
+      -f "$molmo_snapshot/processing_molmo2.py" &&
+      -f "$molmo_snapshot/video_processing_molmo2.py" &&
+      -f "$molmo_snapshot/tokenizer_config.json" &&
+      -f "$molmo_snapshot/tokenizer.json" &&
+      -f "$molmo_snapshot/chat_template.jinja" ]]; then
+      MOLMO_MODEL_DIR="$layout_root/models--allenai--MolmoPoint-8B"
+      MOLMO_LAYOUT_ROOT="$layout_root"
+    fi
   done
-  [[ -n "$MOLMO_SNAPSHOT" ]] || die "pinned MolmoPoint snapshot is missing revision $MOLMO_REVISION under hub/ or transformers/"
-  [[ -n "$SMOLVLM_SNAPSHOT" ]] || die "pinned SmolVLM snapshot is missing revision $SMOLVLM_REVISION under hub/ or transformers/"
+  # The standard HF hub has the full SmolVLM snapshot but its Molmo entry is
+  # weights/config-only.  The validated Arrow cache has the missing Molmo
+  # processor files.  Build a per-run read-only model overlay when the two
+  # complete snapshots are not already co-located; never mutate either cache.
+  if [[ -z "$MOLMO_MODEL_DIR" ]]; then
+    legacy_cache="$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/cache/huggingface"
+    for cache_layout in hub transformers; do
+      layout_root="$legacy_cache/$cache_layout"
+      molmo_snapshot="$layout_root/models--allenai--MolmoPoint-8B/snapshots/$MOLMO_REVISION"
+      if [[ -f "$molmo_snapshot/config.json" &&
+        -f "$molmo_snapshot/processor_config.json" &&
+        -f "$molmo_snapshot/preprocessor_config.json" &&
+        -f "$molmo_snapshot/processing_molmo2.py" &&
+        -f "$molmo_snapshot/video_processing_molmo2.py" &&
+        -f "$molmo_snapshot/tokenizer_config.json" &&
+        -f "$molmo_snapshot/tokenizer.json" &&
+        -f "$molmo_snapshot/chat_template.jinja" ]]; then
+        MOLMO_MODEL_DIR="$layout_root/models--allenai--MolmoPoint-8B"
+        MOLMO_LAYOUT_ROOT="$layout_root"
+        break
+      fi
+    done
+  fi
+  [[ -n "$SMOLVLM_MODEL_DIR" ]] || die "pinned SmolVLM snapshot is missing complete processor metadata"
+  [[ -n "$MOLMO_MODEL_DIR" ]] || die "pinned MolmoPoint snapshot is missing complete processor metadata"
+  if [[ "$MOLMO_LAYOUT_ROOT" == "$SMOLVLM_LAYOUT_ROOT" ]]; then
+    MODEL_CACHE_ROOT="$MOLMO_LAYOUT_ROOT"
+  else
+    MODEL_CACHE_ROOT="$RUN_ROOT/model_cache/hub"
+    mkdir -p "$MODEL_CACHE_ROOT"
+    ln -s -- "$MOLMO_MODEL_DIR" "$MODEL_CACHE_ROOT/models--allenai--MolmoPoint-8B"
+    ln -s -- "$SMOLVLM_MODEL_DIR" "$MODEL_CACHE_ROOT/models--HuggingFaceTB--SmolVLM2-500M-Instruct"
+  fi
   export HF_HOME="$HF_CACHE"
-  export HF_HUB_CACHE="$HF_CACHE/hub"
-  export TRANSFORMERS_CACHE="$HF_CACHE/transformers"
+  export HF_HUB_CACHE="$MODEL_CACHE_ROOT"
+  export TRANSFORMERS_CACHE="$MODEL_CACHE_ROOT"
   export HF_MODULES_CACHE="$HF_CACHE/modules"
   export HF_HUB_DISABLE_TELEMETRY=1
   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
@@ -220,6 +272,13 @@ fi
 
 steps="${ARROW_SUITE_STEPS:-3}"
 output="${ARROW_SUITE_OUTPUT:-$RUN_ROOT/execution_receipt.json}"
+[[ "$output" = /* && "$output" != *'/../'* && "$output" != */.. ]] || die 'ARROW_SUITE_OUTPUT must be a safe absolute Linux path'
+output="$(realpath -m -- "$output")"
+case "$output" in
+  "$RUN_ROOT"/*) ;;
+  *) die 'ARROW_SUITE_OUTPUT must remain inside the run root' ;;
+esac
+[[ ! -e "$output" ]] || die 'ARROW_SUITE_OUTPUT already exists'
 if [[ "$ENGINEERING_SMOKE" == 1 ]]; then
   "$PYTHON" - "$RUN_ROOT/run_manifest.json" <<'PY'
 import importlib, json, pathlib, sys
@@ -252,11 +311,14 @@ args=( -m vla_benchmarking.libero.arrow_policy_suite.cli "$operation"
 [[ -n "${ARROW_SUITE_CONTROLLER:-}" ]] && args+=(--controller "$ARROW_SUITE_CONTROLLER")
 [[ -n "${ARROW_SUITE_GRAPH_CONTEXT_REVISION:-}" ]] && args+=(--graph-context-revision "$ARROW_SUITE_GRAPH_CONTEXT_REVISION")
 [[ -n "${ARROW_SUITE_TRACE_GEOMETRY_VARIANT:-}" ]] && args+=(--trace-geometry-variant "$ARROW_SUITE_TRACE_GEOMETRY_VARIANT")
-"$PYTHON" "${args[@]}" | tee "$RUN_ROOT/cli_receipt.json"
+"$PYTHON" "${args[@]}" | tee "$RUN_ROOT/cli_stdout.log"
 
-"$PYTHON" - "$RUN_ROOT/cli_receipt.json" <<'PY'
+"$PYTHON" - "$output" <<'PY'
 import json, pathlib, sys
-value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+path = pathlib.Path(sys.argv[1])
+if not path.is_file() or path.stat().st_size == 0:
+    raise SystemExit("native execution receipt is missing or empty")
+value = json.loads(path.read_text(encoding="utf-8"))
 if value.get("status") != "COMPLETED":
     raise SystemExit("native canary did not complete")
 print("VERIFIED native Arrow policy canary")

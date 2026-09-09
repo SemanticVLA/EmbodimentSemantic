@@ -110,11 +110,32 @@ def test_batch_validates_explicit_runtime_and_pinned_offline_molmo_cache():
     assert "models--allenai--MolmoPoint-8B/snapshots/$MOLMO_REVISION" in SBATCH
     assert "models--HuggingFaceTB--SmolVLM2-500M-Instruct/snapshots/$SMOLVLM_REVISION" in SBATCH
     assert "for cache_layout in hub transformers" in SBATCH
+    assert '"$smolvlm_snapshot/config.json"' in SBATCH
+    assert '"$smolvlm_snapshot/processor_config.json"' in SBATCH
+    assert '"$molmo_snapshot/processing_molmo2.py"' in SBATCH
+    assert '"$molmo_snapshot/video_processing_molmo2.py"' in SBATCH
+    assert 'legacy_cache="$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/cache/huggingface"' in SBATCH
+    assert "MODEL_CACHE_ROOT=\"$RUN_ROOT/model_cache/hub\"" in SBATCH
+    assert 'ln -s -- "$MOLMO_MODEL_DIR"' in SBATCH
+    assert 'ln -s -- "$SMOLVLM_MODEL_DIR"' in SBATCH
+    assert 'export HF_HUB_CACHE="$MODEL_CACHE_ROOT"' in SBATCH
+    assert 'export TRANSFORMERS_CACHE="$MODEL_CACHE_ROOT"' in SBATCH
     assert "MOLMO_REVISION='188130f961c8e0888a34e11121a1423c461a01ba'" in SBATCH
     assert "SMOLVLM_REVISION='7b375e1b73b11138ff12fe22c8f2822d8fe03467'" in SBATCH
-    assert 'export HF_HUB_CACHE="$HF_CACHE/hub"' in SBATCH
-    assert 'export TRANSFORMERS_CACHE="$HF_CACHE/transformers"' in SBATCH
     assert 'export HF_MODULES_CACHE="$HF_CACHE/modules"' in SBATCH
     assert 'export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1' in SBATCH
     assert 'explicit Arrow teacher runtime requires {package}=={wanted}' in SBATCH
     assert '"transformers": "4.57.1"' in SBATCH
+
+
+def test_sbatch_verifies_pure_receipt_and_archived_native_manifest():
+    assert "ARROW_SUITE_OUTPUT must be a safe absolute Linux path" in SBATCH
+    assert "ARROW_SUITE_OUTPUT must remain inside the run root" in SBATCH
+    assert "ARROW_SUITE_OUTPUT already exists" in SBATCH
+    assert 'tee "$RUN_ROOT/cli_stdout.log"' in SBATCH
+    assert '"$PYTHON" - "$output" <<\'PY\'' in SBATCH
+    assert "native execution receipt is missing or empty" in SBATCH
+    assert '"$RUN_ROOT/COMPLETED"' in SBATCH
+    assert '"$RUN_ROOT/native_run/run_manifest.json"' in SBATCH
+    assert '"$ARCHIVE_ROOT/run/native_run/run_manifest.json"' in SBATCH
+    assert '"$ARCHIVE_ROOT/run/COMPLETED"' in SBATCH

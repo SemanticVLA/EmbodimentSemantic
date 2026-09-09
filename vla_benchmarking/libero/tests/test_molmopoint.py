@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from vla_benchmarking.libero.arrow_grasp_controller.controller import molmopoint
 from vla_benchmarking.libero.arrow_grasp_controller.controller.molmopoint import (
     DEFAULT_PROMPT_ID,
     MOLMOPOINT_MODEL_ID,
@@ -44,7 +47,7 @@ class _Torch:
         return contextlib.nullcontext()
 
 
-def _runtime(*, raw_points=None, config=None, capture=None):
+def _runtime(*, raw_points=None, config=None, capture=None, snapshot_path="/tmp/molmo-pinned-snapshot"):
     calls = {"model": [], "processor": [], "generate": []}
     raw_points = [[4, 0, 10.5, 5.0]] if raw_points is None else raw_points
 
@@ -91,6 +94,7 @@ def _runtime(*, raw_points=None, config=None, capture=None):
         model_factory=model_factory,
         processor_factory=Processor,
         torch_factory=lambda: _Torch(),
+        snapshot_resolver=lambda _config: snapshot_path,
     )
     return runtime, calls
 
@@ -101,8 +105,12 @@ def test_lazy_load_uses_official_contract_and_original_pixels():
     result = runtime.predict(MolmoPointRequest(np.zeros((8, 12, 3), dtype=np.uint8)))
     assert runtime.loaded
     assert result.points[0].uv == (10.5, 5.0)
-    assert calls["model"][0][0] == MOLMOPOINT_MODEL_ID
+    assert calls["model"][0][0] == "/tmp/molmo-pinned-snapshot"
     assert calls["model"][0][1]["revision"] == MOLMOPOINT_MODEL_REVISION
+    assert calls["model"][0][1]["local_files_only"] is True
+    assert calls["processor"][0][0] == "/tmp/molmo-pinned-snapshot"
+    assert calls["processor"][0][1]["revision"] == MOLMOPOINT_MODEL_REVISION
+    assert calls["processor"][0][1]["local_files_only"] is True
     assert calls["model"][0][1]["dtype"] == "BF16"
     assert calls["processor"][0][1]["trust_remote_code"] is True
     assert calls["extract"] == ("<point>", "pool", "map", "sizes")
@@ -146,6 +154,35 @@ def test_config_rejects_non_bfloat16_and_provenance_is_hashed():
     provenance = MolmoPointRuntimeConfig().provenance()
     assert provenance["model_revision"] == MOLMOPOINT_MODEL_REVISION
     assert len(provenance["config_sha256"]) == 64
+
+
+def test_snapshot_resolver_uses_exact_local_revision_and_absolute_path(monkeypatch, tmp_path):
+    snapshot = tmp_path / MOLMOPOINT_MODEL_REVISION
+    snapshot.mkdir()
+    calls = {}
+
+    def snapshot_download(**kwargs):
+        calls.update(kwargs)
+        return str(snapshot)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=snapshot_download))
+    config = MolmoPointRuntimeConfig()
+    resolved = molmopoint._resolve_pinned_snapshot(config)
+
+    assert resolved == str(snapshot.resolve())
+    assert calls == {
+        "repo_id": MOLMOPOINT_MODEL_ID,
+        "revision": MOLMOPOINT_MODEL_REVISION,
+        "local_files_only": True,
+    }
+
+
+def test_snapshot_resolver_rejects_non_pinned_directory(monkeypatch, tmp_path):
+    wrong = tmp_path / "not-the-pinned-revision"
+    wrong.mkdir()
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=lambda **_kwargs: str(wrong)))
+    with pytest.raises(MolmoPointRuntimeError, match="non-pinned directory"):
+        molmopoint._resolve_pinned_snapshot(MolmoPointRuntimeConfig())
 
 
 def test_default_prompt_requests_executable_contact_alternatives():

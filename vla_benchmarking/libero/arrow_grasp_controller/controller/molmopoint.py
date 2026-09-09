@@ -19,6 +19,7 @@ import hashlib
 import importlib
 import importlib.metadata
 import json
+from pathlib import Path
 import re
 import threading
 from dataclasses import dataclass
@@ -201,6 +202,41 @@ def _torch_module() -> Any:
         raise MolmoPointRuntimeError("PyTorch is required for MolmoPoint inference") from exc
 
 
+def _resolve_pinned_snapshot(config: MolmoPointRuntimeConfig) -> str:
+    """Resolve the exact cached repo revision to an absolute snapshot path.
+
+    Transformers can resolve a model identifier to an unrelated tokenizer or
+    processor when multiple cache layouts are present.  Resolve the pinned
+    commit through Hugging Face's cache API first, then pass the resulting
+    snapshot directory to both factories.  ``local_files_only`` is deliberate:
+    a canary must fail closed rather than downloading a different revision.
+    """
+
+    try:
+        huggingface_hub = importlib.import_module("huggingface_hub")
+        snapshot = huggingface_hub.snapshot_download(
+            repo_id=config.model_id,
+            revision=config.model_revision,
+            local_files_only=True,
+        )
+    except Exception as exc:
+        raise MolmoPointRuntimeError(
+            f"pinned MolmoPoint snapshot is unavailable offline: "
+            f"{config.model_id}@{config.model_revision}"
+        ) from exc
+    try:
+        resolved = Path(snapshot).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, TypeError) as exc:
+        raise MolmoPointRuntimeError(
+            f"pinned MolmoPoint snapshot path is invalid: {config.model_id}@{config.model_revision}"
+        ) from exc
+    if not resolved.is_dir() or resolved.name.lower() != config.model_revision.lower():
+        raise MolmoPointRuntimeError(
+            f"snapshot resolver returned a non-pinned directory for {config.model_id}@{config.model_revision}"
+        )
+    return str(resolved)
+
+
 class MolmoPointRuntime:
     """Lazy, persistent local Transformers MolmoPoint inference worker."""
 
@@ -211,11 +247,13 @@ class MolmoPointRuntime:
         model_factory: Callable[..., Any] | None = None,
         processor_factory: Callable[..., Any] | None = None,
         torch_factory: Callable[[], Any] | None = None,
+        snapshot_resolver: Callable[[MolmoPointRuntimeConfig], str] | None = None,
     ) -> None:
         self.config = config or MolmoPointRuntimeConfig()
         self._model_factory = model_factory
         self._processor_factory = processor_factory
         self._torch_factory = torch_factory or _torch_module
+        self._snapshot_resolver = snapshot_resolver or _resolve_pinned_snapshot
         self._model: Any | None = None
         self._processor: Any | None = None
         self._lock = threading.Lock()
@@ -239,9 +277,20 @@ class MolmoPointRuntime:
             except Exception as exc:  # pragma: no cover - depends on runtime host
                 raise MolmoPointRuntimeError("Transformers with MolmoPoint remote code is required") from exc
 
+        try:
+            snapshot_path = self._snapshot_resolver(self.config)
+        except MolmoPointRuntimeError:
+            raise
+        except Exception as exc:
+            raise MolmoPointRuntimeError(
+                f"pinned MolmoPoint snapshot resolution failed: "
+                f"{self.config.model_id}@{self.config.model_revision}"
+            ) from exc
+
         model_kwargs: dict[str, Any] = {
             "trust_remote_code": True,
             "revision": self.config.model_revision,
+            "local_files_only": True,
             "dtype": getattr(torch, "bfloat16", self.config.dtype),
         }
         if self.config.device_map is not None:
@@ -249,15 +298,16 @@ class MolmoPointRuntime:
         processor_kwargs = {
             "trust_remote_code": True,
             "revision": self.config.model_revision,
+            "local_files_only": True,
             "padding_side": self.config.padding_side,
         }
         try:
-            model = self._model_factory(self.config.model_id, **model_kwargs)
+            model = self._model_factory(snapshot_path, **model_kwargs)
             if self.config.device_map is None and hasattr(model, "to"):
                 model = model.to(self.config.device)
             if hasattr(model, "eval"):
                 model.eval()
-            processor = self._processor_factory(self.config.model_id, **processor_kwargs)
+            processor = self._processor_factory(snapshot_path, **processor_kwargs)
         except Exception as exc:
             raise MolmoPointRuntimeError("MolmoPoint model/processor construction failed") from exc
         self._model, self._processor = model, processor
