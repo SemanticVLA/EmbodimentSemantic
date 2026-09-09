@@ -38,3 +38,9 @@ def test_sbatch_resolves_array_log_name_and_has_engineering_smoke_marker():
     assert "ARROW_SUITE_ENGINEERING_SMOKE" in SBATCH
     assert '"experiment_evidence": False' in SBATCH
     assert "arrow_policy_suite.engineering_smoke.v1" in SBATCH
+
+
+def test_sbatch_uses_canonical_controller_hash_not_raw_file_hash():
+    assert "from vla_benchmarking.libero.arrow_grasp_controller.configs import load_controller_config" in SBATCH
+    assert 'print(load_controller_config(sys.argv[1])["config_hash"])' in SBATCH
+    assert 'sha256sum -- "$ARROW_SUITE_CONTROLLER"' not in SBATCH

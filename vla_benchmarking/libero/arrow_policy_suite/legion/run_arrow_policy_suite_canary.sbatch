@@ -104,7 +104,10 @@ nvidia-smi -L >/dev/null || die 'CUDA device is unavailable'
 
 if [[ "$ENGINEERING_SMOKE" != 1 && -n "${ARROW_SUITE_CONTROLLER:-}" ]]; then
   [[ -f "$ARROW_SUITE_CONTROLLER" ]] || die "controller config is not a file: $ARROW_SUITE_CONTROLLER"
-  export ARROW_SUITE_CONTROLLER_HASH="$(sha256sum -- "$ARROW_SUITE_CONTROLLER" | awk '{print tolower($1)}')"
+  # The controller contract is keyed by the hash of the fully expanded
+  # semantic configuration, not by the raw JSON file bytes.
+  export ARROW_SUITE_CONTROLLER_HASH="$("$PYTHON" -c 'import sys; from vla_benchmarking.libero.arrow_grasp_controller.configs import load_controller_config; print(load_controller_config(sys.argv[1])["config_hash"])' "$ARROW_SUITE_CONTROLLER")"
+  [[ "$ARROW_SUITE_CONTROLLER_HASH" =~ ^[0-9a-f]{64}$ ]] || die 'resolved controller config hash is invalid'
 fi
 
 steps="${ARROW_SUITE_STEPS:-3}"
