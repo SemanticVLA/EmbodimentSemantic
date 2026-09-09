@@ -115,7 +115,10 @@ def build_host(*, config: Any, operation: str, policy_id: str, run_dir: str | Pa
     # Imports are deliberately deferred until --execute on a configured node.
     from vla_benchmarking.libero.evaluation.run_arrow_pick_place_eval import build_libero_env
 
-    raw_environment = build_libero_env(task_id, seed, resolution, suite_mode=suite_mode, init_state_index=1)
+    raw_environment = build_libero_env(
+        task_id, seed, resolution, suite_mode=suite_mode,
+        extra_camera_names=("robot0_eye_in_hand",), init_state_index=1,
+    )
     try:
         environment = LiberoEnvironmentAdapter.from_live_libero(
             raw_environment, instruction=instruction, require_images=True, strict_snapshot=True,
