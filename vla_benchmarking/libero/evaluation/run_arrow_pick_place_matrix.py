@@ -564,8 +564,21 @@ def _init_state_preflight(
     }
 
 
-def _default_arrow_inputs(env: Any, task_id: int, resolution: int) -> dict[str, Any]:
-    """Build the configured source→goal arrow from the live scene bboxes."""
+def _default_arrow_inputs(
+    env: Any,
+    task_id: int,
+    resolution: int,
+    *,
+    record_on_env: bool = True,
+) -> dict[str, Any]:
+    """Build the configured source→goal arrow from the live scene bboxes.
+
+    Ordinary matrix cells retain input provenance on the environment for
+    diagnostics. Proposal-time callers must pass ``record_on_env=False``:
+    NativeHost snapshots the environment around proposals, so publishing
+    diagnostics there would be an observable mutation rather than a pure
+    perception operation.
+    """
     try:
         from vla_benchmarking.libero.evaluation.libero_live_semantic_context import LiveSemanticContextGenerator
         from vla_benchmarking.libero.shared.config import (
@@ -586,29 +599,30 @@ def _default_arrow_inputs(env: Any, task_id: int, resolution: int) -> dict[str, 
         task_id=int(task_id),
     )
     context = generator.observe_visual_graph(context_env, camera=CAMERA_NAME)
-    # Keep input-generation provenance on the per-cell environment for
-    # diagnostics.  This data never crosses the controller boundary: only the
-    # rendered one-arrow image is passed to run_episode.
-    try:
-        setattr(env, "_arrow_input_context", {
-            "camera": CAMERA_NAME,
-            "subject": ARROW_SOURCE_OBJECT,
-            "goal_object": TASK_GOAL_OBJECT_CONFIG.get(
-                int(task_id), _episode_module.DEFAULT_GOAL_OBJECT
-            ),
-            "bboxes": {
-                str(name): [float(value) for value in bbox]
-                for name, bbox in context.get("bboxes", {}).items()
-            },
-            "relations": [
-                [str(part) for part in relation]
-                for relation in context.get("relations", [])
-            ],
-        })
-    except Exception:
-        # Provenance must never make the controller path fail; the renderer's
-        # normal input validation remains authoritative.
-        pass
+    if record_on_env:
+        # Keep input-generation provenance on the per-cell environment for
+        # diagnostics. This data never crosses the controller boundary: only
+        # the rendered one-arrow image is passed to run_episode.
+        try:
+            setattr(env, "_arrow_input_context", {
+                "camera": CAMERA_NAME,
+                "subject": ARROW_SOURCE_OBJECT,
+                "goal_object": TASK_GOAL_OBJECT_CONFIG.get(
+                    int(task_id), _episode_module.DEFAULT_GOAL_OBJECT
+                ),
+                "bboxes": {
+                    str(name): [float(value) for value in bbox]
+                    for name, bbox in context.get("bboxes", {}).items()
+                },
+                "relations": [
+                    [str(part) for part in relation]
+                    for relation in context.get("relations", [])
+                ],
+            })
+        except Exception:
+            # Provenance must never make the controller path fail; the
+            # renderer's normal input validation remains authoritative.
+            pass
     return {
         "bboxes": context["bboxes"],
         "goal_object": TASK_GOAL_OBJECT_CONFIG.get(int(task_id), _episode_module.DEFAULT_GOAL_OBJECT),

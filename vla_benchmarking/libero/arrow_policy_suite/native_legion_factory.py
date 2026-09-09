@@ -58,7 +58,9 @@ def _runtime_trace_callbacks(
         )
 
     def endpoint(frame: ObservationFrame, capture_packet: Any) -> Mapping[str, Any]:
-        inputs = matrix._default_arrow_inputs(raw_environment, int(task_id), int(resolution))
+        inputs = matrix._default_arrow_inputs(
+            raw_environment, int(task_id), int(resolution), record_on_env=False
+        )
         rendered, _ = episode.render_exactly_one_arrow(
             capture_packet.rgb, inputs["bboxes"], subject=inputs["subject"],
             goal_object=inputs["goal_object"], anchor_policy="bbox_center",

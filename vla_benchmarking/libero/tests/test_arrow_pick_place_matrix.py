@@ -6,6 +6,8 @@ import importlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import sys
+import types
 
 import pytest
 
@@ -64,6 +66,48 @@ def test_early_runtime_diagnostics_preserve_opening_audits_and_exact_budget(matr
 
 def test_early_runtime_diagnostics_does_not_add_experimental_fields_to_baseline(matrix):
     assert matrix._early_runtime_diagnostics(SimpleNamespace()) == {}
+
+
+def test_default_arrow_inputs_can_be_pure_for_proposals_and_record_for_matrix(
+    matrix, monkeypatch
+):
+    class Generator:
+        scene_graph_subject_filter = None
+
+        def observe_visual_graph(self, _context_env, *, camera):
+            assert camera == "agentview"
+            return {
+                "bboxes": {
+                    "akita_black_bowl_1": (10.0, 20.0, 30.0, 40.0),
+                    "plate_1": (50.0, 60.0, 70.0, 80.0),
+                },
+                "relations": (("akita_black_bowl_1", "goal", "plate_1"),),
+            }
+
+    context_module = types.ModuleType(
+        "vla_benchmarking.libero.evaluation.libero_live_semantic_context"
+    )
+    context_module.LiveSemanticContextGenerator = Generator
+    config_module = types.ModuleType("vla_benchmarking.libero.shared.config")
+    config_module.ARROW_SOURCE_OBJECT = "akita_black_bowl_1"
+    config_module.SCENE_GRAPH_SUBJECT_FILTER = ("bowl",)
+    config_module.TASK_GOAL_OBJECT_CONFIG = {0: "plate_1"}
+    monkeypatch.setitem(sys.modules, context_module.__name__, context_module)
+    monkeypatch.setitem(sys.modules, config_module.__name__, config_module)
+
+    proposal_env = SimpleNamespace(language_instruction="pick", env=object())
+    pure_inputs = matrix._default_arrow_inputs(
+        proposal_env, 0, 256, record_on_env=False
+    )
+    assert pure_inputs["subject"] == "akita_black_bowl_1"
+    assert not hasattr(proposal_env, "_arrow_input_context")
+
+    matrix_env = SimpleNamespace(language_instruction="pick", env=object())
+    matrix._default_arrow_inputs(matrix_env, 0, 256)
+    assert matrix_env._arrow_input_context["goal_object"] == "plate_1"
+    assert matrix_env._arrow_input_context["relations"] == [
+        ["akita_black_bowl_1", "goal", "plate_1"]
+    ]
 
 
 def test_condition_labels_are_validated(matrix):

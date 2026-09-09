@@ -39,3 +39,10 @@ def test_trace_geometry_routes_simulator_assisted_rgbd_through_runtime_callbacks
     assert len(arrow_branch) == 2
     assert "ARROW_SUITE_TRACE_SIMULATOR_ANCHORS_FACTORY" not in arrow_branch[0]
     assert "ARROW_SUITE_TRACE_SIMULATOR_ANCHORS_FACTORY" in arrow_branch[1]
+
+
+def test_proposal_arrow_input_callbacks_disable_environment_recording():
+    legion_source = Path(__file__).with_name("native_legion_factory.py").read_text(encoding="utf-8")
+    teacher_source = Path(__file__).with_name("native_arrow_teacher.py").read_text(encoding="utf-8")
+    assert "record_on_env=False" in legion_source
+    assert "record_on_env=False" in teacher_source

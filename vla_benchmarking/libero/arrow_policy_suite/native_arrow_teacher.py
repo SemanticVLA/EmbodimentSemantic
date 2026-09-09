@@ -326,7 +326,9 @@ def build_rgbd_perception(*, raw_environment: Any, worker: Any, task_id: int, re
         from vla_benchmarking.libero.evaluation import run_arrow_pick_place_matrix as matrix
         try:
             capture = episode.capture_agentview(raw_environment, resolution=int(resolution), camera_name="agentview")
-            inputs = matrix._default_arrow_inputs(raw_environment, int(task_id), int(resolution))
+            inputs = matrix._default_arrow_inputs(
+                raw_environment, int(task_id), int(resolution), record_on_env=False
+            )
             rendered, _audit = episode.render_exactly_one_arrow(
                 capture.rgb, inputs["bboxes"], subject=inputs["subject"],
                 goal_object=inputs["goal_object"], anchor_policy="bbox_center",
