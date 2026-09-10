@@ -317,6 +317,7 @@ def test_visual_arrow_policy_is_separate_and_matched_in_training_and_evaluation(
 
     assert 'export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1 PEFT_STUDENT_VISUAL_CONDITION=visual_goal_arrow' in all_tasks
     assert 'for task_id in $(seq "$PEFT_START_TASK_ID" 9); do' in all_tasks
+    assert "archive root must be under /mnt/beegfs/hjaber for visual-arrow runs" in all_tasks
     assert 'bash "$RUNNER"' in all_tasks
     assert "run_smolvla_peft_arrow_task.sbatch" in all_tasks
     assert "PEFT_STUDENT_VISUAL_CONDITION" in canary

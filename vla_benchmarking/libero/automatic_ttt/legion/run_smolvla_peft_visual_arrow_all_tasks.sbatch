@@ -27,6 +27,7 @@ for path in "$PEFT_ALL_TASK_RUN_ROOT" "$PEFT_ALL_TASK_ARCHIVE_ROOT"; do
   [[ "$path" = /* && "$path" != / && ! -L "$path" ]] || die "unsafe all-task root: $path"
 done
 case "$PEFT_ALL_TASK_RUN_ROOT" in /mnt/beegfs/hjaber/*) ;; *) die 'run root must be under /mnt/beegfs/hjaber' ;; esac
+case "$PEFT_ALL_TASK_ARCHIVE_ROOT" in /mnt/beegfs/hjaber/*) ;; *) die 'archive root must be under /mnt/beegfs/hjaber for visual-arrow runs' ;; esac
 
 if [[ -n "${PEFT_ARROW_DEMOS:-}" && "$PEFT_ARROW_DEMOS" != 1 ]]; then die 'PEFT_ARROW_DEMOS must be 1'; fi
 if [[ -n "${PEFT_SKIP_BASELINE:-}" && "$PEFT_SKIP_BASELINE" != 1 ]]; then die 'PEFT_SKIP_BASELINE must be 1'; fi
