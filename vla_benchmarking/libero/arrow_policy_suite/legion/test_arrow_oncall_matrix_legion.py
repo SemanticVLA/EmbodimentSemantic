@@ -90,6 +90,45 @@ printf '%s,%s\\n' "${{lane_gpus[0]}}" "${{lane_gpus[1]}}"
     assert rejected.returncode != 0
 
 
+def test_archive_verified_requires_successful_task_and_completed_receipt() -> None:
+    """Execute the launcher VERIFIED condition against success/failure cases."""
+    text = SBATCH.read_text(encoding="utf-8").replace("\r", "")
+    start = text.index('    if [[ "$local_rc" -eq 0 && "$workload_exit_code"')
+    end = text.index("    fi\n", start) + len("    fi\n")
+    condition = text[start:end]
+    bash = shutil.which("bash")
+    if bash is None:
+        return
+    probe = subprocess.run([bash, "-c", 'v=probe; printf "%s\\n" "$v"'], capture_output=True, text=True)
+    if probe.returncode != 0 or probe.stdout.strip() != "probe":
+        return
+    harness = (
+        "set -Eeuo pipefail\n"
+        "TASK_ARCHIVE_ROOT=/tmp/arrow_oncall_archive_condition_test\n"
+        "TASK_NAME=task_00\n"
+        "mkdir -p \"$TASK_ARCHIVE_ROOT/worker_status\"\n"
+        "printf x > \"$TASK_ARCHIVE_ROOT/task_summary.json\"\n"
+        "printf x > \"$TASK_ARCHIVE_ROOT/worker_status/$TASK_NAME.json\"\n"
+        "printf x > \"$TASK_ARCHIVE_ROOT/inventory.sha256\"\n"
+        "local_rc=\"$1\"\n"
+        "workload_exit_code=\"$2\"\n"
+        "task_exit_code=\"$3\"\n"
+        "receipt_completed=\"$4\"\n"
+        "archive_status=PRESERVED_FAILURE\n"
+        f"{condition}"
+        "printf '%s\\n' \"$archive_status\"\n"
+    )
+    for args, expected in (
+        (("0", "0", "0", "1"), "VERIFIED"),
+        (("0", "1", "0", "1"), "PRESERVED_FAILURE"),
+        (("0", "0", "1", "1"), "PRESERVED_FAILURE"),
+        (("0", "0", "0", "0"), "PRESERVED_FAILURE"),
+    ):
+        result = subprocess.run([bash, "-c", harness, "bash", *args], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+
+
 def test_sbatch_seals_the_schedule_and_calls_both_matrix_commands() -> None:
     text = SBATCH.read_text(encoding="utf-8")
     for expected in (

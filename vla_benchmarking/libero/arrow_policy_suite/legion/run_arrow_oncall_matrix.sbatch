@@ -238,7 +238,8 @@ PY
 # Copy one task's artifacts, worker receipt, logs, and inventory.  This is
 # intentionally callable before finalize and again from EXIT for durability.
 archive_task_artifacts() {
-  local local_rc=0 archive_status
+  local workload_exit_code="${1:-${task_rc:-125}}" task_exit_code="${2:-${task_rc:-125}}"
+  local local_rc=0 archive_status receipt_completed=0
   copy_tree "$TASK_RUN_ROOT" "$TASK_ARCHIVE_ROOT" || local_rc=$?
   if [[ -s "$status_path" ]]; then
     mkdir -p "$TASK_ARCHIVE_ROOT/worker_status" || local_rc=$?
@@ -257,10 +258,28 @@ archive_task_artifacts() {
     find "$TASK_ARCHIVE_ROOT" -type f ! -name inventory.sha256 ! -name tree_sha256 -print0 |
       sort -z | xargs -0 -r sha256sum > "$TASK_ARCHIVE_ROOT/inventory.sha256" || local_rc=$?
     sha256sum "$TASK_ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$TASK_ARCHIVE_ROOT/tree_sha256" || local_rc=$?
+    if [[ -s "$TASK_ARCHIVE_ROOT/worker_status/$TASK_NAME.json" && -x "${PYTHON:-}" ]]; then
+      "$PYTHON" - "$TASK_ARCHIVE_ROOT/worker_status/$TASK_NAME.json" "$TASK_ID" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if payload.get("schema") != "arrow_policy_suite.oncall_worker_terminal.v1":
+    raise SystemExit("archived worker status schema mismatch")
+if payload.get("task_id") != int(sys.argv[2]):
+    raise SystemExit("archived worker status task mismatch")
+if payload.get("task_status") != "COMPLETED":
+    raise SystemExit("archived worker status is not COMPLETED")
+PY
+      [[ "$?" -eq 0 ]] && receipt_completed=1 || local_rc=$?
+    else
+      local_rc=1
+    fi
     archive_status=PRESERVED_FAILURE
-    if [[ "$local_rc" -eq 0 &&
+    if [[ "$local_rc" -eq 0 && "$workload_exit_code" -eq 0 && "$task_exit_code" -eq 0 &&
+      "$receipt_completed" -eq 1 &&
       -s "$TASK_ARCHIVE_ROOT/task_summary.json" &&
-      -s "$TASK_ARCHIVE_ROOT/worker_status/$TASK_NAME.json" &&
       -s "$TASK_ARCHIVE_ROOT/inventory.sha256" ]]; then
       archive_status=VERIFIED
     fi
@@ -276,7 +295,7 @@ archive_on_exit() {
   trap - EXIT
   set +e
   publish_worker_status "${task_rc:-125}" "$workload_rc" || archive_rc=$?
-  archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
+  archive_task_artifacts "$workload_rc" "${task_rc:-125}" || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
   mkdir -p "$RUN_ROOT/finalize_logs" || archive_rc=$?
   if [[ -x "${PYTHON:-}" && -n "${ARROW_ONCALL_CONFIG:-}" ]]; then
     "$PYTHON" -m vla_benchmarking.libero.arrow_policy_suite.oncall_matrix finalize \
@@ -285,7 +304,7 @@ archive_on_exit() {
       --checkpoint "$ARROW_ONCALL_CHECKPOINT" --controller "$ARROW_ONCALL_CONTROLLER" \
       >> "$finalize_log" 2>&1 || true
   fi
-  archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
+  archive_task_artifacts "$workload_rc" "${task_rc:-125}" || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
   [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]] && workload_rc=$archive_rc
   exit "$workload_rc"
 }
@@ -437,7 +456,7 @@ set -e
 # task summary, archive seal, and inventory already in the persistent archive.
 archive_rc=0
 publish_worker_status "$task_rc" "$task_rc" || archive_rc=$?
-archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
+archive_task_artifacts "$task_rc" "$task_rc" || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
 
 # Finalization is deliberately attempted even after a task-side infrastructure
 # failure, so the matrix retains a sealed partial ledger and the task archive.
@@ -455,7 +474,7 @@ set -e
 # Refresh the task archive after finalizer logging.  This cannot retroactively
 # make a failed archive verified, but it preserves the complete detail/log
 # evidence for the global archive publication.
-archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
+archive_task_artifacts "$task_rc" "$task_rc" || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
 
 # The finalizer is allowed to return before the other task lanes finish.
 # Once all ten task manifests are present, however, a successful finalizer must

@@ -169,6 +169,7 @@ def test_finalize_layout_aggregates_takeover_and_archive_is_idempotent(tmp_path:
     assert len(archived_receipts) == 100 and len(archived_workers) == 10
     archive_status = json.loads((archive / "matrix_status.json").read_text())
     assert archive_status["status"] == "VERIFIED" and archive_status["required_counts"]["execution_receipts"] == 100
+    assert archive_status["inventory_sha256"] == matrix._canonical_digest(archive_status["artifacts"])
     assert matrix.finalize(config_path=CONFIG, output_root=root, archive_root=archive)["status"] == "COMPLETED"
     (archive / "matrix_status.json").unlink()
     # Simulate a process dying after the run-root COMPLETED marker but before
