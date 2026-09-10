@@ -334,6 +334,7 @@ def execute_native(
     learned_artifacts: tuple[str, ...] = (),
     protocol_seal: ProtocolSeal | None = None,
     training_source: str | Path | None = None,
+    records_consumer: Callable[[tuple[Any, ...], NativeExecutionReceipt], Any] | None = None,
 ) -> NativeExecutionReceipt:
     if operation not in {"canary", "collect", "evaluate"}:
         raise ContractError(
@@ -364,6 +365,7 @@ def execute_native(
         "learned_artifact_sha256": list(learned_artifact_hashes),
     }
     host: NativeHost | None = None
+    records: tuple[Any, ...] = ()
     try:
         factory_kwargs = {
             "config": config, "operation": operation, "policy_id": policy_id,
@@ -424,13 +426,30 @@ def execute_native(
                 "rows": len(rows),
                 "eligible_rows": sum(bool(row.get("eligible", False)) for row in rows),
             }
-        manifest_path = target / "run_manifest.json"
-        write_json_artifact(manifest_path, manifest, kind="native-run-manifest",
-                            lineage=tuple(value for value in (manifest["config_sha256"], manifest["identity_seal_sha256"]) if value))
         receipt = NativeExecutionReceipt(
             "COMPLETED", operation, policy_id, len(records), bool(manifest["success"]),
             bool(manifest["terminal"]), str(target), str(output) if output else None, manifest,
         )
+        # Consumers (for example the ownership-video writer) run only after
+        # the immutable rollout manifest and an in-memory receipt exist.  A
+        # consumer is evidence plumbing, not part of policy execution: if it
+        # fails, mark the episode as an infrastructure failure and preserve
+        # the causal error instead of reporting a misleading completed run.
+        if records_consumer is not None:
+            if not callable(records_consumer):
+                raise ContractError("records_consumer must be callable")
+            try:
+                records_consumer(records, receipt)
+            except BaseException as exc:
+                raise ContractError(
+                    f"native records consumer failed: {type(exc).__name__}: {exc}"
+                ) from exc
+        # Persist a successful run only after evidence consumers complete.
+        # A failed video/sidecar writer therefore cannot leave both a
+        # successful run manifest and a failure manifest.
+        manifest_path = target / "run_manifest.json"
+        write_json_artifact(manifest_path, manifest, kind="native-run-manifest",
+                            lineage=tuple(value for value in (manifest["config_sha256"], manifest["identity_seal_sha256"]) if value))
     except BaseException as exc:
         manifest["error"] = f"{type(exc).__name__}: {exc}"
         error_path = target / "failure_manifest.json"
