@@ -19,9 +19,16 @@ def test_resume_stage_plan_reuses_completed_stages_and_only_publishes():
 
 def test_integer_epoch_equivalent_does_not_use_rounded_source_value():
     assert resume.derive_training_steps(129) == 81
+    assert resume.derive_training_steps(129, epochs=50) == 807
     value = resume.derive_epoch_equivalent(81, 129)
     assert repr(value) == "5.023255813953488"
     assert value == 81 * 8 / 129
+
+
+@pytest.mark.parametrize("epochs", [0, -1, True, 1.5, "50"])
+def test_training_step_derivation_rejects_invalid_epochs(epochs):
+    with pytest.raises(resume.ResumeError, match="epochs must be a positive integer"):
+        resume.derive_training_steps(129, epochs=epochs)
 
 
 def test_corrupt_source_status_rejects_before_any_ml_stage(tmp_path, monkeypatch):
@@ -192,6 +199,9 @@ def test_publication_records_training_commit_and_recovery_commit_separately(tmp_
     assert captured["runtime_versions"] == source.training_runtime_versions
     assert captured["runtime_evidence"] == str(source.runtime_evidence)
     assert isinstance(captured["runtime_evidence"], str)
+    assert captured["train_counts"]["requested_epochs"] == 5
+    assert captured["train_counts"]["student_policy_variant"] == "smolvla_fresh_arrow_clean_peft"
+    assert captured["train_counts"]["student_visual_condition"] == "none"
     adapter_pointer = json.loads((tmp_path / "new" / "run" / "ADAPTER_ARTIFACT_PATH.json").read_text())
     assert adapter_pointer == str(Path("/tmp/published/smolvla/task_0/peft_adapter/recovery").resolve())
     receipt = json.loads((tmp_path / "new" / "run" / "publication_recovery_receipt.json").read_text())
@@ -209,6 +219,8 @@ def test_publication_records_training_commit_and_recovery_commit_separately(tmp_
     assert receipt["final_artifact"]["tree_sha256"] == "d" * 64
     assert summary["training_commit"] == resume.TRAINING_COMMIT
     assert summary["publication_commit"] == "c" * 40
+    assert summary["student_policy_variant"] == "smolvla_fresh_arrow_clean_peft"
+    assert summary["student_visual_condition"] == "none"
 
 
 def test_publication_rejects_output_roots_nested_under_source(tmp_path, monkeypatch):
@@ -301,5 +313,8 @@ def test_resume_wrapper_requires_explicit_source_and_forces_one_shot_task0():
     wrapper = Path(__file__).parent / "legion" / "run_smolvla_peft_arrow_resume.sbatch"
     text = wrapper.read_text(encoding="utf-8")
     assert '[[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]' in text
+    assert 'PEFT_RESUME_SOURCE_JOB_ID must be an integer' in text
+    assert 'PEFT_RESUME_TRAINING_COMMIT must be a 40-character SHA' in text
+    assert 'PEFT_REQUESTED_EPOCHS must be a positive integer' in text
     assert "export PEFT_TASK_ID=0 PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1" in text
     assert "run_smolvla_peft_arrow_task.sbatch" in text

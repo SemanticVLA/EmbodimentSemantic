@@ -103,8 +103,8 @@ artifact = pathlib.Path(candidate) if candidate else pathlib.Path()
 if not artifact.is_absolute() or not artifact.exists():
     raise SystemExit(f"task 0 publication receipt does not point to an existing absolute artifact: {artifact}")
 PY
-  printf '[%s] task 0 publication verified; continuing with fresh tasks 1..9\n' "$(date +'%F %T')"
-  unset PEFT_RESUME_SOURCE_RUN_ROOT PEFT_RESUME_RUNNER
+  printf '[%s] task 0 publication verified; continuing with fresh tasks 1..%s\n' "$(date +'%F %T')" "$PEFT_END_TASK_ID"
+  unset PEFT_RESUME_SOURCE_RUN_ROOT PEFT_RESUME_SOURCE_JOB_ID PEFT_RESUME_TRAINING_COMMIT PEFT_RESUME_RUNNER
   PEFT_START_TASK_ID=1
 fi
 

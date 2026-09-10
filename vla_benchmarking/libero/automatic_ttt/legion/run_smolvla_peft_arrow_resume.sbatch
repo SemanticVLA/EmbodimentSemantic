@@ -23,6 +23,9 @@ die() { printf 'SmolVLA PEFT resume: %s\n' "$*" >&2; exit 2; }
 [[ "${PEFT_EXPECTED_CONTROLLER_HASH:-}" =~ ^[0-9a-f]{64}$ ]] || die 'PEFT_EXPECTED_CONTROLLER_HASH must be a 64-character SHA-256'
 [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]] || die 'PEFT_RESUME_SOURCE_RUN_ROOT is required and must be explicit'
 [[ -d "$PEFT_RESUME_SOURCE_RUN_ROOT" && ! -L "$PEFT_RESUME_SOURCE_RUN_ROOT" ]] || die 'resume source run root is missing or symlinked'
+[[ "${PEFT_RESUME_SOURCE_JOB_ID:-}" =~ ^[0-9]+$ ]] || die 'PEFT_RESUME_SOURCE_JOB_ID must be an integer'
+[[ "${PEFT_RESUME_TRAINING_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die 'PEFT_RESUME_TRAINING_COMMIT must be a 40-character SHA'
+[[ "${PEFT_REQUESTED_EPOCHS:-}" =~ ^[1-9][0-9]*$ ]] || die 'PEFT_REQUESTED_EPOCHS must be a positive integer'
 
 REPO_ROOT="$(realpath -e -- "$REPO_ROOT")"
 [[ -d "$REPO_ROOT/.git" ]] || die 'REPO_ROOT is not a Git checkout'
@@ -50,7 +53,7 @@ export REPO_ROOT PEFT_EXPECTED_COMMIT PEFT_EXPECTED_CONTROLLER_HASH
 export PEFT_TASK_ID=0 PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1 PEFT_VLA=smolvla
 export PEFT_BASE_POLICY="$BASE_POLICY" PEFT_BASE_POLICY_REVISION="$BASE_POLICY_REVISION"
 export PEFT_RUN_ROOT="$RUN_ROOT" PEFT_ARCHIVE_ROOT="$ARCHIVE_ROOT"
-export PEFT_RESUME_SOURCE_RUN_ROOT
+export PEFT_RESUME_SOURCE_RUN_ROOT PEFT_RESUME_SOURCE_JOB_ID PEFT_RESUME_TRAINING_COMMIT PEFT_REQUESTED_EPOCHS
 export ARROW_CONTROLLER_CONFIG
 
 RUNNER="$REPO_ROOT/vla_benchmarking/libero/automatic_ttt/legion/run_smolvla_peft_arrow_task.sbatch"

@@ -184,7 +184,7 @@ def test_all_task_wrapper_resumes_task_zero_then_starts_fresh_at_task_one():
     assert '"$VALIDATION_PYTHON" - "$RECOVERY_RECEIPT" <<\'PY\'' in resume_section
     assert 'python "$RECOVERY_RECEIPT" <<\'PY\'' not in resume_section
     assert 'does not point to an existing absolute artifact' in resume_section
-    assert 'unset PEFT_RESUME_SOURCE_RUN_ROOT PEFT_RESUME_RUNNER' in resume_section
+    assert 'unset PEFT_RESUME_SOURCE_RUN_ROOT PEFT_RESUME_SOURCE_JOB_ID PEFT_RESUME_TRAINING_COMMIT PEFT_RESUME_RUNNER' in resume_section
     assert 'PEFT_START_TASK_ID=1' in resume_section
     assert task_loop > resume_branch
 
@@ -200,6 +200,13 @@ def test_resume_submit_mode_reuses_canary_and_passes_source_to_single_job():
     assert 'collector_canary_job=REUSED' in resume_section
     assert 'PEFT_START_TASK_ID=0' in resume_section
     assert 'PEFT_RESUME_SOURCE_RUN_ROOT="$resume_source"' in resume_section
+    assert 'PEFT_RESUME_SOURCE_JOB_ID="$resume_source_job_id"' in resume_section
+    assert 'PEFT_RESUME_TRAINING_COMMIT="$resume_training_commit"' in resume_section
+    assert 'PEFT_REQUESTED_EPOCHS="$requested_epochs"' in resume_section
+    assert 'PEFT_END_TASK_ID="$end_task_id"' in resume_section
+    assert 'requested_epochs=%s' in submitter
+    assert 'for task_id in $(seq 0 "$end_task_id"); do' in submitter
+    assert 'export PEFT_REQUESTED_EPOCHS="$requested_epochs" PEFT_END_TASK_ID="$end_task_id"' in submitter
     assert '--partition=gpu_a40_ext' in resume_section
     assert '--dependency=' not in resume_section
     assert 'resume_source="$(realpath -m -- "$resume_source")"' in resume_section

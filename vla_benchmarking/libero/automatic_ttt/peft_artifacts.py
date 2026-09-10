@@ -656,16 +656,26 @@ class PEFTArtifactManifest:
         if dataset_frames <= 0:
             raise PEFTArtifactError("train_counts.dataset_frames must be positive")
         if self.source_kind == FRESH_COLLECTION_SOURCE_KIND:
-            expected_steps = math.ceil(5 * dataset_frames / PAPER_GLOBAL_BATCH_SIZE)
+            requested_epochs = _require_positive_count(
+                self.train_counts.get("requested_epochs"),
+                "fresh Arrow train_counts.requested_epochs",
+            )
+            expected_steps = math.ceil(requested_epochs * dataset_frames / PAPER_GLOBAL_BATCH_SIZE)
             expected_warmup = expected_steps // 30
-            if self.train_counts.get("requested_epochs") != 5:
-                raise PEFTArtifactError("fresh Arrow train_counts.requested_epochs must be 5")
             if self.checkpoint_step != expected_steps:
-                raise PEFTArtifactError("fresh Arrow checkpoint does not implement ceil(5*dataset_frames/8)")
+                raise PEFTArtifactError(
+                    "fresh Arrow checkpoint does not implement "
+                    "ceil(requested_epochs*dataset_frames/8)"
+                )
             achieved = self.checkpoint_step * PAPER_GLOBAL_BATCH_SIZE / dataset_frames
             _require_float(self.train_counts["epoch_equivalent"], achieved, "train_counts.epoch_equivalent", tolerance=1e-10)
-            if not (achieved >= 5 and achieved < 5 + PAPER_GLOBAL_BATCH_SIZE / dataset_frames):
-                raise PEFTArtifactError("fresh Arrow achieved epoch equivalent is outside the five-epoch ceiling")
+            if not (
+                achieved >= requested_epochs
+                and achieved < requested_epochs + PAPER_GLOBAL_BATCH_SIZE / dataset_frames
+            ):
+                raise PEFTArtifactError(
+                    "fresh Arrow achieved epoch equivalent is outside the requested-epoch ceiling"
+                )
             if self.train_counts.get("save_freq") != min(PAPER_SAVE_FREQ, self.checkpoint_step):
                 raise PEFTArtifactError("fresh Arrow save_freq must be min(2000, steps)")
             if self.optimizer.get("warmup_steps") != expected_warmup:

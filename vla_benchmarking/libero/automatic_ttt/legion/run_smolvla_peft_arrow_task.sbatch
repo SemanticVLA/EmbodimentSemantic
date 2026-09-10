@@ -236,13 +236,18 @@ export STUDENT_VISUAL_CONTRACT_JSON STUDENT_VISUAL_CONTRACT_SHA256
 if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]; then
   [[ "$PEFT_SKIP_BASELINE" == 1 ]] || die 'resume requires PEFT_SKIP_BASELINE=1'
   [[ "$ARROW_DEMOS" == 1 ]] || die 'resume requires PEFT_ARROW_DEMOS=1'
+  [[ "${PEFT_RESUME_SOURCE_JOB_ID:-}" =~ ^[0-9]+$ ]] || die 'PEFT_RESUME_SOURCE_JOB_ID must be an integer'
+  [[ "${PEFT_RESUME_TRAINING_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die 'PEFT_RESUME_TRAINING_COMMIT must be a 40-character SHA'
   printf '[%s] publication-only resume from %s\n' "$(date +'%F %T')" "$PEFT_RESUME_SOURCE_RUN_ROOT"
   "$PYTHON" -m vla_benchmarking.libero.automatic_ttt.smolvla_peft_resume \
     --source-run-root "$PEFT_RESUME_SOURCE_RUN_ROOT" \
     --output-run-root "$RUN_ROOT" --output-archive-root "$ARCHIVE_ROOT" \
     --current-commit "$ACTUAL_COMMIT" --base-policy "$BASE_POLICY" \
     --base-policy-revision "$BASE_POLICY_REVISION" \
-    --controller-config-hash "$CONTROLLER_CONFIG_HASH"
+    --controller-config-hash "$CONTROLLER_CONFIG_HASH" \
+    --source-job-id "$PEFT_RESUME_SOURCE_JOB_ID" \
+    --training-commit "$PEFT_RESUME_TRAINING_COMMIT" \
+    --requested-epochs "$REQUESTED_EPOCHS"
   printf '[%s] publication-only resume completed for task %s\n' "$(date +'%F %T')" "$TASK_ID"
   exit 0
 fi
@@ -627,7 +632,7 @@ manifest=save_peft_adapter(
     run_id=f"{os.environ['STUDENT_POLICY_VARIANT']}_task{os.environ['TASK_ID']}_arrow{os.environ['COLLECTION_SUCCESS_COUNT']}_steps{os.environ['STEPS']}_job{os.environ.get('SLURM_JOB_ID','unknown')}",
     base_checkpoint=os.environ["BASE_POLICY"],base_checkpoint_revision=os.environ["BASE_POLICY_REVISION"],
     collection_manifest=os.environ["COLLECTION_MANIFEST"],collection_success_count=int(os.environ["COLLECTION_SUCCESS_COUNT"]),controller_config_hash=os.environ["CONTROLLER_CONFIG_HASH"],checkpoint_step=int(os.environ["STEPS"]),seed=1000,
-    train_counts={"successful_trajectories":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"training_scope":"task_specific","runtime_evidence_source_path":os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json","runtime_evidence_source_sha256":os.environ["RUNTIME_EVIDENCE_SHA256"]},
+    train_counts={"successful_trajectories":int(os.environ["COLLECTION_SUCCESS_COUNT"]),"dataset_frames":int(os.environ["DATASET_FRAMES"]),"steps":int(os.environ["STEPS"]),"requested_epochs":int(os.environ["REQUESTED_EPOCHS"]),"batch_size":int(os.environ["PEFT_BATCH_SIZE"]),"global_batch_size":8,"epoch_equivalent":float(os.environ["EPOCH_EQUIVALENT"]),"save_freq":int(os.environ["SAVE_FREQ"]),"seed":1000,"training_scope":"task_specific","student_policy_variant":os.environ["STUDENT_POLICY_VARIANT"],"student_visual_condition":os.environ["PEFT_STUDENT_VISUAL_CONDITION"],"student_visual_contract_sha256":os.environ["STUDENT_VISUAL_CONTRACT_SHA256"],"runtime_evidence_source_path":os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json","runtime_evidence_source_sha256":os.environ["RUNTIME_EVIDENCE_SHA256"]},
     eval_counts=eval_counts,
     optimizer={"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,"scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},
     runtime_evidence=os.environ["TRAIN_META_ROOT"] + "/runtime_evidence.json",

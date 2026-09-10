@@ -67,6 +67,12 @@ class ResumeSource:
     source_collection_manifest_sha256: str
     training_commit: str
     training_runtime_versions: Mapping[str, Any] = field(default_factory=dict)
+    requested_epochs: int = REQUESTED_EPOCHS
+    source_job_id: int = SOURCE_JOB_ID
+    student_policy_variant: str = "smolvla_fresh_arrow_clean_peft"
+    student_visual_condition: str = "none"
+    student_visual_contract: Mapping[str, Any] | None = None
+    student_visual_contract_sha256: str = "none"
 
 
 @dataclass(frozen=True)
@@ -81,8 +87,10 @@ def derive_training_steps(dataset_frames: int, *, epochs: int = REQUESTED_EPOCHS
     """Reproduce the launcher step contract from integer inputs only."""
     if isinstance(dataset_frames, bool) or not isinstance(dataset_frames, int) or dataset_frames <= 0:
         raise ResumeError("dataset_frames must be a positive integer")
-    if epochs != REQUESTED_EPOCHS or batch_size != GLOBAL_BATCH_SIZE:
-        raise ResumeError("resume is sealed to five epochs and global batch size 8")
+    if isinstance(epochs, bool) or not isinstance(epochs, int) or epochs <= 0:
+        raise ResumeError("epochs must be a positive integer")
+    if batch_size != GLOBAL_BATCH_SIZE:
+        raise ResumeError("resume is sealed to global batch size 8")
     return math.ceil(epochs * dataset_frames / batch_size)
 
 
@@ -287,6 +295,7 @@ def validate_resume_source(
     expected_base_policy_revision: str,
     expected_training_commit: str = TRAINING_COMMIT,
     expected_job_id: int = SOURCE_JOB_ID,
+    expected_requested_epochs: int = REQUESTED_EPOCHS,
 ) -> ResumeSource:
     """Validate every source stage before allowing publication."""
     source = _safe_source_root(source_run_root)
@@ -342,11 +351,38 @@ def validate_resume_source(
     frames = info.get("total_frames")
     if isinstance(frames, bool) or not isinstance(frames, int) or frames <= 0:
         raise ResumeError("native dataset total_frames must be a positive integer")
-    steps = derive_training_steps(frames)
+    steps = derive_training_steps(frames, epochs=expected_requested_epochs)
 
     training_plan = _require_file(source / "training_metadata" / "training_plan.json", "training plan")
     plan = _read_json(training_plan, "training plan")
     run_context = _read_json(_require_file(source / "run_context.json", "run context"), "run context")
+    student_visual_condition = run_context.get("student_visual_condition")
+    expected_policy_variants = {
+        "none": "smolvla_fresh_arrow_clean_peft",
+        "visual_goal_arrow": "smolvla_fresh_arrow_visual_goal_peft",
+    }
+    if student_visual_condition not in expected_policy_variants:
+        raise ResumeError("run context student visual condition is unsupported")
+    student_policy_variant = run_context.get("student_policy_variant")
+    if student_policy_variant != expected_policy_variants[student_visual_condition]:
+        raise ResumeError("run context student policy variant does not match its visual condition")
+    if status.get("student_visual_condition") != student_visual_condition or status.get("student_policy_variant") != student_policy_variant:
+        raise ResumeError("source archive visual identity differs from its run context")
+    student_visual_contract = run_context.get("student_visual_contract")
+    student_visual_contract_sha256 = run_context.get("student_visual_contract_sha256")
+    if student_visual_condition == "none":
+        if student_visual_contract is not None or student_visual_contract_sha256 != "none":
+            raise ResumeError("clean source must not carry a visual-arrow contract")
+    else:
+        if not isinstance(student_visual_contract, Mapping) or not re.fullmatch(
+            r"[0-9a-f]{64}", str(student_visual_contract_sha256)
+        ):
+            raise ResumeError("visual-arrow source must carry a hashed visual contract")
+        computed_visual_contract_sha256 = hashlib.sha256(
+            json.dumps(student_visual_contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if computed_visual_contract_sha256 != student_visual_contract_sha256:
+            raise ResumeError("visual-arrow source contract digest does not match its payload")
     context_identity = {
         "vla": "smolvla", "task_id": 0, "task_ids": [0],
         "training_scope": "task_specific", "arrow_demos": 1,
@@ -366,7 +402,7 @@ def validate_resume_source(
     training_runtime_versions = {"python": python_version, **dict(raw_runtime_versions)}
     if any(not isinstance(key, str) or not key or (value is not None and not isinstance(value, str)) for key, value in training_runtime_versions.items()):
         raise ResumeError("run context runtime_versions are malformed")
-    for key, expected in (("task_id", 0), ("steps", steps), ("requested_epochs", 5), ("batch_size", 8), ("global_batch_size", 8), ("dataset_frames", frames), ("seed", 1000)):
+    for key, expected in (("task_id", 0), ("steps", steps), ("requested_epochs", expected_requested_epochs), ("batch_size", 8), ("global_batch_size", 8), ("dataset_frames", frames), ("seed", 1000)):
         if plan.get(key) != expected:
             raise ResumeError(f"training plan {key} does not match integer-derived source contract")
     if plan.get("base_policy_revision") != expected_base_policy_revision:
@@ -430,6 +466,12 @@ def validate_resume_source(
         source_collection_manifest_sha256=sha256_file(collection_manifest),
         training_commit=expected_training_commit,
         training_runtime_versions=training_runtime_versions,
+        requested_epochs=expected_requested_epochs,
+        source_job_id=expected_job_id,
+        student_policy_variant=student_policy_variant,
+        student_visual_condition=student_visual_condition,
+        student_visual_contract=(dict(student_visual_contract) if isinstance(student_visual_contract, Mapping) else None),
+        student_visual_contract_sha256=str(student_visual_contract_sha256),
     )
 
 
@@ -500,13 +542,16 @@ def publish_resume(
         "successful_trajectories": 1,
         "dataset_frames": source.dataset_frames,
         "steps": source.checkpoint_step,
-        "requested_epochs": REQUESTED_EPOCHS,
+        "requested_epochs": source.requested_epochs,
         "batch_size": GLOBAL_BATCH_SIZE,
         "global_batch_size": GLOBAL_BATCH_SIZE,
         "epoch_equivalent": derive_epoch_equivalent(source.checkpoint_step, source.dataset_frames),
         "save_freq": min(2000, source.checkpoint_step),
         "seed": 1000,
         "training_scope": "task_specific",
+        "student_policy_variant": source.student_policy_variant,
+        "student_visual_condition": source.student_visual_condition,
+        "student_visual_contract_sha256": source.student_visual_contract_sha256,
         "runtime_evidence_source_path": str(source.runtime_evidence),
         "runtime_evidence_source_sha256": sha256_file(source.runtime_evidence),
     }
@@ -583,7 +628,7 @@ def publish_resume(
         "status": "VERIFIED",
         "source_run_root": str(source.source_run_root),
         "source_archive_status": str(source.archive_status),
-        "source_job_id": SOURCE_JOB_ID,
+        "source_job_id": source.source_job_id,
         "training_commit": source.training_commit,
         "publication_commit": current_commit,
         "publication_runtime_versions": _versions(),
@@ -605,10 +650,14 @@ def publish_resume(
     summary = {
         "schema": "smolvla_peft_arrow_task_summary.v5",
         "training_scope": "task_specific", "vla": "smolvla", "task_id": 0, "trained_task_ids": [0],
+        "student_policy_variant": source.student_policy_variant,
+        "student_visual_condition": source.student_visual_condition,
+        "student_visual_contract": source.student_visual_contract,
+        "student_visual_contract_sha256": source.student_visual_contract_sha256,
         "source_kind": FRESH_COLLECTION_SOURCE_KIND, "collection_mode": "fresh_arrow", "evaluation_mode": "adapted_only",
         "collection_success_count": 1, "collection_manifest_sha256": source.source_collection_manifest_sha256,
         "controller_config_hash": source.controller_config_hash, "dataset_frames": source.dataset_frames,
-        "optimizer_steps": source.checkpoint_step, "requested_epochs": REQUESTED_EPOCHS,
+        "optimizer_steps": source.checkpoint_step, "requested_epochs": source.requested_epochs,
         "global_batch_size": GLOBAL_BATCH_SIZE, "epoch_equivalent": train_counts["epoch_equivalent"],
         "baseline": {"status": "SKIPPED", "reason": "PEFT_SKIP_BASELINE=1"}, "adapted": adapted,
         "comparison_available": False, "improvement_claim_supported": False, "success_delta": None,
@@ -632,8 +681,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-policy", required=True)
     parser.add_argument("--base-policy-revision", required=True)
     parser.add_argument("--controller-config-hash", required=True)
+    parser.add_argument("--source-job-id", required=True, type=int)
+    parser.add_argument("--training-commit", required=True)
+    parser.add_argument("--requested-epochs", required=True, type=int)
     args = parser.parse_args(argv)
-    source = validate_resume_source(args.source_run_root, expected_controller_config_hash=args.controller_config_hash, expected_base_policy_revision=args.base_policy_revision)
+    source = validate_resume_source(
+        args.source_run_root,
+        expected_controller_config_hash=args.controller_config_hash,
+        expected_base_policy_revision=args.base_policy_revision,
+        expected_training_commit=args.training_commit,
+        expected_job_id=args.source_job_id,
+        expected_requested_epochs=args.requested_epochs,
+    )
     artifact = publish_resume(source, output_run_root=args.output_run_root, output_archive_root=args.output_archive_root, current_commit=args.current_commit, base_policy=args.base_policy, base_policy_revision=args.base_policy_revision)
     print(json.dumps({"status": "RESUME_PUBLISHED", "artifact_path": str(artifact), "source_run_root": str(source.source_run_root)}, sort_keys=True))
     return 0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import shutil
 
@@ -157,14 +158,17 @@ def _fresh_runtime_evidence(*, steps=11, warmup=0):
 
 def _fresh_save(
     tmp_path, run_id="fresh-run", count=50, eval_counts=None, train_success_count=None,
-    collection_success_count=None,
+    collection_success_count=None, requested_epochs=5,
 ):
     source, base, collection = _fresh_inputs(tmp_path, count=count)
-    steps, frames, batch = 11, 17, 8
+    frames, batch = 17, 8
+    step_epochs = requested_epochs if type(requested_epochs) in (int, float) and requested_epochs > 0 else 1
+    steps = math.ceil(step_epochs * frames / batch)
+    warmup = steps // 30
     optimizer = {
         "optimizer": "AdamW", "weight_decay": 1e-5, "peak_learning_rate": 5e-5,
         "betas": [0.9, 0.95], "epsilon": 1e-8, "gradient_clip_norm": 10.0,
-        "scheduler": "cosine_decay_with_warmup", "warmup_steps": 0,
+        "scheduler": "cosine_decay_with_warmup", "warmup_steps": warmup,
         "decay_steps": steps, "decay_lr": 2.5e-6,
     }
     return save_peft_adapter(
@@ -175,7 +179,7 @@ def _fresh_save(
         controller_config_hash="a" * 64, checkpoint_step=steps, seed=1000,
         train_counts={
             "successful_trajectories": count if train_success_count is None else train_success_count,
-            "steps": steps, "requested_epochs": 5,
+            "steps": steps, "requested_epochs": requested_epochs,
             "batch_size": batch, "global_batch_size": batch, "dataset_frames": frames,
             "epoch_equivalent": steps * batch / frames, "save_freq": steps,
             "seed": 1000, "training_scope": "task_specific",
@@ -185,9 +189,21 @@ def _fresh_save(
             "adapted": {"episodes": 10, "seeds": list(range(1000, 1010))},
             "seeds": list(range(1000, 1010)),
         },
-        optimizer=optimizer, runtime_evidence=_fresh_runtime_evidence(),
+        optimizer=optimizer, runtime_evidence=_fresh_runtime_evidence(steps=steps, warmup=warmup),
         git_commit="a" * 40, runtime_versions={"python": "3.12"},
     )
+
+
+def test_fresh_artifact_accepts_explicit_50_epoch_contract(tmp_path):
+    manifest = _fresh_save(tmp_path, requested_epochs=50)
+    assert manifest.train_counts["requested_epochs"] == 50
+    assert manifest.checkpoint_step == math.ceil(50 * 17 / 8)
+
+
+@pytest.mark.parametrize("requested_epochs", [0, -1, True, 1.5, "5"])
+def test_fresh_artifact_rejects_nonpositive_or_nonstrict_epoch_count(tmp_path, requested_epochs):
+    with pytest.raises(PEFTArtifactError, match="requested_epochs must be a positive integer"):
+        _fresh_save(tmp_path, requested_epochs=requested_epochs)
 
 
 def _save(tmp_path, run_id="run-1"):
