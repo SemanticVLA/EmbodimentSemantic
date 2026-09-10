@@ -276,6 +276,40 @@ def test_arrow_session_forwards_current_rendered_arrow_to_motion_runner(
     assert seen["arrow_rgb"] is arrow_rgb
 
 
+def test_arrow_session_normalizes_exhausted_grasp_search_as_failed_rollout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from vla_benchmarking.libero.evaluation import run_arrow_pick_place_eval as episode
+
+    session = runtime._ArrowSession(
+        molmo=object(), resolution=8, output_root=tmp_path,
+        transform=np.eye(3), opening_m=0.04, task_id=9, seed=3040,
+        current_arrow_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    def exhausted_search(**_kwargs):
+        raise episode._GraspSearchRequested("empty_gripper_likely")
+
+    monkeypatch.setattr(episode, "run_episode", exhausted_search)
+
+    result = session.episode_runner(
+        env=object(),
+        context=SimpleNamespace(
+            output_dir=tmp_path, candidate=object(), agentview_capture=object()
+        ),
+        evaluator=None,
+    )
+
+    assert result == {
+        "status": "empty_gripper_likely",
+        "controller_failure": "empty_gripper_likely",
+        "grasp_retained": False,
+        "evaluator_called": False,
+        "evaluator_success": False,
+        "retreat_complete": False,
+    }
+
+
 def test_arrow_session_cleanup_releases_all_attempt_references(tmp_path):
     """A completed attempt cannot retain env/images/calibration into retry 2."""
     worker = SimpleNamespace(robot_calibration=object())

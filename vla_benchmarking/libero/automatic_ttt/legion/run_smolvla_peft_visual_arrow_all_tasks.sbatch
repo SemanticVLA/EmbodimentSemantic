@@ -39,6 +39,10 @@ export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1 PEFT_STUDENT_VISUAL_CONDITION=vis
 PEFT_START_TASK_ID="${PEFT_START_TASK_ID:-0}"
 [[ "$PEFT_START_TASK_ID" =~ ^[0-9]+$ ]] || die 'PEFT_START_TASK_ID must be an integer in [0,9]'
 (( PEFT_START_TASK_ID <= 9 )) || die 'PEFT_START_TASK_ID must be in [0,9]'
+PEFT_END_TASK_ID="${PEFT_END_TASK_ID:-9}"
+[[ "$PEFT_END_TASK_ID" =~ ^[0-9]+$ ]] || die 'PEFT_END_TASK_ID must be an integer in [0,9]'
+(( PEFT_END_TASK_ID <= 9 )) || die 'PEFT_END_TASK_ID must be in [0,9]'
+(( PEFT_START_TASK_ID <= PEFT_END_TASK_ID )) || die 'PEFT_START_TASK_ID must not exceed PEFT_END_TASK_ID'
 
 REPO_ROOT="$(realpath -e -- "$REPO_ROOT")"
 [[ -d "$REPO_ROOT/.git" ]] || die 'REPO_ROOT is not a Git checkout'
@@ -47,16 +51,16 @@ REPO_ROOT="$(realpath -e -- "$REPO_ROOT")"
 RUNNER="$REPO_ROOT/vla_benchmarking/libero/automatic_ttt/legion/run_smolvla_peft_arrow_task.sbatch"
 [[ -f "$RUNNER" ]] || die 'common task runner is missing'
 
-for task_id in $(seq "$PEFT_START_TASK_ID" 9); do
+for task_id in $(seq "$PEFT_START_TASK_ID" "$PEFT_END_TASK_ID"); do
   export PEFT_TASK_ID="$task_id"
   unset PEFT_TASK_IDS PEFT_ARROW_COLLECTION_MANIFEST PEFT_RESUME_SOURCE_RUN_ROOT
   export PEFT_LABEL="${PEFT_ALL_TASK_LABEL:-smolvla_visual_goal_arrow_bc5}_task_${task_id}"
   export PEFT_RUN_ROOT="$PEFT_ALL_TASK_RUN_ROOT/task_${task_id}/run"
   export PEFT_ARCHIVE_ROOT="$PEFT_ALL_TASK_ARCHIVE_ROOT/task_${task_id}"
   export PEFT_SCRATCH_ROOT="$PEFT_ALL_TASK_RUN_ROOT/task_${task_id}"
-  printf '[%s] starting visual-arrow task %s/9 in job %s\n' "$(date +'%F %T')" "$task_id" "$SLURM_JOB_ID"
+  printf '[%s] starting visual-arrow task %s/%s in job %s\n' "$(date +'%F %T')" "$task_id" "$PEFT_END_TASK_ID" "$SLURM_JOB_ID"
   bash "$RUNNER"
-  printf '[%s] completed visual-arrow task %s/9 in job %s\n' "$(date +'%F %T')" "$task_id" "$SLURM_JOB_ID"
+  printf '[%s] completed visual-arrow task %s/%s in job %s\n' "$(date +'%F %T')" "$task_id" "$PEFT_END_TASK_ID" "$SLURM_JOB_ID"
 done
 
-printf 'VERIFIED visual-arrow task-specific runs %s..9 completed sequentially in job %s\n' "$PEFT_START_TASK_ID" "$SLURM_JOB_ID"
+printf 'VERIFIED visual-arrow task-specific runs %s..%s completed sequentially in job %s\n' "$PEFT_START_TASK_ID" "$PEFT_END_TASK_ID" "$SLURM_JOB_ID"

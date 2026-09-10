@@ -2,8 +2,8 @@
 # One task-specific SmolVLA PEFT run. The only dataset input is the
 # ArrowGraspController collection manifest. There is no HDF5 converter or
 # multi-task mode. Submit one array element per task (0..9).
-# This pilot trains for five dataset-equivalent epochs; the exact optimizer
-# step count is computed after the accepted Arrow dataset is materialized.
+# The exact optimizer step count is derived from the requested dataset epochs
+# after the accepted Arrow dataset is materialized.
 
 #SBATCH --job-name=smolvla_peft_arrow_task
 #SBATCH --partition=gpu_a40
@@ -58,7 +58,8 @@ PEFT_ARROW_DEMOS="${PEFT_ARROW_DEMOS:-50}"
 ARROW_DEMOS="$PEFT_ARROW_DEMOS"
 PEFT_SKIP_BASELINE="${PEFT_SKIP_BASELINE:-0}"
 [[ "$PEFT_SKIP_BASELINE" == 0 || "$PEFT_SKIP_BASELINE" == 1 ]] || die 'PEFT_SKIP_BASELINE must be 0 or 1'
-EVAL_EPISODES=10; EVAL_SEED=1000; REQUESTED_EPOCHS=5; STEPS=0
+EVAL_EPISODES=10; EVAL_SEED=1000; REQUESTED_EPOCHS="${PEFT_REQUESTED_EPOCHS:-5}"; STEPS=0
+[[ "$REQUESTED_EPOCHS" =~ ^[1-9][0-9]*$ ]] || die 'PEFT_REQUESTED_EPOCHS must be a positive integer'
 MAX_ATTEMPTS=500; VLA_STEP_BUDGET=280; ARROW_STEP_BUDGET=1200
 EPISODE_HORIZON=280; RESOLUTION=256; EVAL_CAMERAS='agentview_image,robot0_eye_in_hand_image'
 [[ -z "${PEFT_BATCH_SIZE+x}" || "$PEFT_BATCH_SIZE" == 8 ]] || die 'PEFT_BATCH_SIZE is sealed to the paper-equivalent global batch 8'
@@ -69,8 +70,8 @@ OPTIMIZER_NAME=AdamW; WEIGHT_DECAY=1e-5; PEAK_LR=5e-5; OPTIMIZER_BETAS='[0.9,0.9
 SCHEDULER_NAME=cosine_decay_with_warmup; SCHEDULER_WARMUP_STEPS=0; SCHEDULER_DECAY_STEPS=0; SCHEDULER_DECAY_LR=2.5e-6
 SAVE_FREQ=1; NUM_WORKERS=4; PREFETCH_FACTOR=4; PERSISTENT_WORKERS=true; LOG_FREQ=200; TOLERANCE_S=0.0001
 [[ "$PEFT_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || die 'PEFT_BATCH_SIZE must be a positive integer'
-[[ -z "${PEFT_EPOCHS+x}" ]] || die 'PEFT_EPOCHS is forbidden; the budget is optimizer steps'
-[[ -z "${PEFT_STEPS+x}" ]] || die 'PEFT_STEPS override is forbidden; steps are derived from five epochs'
+[[ -z "${PEFT_EPOCHS+x}" ]] || die 'PEFT_EPOCHS is forbidden; use PEFT_REQUESTED_EPOCHS'
+[[ -z "${PEFT_STEPS+x}" ]] || die 'PEFT_STEPS override is forbidden; steps are derived from requested epochs'
 # Optional replay input. If absent, this job collects fresh-reset successful
 # Arrow demonstrations after the baseline evaluation, unless explicit
 # skip-baseline mode is selected.
@@ -449,7 +450,7 @@ payload = {
     "peft":{"r":16,"lora_alpha":8,"lora_dropout":0.0,"bias":"none","init_lora_weights":True,"use_rslora":False,"fan_in_fan_out":False,"target_modules":os.environ["ACTION_SIDE_TARGET_REGEX"],"modules_to_save":[]},
     "optimizer":{"optimizer":"AdamW","weight_decay":1e-5,"peak_learning_rate":5e-5,"betas":[0.9,0.95],"epsilon":1e-8,"gradient_clip_norm":10.0,
                   "scheduler":"cosine_decay_with_warmup","warmup_steps":int(os.environ["SCHEDULER_WARMUP_STEPS"]),"decay_steps":int(os.environ["SCHEDULER_DECAY_STEPS"]),"decay_lr":2.5e-6},
-    "provenance_categories":{"steps":"USER_PILOT_DERIVED_CEIL_5_EPOCHS","requested_epochs":"USER_PILOT","batch_size":"PAPER_DERIVED","optimizer":"PAPER_EXPLICIT","peft":"SMOLVLA_PINNED","episode_horizon":"SMOLVLA_PINNED","resolution":"SMOLVLA_PINNED","eval_seeds":"USER_STUDY_DESIGN","controller":"CONTROLLER_PINNED","save_freq":"OPERATIONAL"},
+    "provenance_categories":{"steps":"USER_REQUESTED_EPOCHS_DERIVED","requested_epochs":"USER_REQUESTED","batch_size":"PAPER_DERIVED","optimizer":"PAPER_EXPLICIT","peft":"SMOLVLA_PINNED","episode_horizon":"SMOLVLA_PINNED","resolution":"SMOLVLA_PINNED","eval_seeds":"USER_STUDY_DESIGN","controller":"CONTROLLER_PINNED","save_freq":"OPERATIONAL"},
 }
 pathlib.Path(os.sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -496,7 +497,7 @@ expected = {
     "decay_lr": float(os.environ["SCHEDULER_DECAY_LR"]),
 }
 if value.get("attestation_status") != "VERIFIED": raise SystemExit("training runtime evidence is not VERIFIED")
-if value.get("updates_observed") != expected["updates"]: raise SystemExit("runtime evidence update count differs from derived five-epoch step count")
+if value.get("updates_observed") != expected["updates"]: raise SystemExit("runtime evidence update count differs from derived requested-epoch step count")
 if value.get("optimizer_class") != "torch.optim.adamw.AdamW": raise SystemExit("runtime optimizer class is not AdamW")
 if value.get("scheduler_class", "").split(".")[-1] not in {"LambdaLR", "SequentialLR", "CosineAnnealingLR"}: raise SystemExit("runtime scheduler class is not approved")
 if value.get("expected_contract") != expected: raise SystemExit(f"runtime evidence contract mismatch: {value.get('expected_contract')!r}")

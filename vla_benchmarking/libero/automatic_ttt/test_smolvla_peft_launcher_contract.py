@@ -163,14 +163,17 @@ def test_all_task_wrapper_seals_one_demo_and_skips_baseline():
     assert '(( PEFT_START_TASK_ID <= 9 ))' in text
     assert '(( PEFT_START_TASK_ID == 0 ))' not in text
     assert 'FIRST_TASK_ID="$PEFT_START_TASK_ID"' in text
-    assert 'for task_id in $(seq "$FIRST_TASK_ID" 9); do' in text
+    assert 'PEFT_END_TASK_ID="${PEFT_END_TASK_ID:-9}"' in text
+    assert '(( PEFT_START_TASK_ID <= PEFT_END_TASK_ID ))' in text
+    assert 'for task_id in $(seq "$FIRST_TASK_ID" "$PEFT_END_TASK_ID"); do' in text
+    assert "archive root must be under /mnt/beegfs/hjaber" in text
     assert 'bash "$RUNNER"' in text
 
 
 def test_all_task_wrapper_resumes_task_zero_then_starts_fresh_at_task_one():
     text = (LAUNCHER.parent / "run_smolvla_peft_arrow_all_tasks.sbatch").read_text(encoding="utf-8")
     resume_branch = text.index('if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" ]]; then')
-    task_loop = text.index('for task_id in $(seq "$FIRST_TASK_ID" 9); do')
+    task_loop = text.index('for task_id in $(seq "$FIRST_TASK_ID" "$PEFT_END_TASK_ID"); do')
     resume_section = text[resume_branch:task_loop]
 
     assert 'PEFT_RESUME_SOURCE_RUN_ROOT is permitted only when PEFT_START_TASK_ID=0' in text
@@ -227,7 +230,8 @@ def test_launcher_uses_matching_sealed_evaluation_seeds():
     assert 'format(int(sys.argv[1])*int(sys.argv[2])/int(sys.argv[3]), ".8f")' not in text
     assert 'task_id = int(sys.argv[3])' in text
     assert 'eval_info, output, task_id = map(pathlib.Path, sys.argv[1:])' not in text
-    assert "REQUESTED_EPOCHS=5" in text
+    assert 'REQUESTED_EPOCHS="${PEFT_REQUESTED_EPOCHS:-5}"' in text
+    assert "PEFT_REQUESTED_EPOCHS must be a positive integer" in text
     assert "math.ceil(epochs*frames/batch)" in text
     assert text.count("PEFT_PAIRED_EVAL=1") == 2
     assert "reset identities" in text
@@ -316,7 +320,9 @@ def test_visual_arrow_policy_is_separate_and_matched_in_training_and_evaluation(
     assert 'row.get("changed_pixels", 0)' in launcher
 
     assert 'export PEFT_ARROW_DEMOS=1 PEFT_SKIP_BASELINE=1 PEFT_STUDENT_VISUAL_CONDITION=visual_goal_arrow' in all_tasks
-    assert 'for task_id in $(seq "$PEFT_START_TASK_ID" 9); do' in all_tasks
+    assert 'PEFT_END_TASK_ID="${PEFT_END_TASK_ID:-9}"' in all_tasks
+    assert '(( PEFT_START_TASK_ID <= PEFT_END_TASK_ID ))' in all_tasks
+    assert 'for task_id in $(seq "$PEFT_START_TASK_ID" "$PEFT_END_TASK_ID"); do' in all_tasks
     assert "archive root must be under /mnt/beegfs/hjaber for visual-arrow runs" in all_tasks
     assert 'bash "$RUNNER"' in all_tasks
     assert "run_smolvla_peft_arrow_task.sbatch" in all_tasks

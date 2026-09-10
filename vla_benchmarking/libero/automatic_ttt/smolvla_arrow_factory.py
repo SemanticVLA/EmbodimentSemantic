@@ -523,22 +523,38 @@ class _ArrowSession:
         from vla_benchmarking.libero.evaluation import run_arrow_pick_place_eval as episode
         if self.action_budget is None:
             self.action_budget = episode._ActionBudget(DEFAULT_ARROW_STEP_BUDGET)
-        result = episode.run_episode(
-            env=env, task_id=int(self.task_id if self.task_id is not None else 0),
-            seed=int(self.seed if self.seed is not None else 0), output_dir=context.output_dir,
-            arrow_rgb=self.current_arrow_rgb,
-            dry_run=False, resolution=self.resolution,
-            evaluator=evaluator, capture=context.agentview_capture,
-            # ``run_episode`` accepts the Arrow canary variant name
-            # ``canonical_molmo_rgbd_grasp`` (or ``None``), not the separate
-            # ``runner.run_canary_episode`` spelling ``canonical``.
-            allow_unvalidated_profile=True, controller_variant=episode.DEFAULT_PROFILE_NAME,
-            suite_mode="sealed_randomized", experimental_candidate=context.candidate,
-            experimental_eef_orientation_transform=self.transform,
-            experimental_gripper_opening_m=float(self.opening_m),
-            retreat_completed_callback=retreat_completed_callback,
-            experimental_action_budget=self.action_budget,
-        )
+        try:
+            result = episode.run_episode(
+                env=env, task_id=int(self.task_id if self.task_id is not None else 0),
+                seed=int(self.seed if self.seed is not None else 0), output_dir=context.output_dir,
+                arrow_rgb=self.current_arrow_rgb,
+                dry_run=False, resolution=self.resolution,
+                evaluator=evaluator, capture=context.agentview_capture,
+                # ``run_episode`` accepts the Arrow canary variant name
+                # ``canonical_molmo_rgbd_grasp`` (or ``None``), not the separate
+                # ``runner.run_canary_episode`` spelling ``canonical``.
+                allow_unvalidated_profile=True, controller_variant=episode.DEFAULT_PROFILE_NAME,
+                suite_mode="sealed_randomized", experimental_candidate=context.candidate,
+                experimental_eef_orientation_transform=self.transform,
+                experimental_gripper_opening_m=float(self.opening_m),
+                retreat_completed_callback=retreat_completed_callback,
+                experimental_action_budget=self.action_budget,
+            )
+        except episode._GraspSearchRequested as exc:
+            # Exhausting the controller's bounded RGB-D grasp search means
+            # this randomized rollout failed; it is not an infrastructure or
+            # contract failure.  Normalize the controller's private control-
+            # flow exception into the same failed-grasp result consumed by
+            # ``run_canary_episode``.  The outer collector then discards the
+            # trace and advances its durable seed/attempt cache.
+            return {
+                "status": str(exc),
+                "controller_failure": str(exc),
+                "grasp_retained": False,
+                "evaluator_called": False,
+                "evaluator_success": False,
+                "retreat_complete": False,
+            }
         return result
 
 

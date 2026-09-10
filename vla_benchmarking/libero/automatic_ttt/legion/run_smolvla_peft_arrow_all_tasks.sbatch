@@ -22,6 +22,11 @@ die() { printf 'SmolVLA all-task PEFT job: %s\n' "$*" >&2; exit 2; }
 [[ "${PEFT_EXPECTED_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die 'PEFT_EXPECTED_COMMIT is invalid'
 [[ "${PEFT_EXPECTED_CONTROLLER_HASH:-}" =~ ^[0-9a-f]{64}$ ]] || die 'controller hash is invalid'
 [[ -n "${PEFT_ALL_TASK_RUN_ROOT:-}" && -n "${PEFT_ALL_TASK_ARCHIVE_ROOT:-}" ]] || die 'all-task roots are required'
+for path in "$PEFT_ALL_TASK_RUN_ROOT" "$PEFT_ALL_TASK_ARCHIVE_ROOT"; do
+  [[ "$path" = /* && "$path" != / && ! -L "$path" ]] || die "unsafe all-task root: $path"
+done
+case "$PEFT_ALL_TASK_RUN_ROOT" in /mnt/beegfs/hjaber/*) ;; *) die 'run root must be under /mnt/beegfs/hjaber' ;; esac
+case "$PEFT_ALL_TASK_ARCHIVE_ROOT" in /mnt/beegfs/hjaber/*) ;; *) die 'archive root must be under /mnt/beegfs/hjaber' ;; esac
 VALIDATION_PYTHON="${PEFT_PYTHON:-$HOME/EmbodimentSemantic_runtime/EmbodimentSemantic/grasp_controller/venv-py312-eacdc54a9663db0a/bin/python}"
 [[ -x "$VALIDATION_PYTHON" ]] || die "Python is missing: $VALIDATION_PYTHON"
 # A normal run starts at task 0 and executes every task once.  Operational
@@ -32,6 +37,10 @@ VALIDATION_PYTHON="${PEFT_PYTHON:-$HOME/EmbodimentSemantic_runtime/EmbodimentSem
 PEFT_START_TASK_ID="${PEFT_START_TASK_ID:-0}"
 [[ "$PEFT_START_TASK_ID" =~ ^[0-9]+$ ]] || die 'PEFT_START_TASK_ID must be an integer in [0,9]'
 (( PEFT_START_TASK_ID <= 9 )) || die 'PEFT_START_TASK_ID must be in [0,9]'
+PEFT_END_TASK_ID="${PEFT_END_TASK_ID:-9}"
+[[ "$PEFT_END_TASK_ID" =~ ^[0-9]+$ ]] || die 'PEFT_END_TASK_ID must be an integer in [0,9]'
+(( PEFT_END_TASK_ID <= 9 )) || die 'PEFT_END_TASK_ID must be in [0,9]'
+(( PEFT_START_TASK_ID <= PEFT_END_TASK_ID )) || die 'PEFT_START_TASK_ID must not exceed PEFT_END_TASK_ID'
 if [[ -n "${PEFT_RESUME_SOURCE_RUN_ROOT:-}" && "$PEFT_START_TASK_ID" -ne 0 ]]; then
   die 'PEFT_RESUME_SOURCE_RUN_ROOT is permitted only when PEFT_START_TASK_ID=0'
 fi
@@ -100,16 +109,16 @@ PY
 fi
 
 FIRST_TASK_ID="$PEFT_START_TASK_ID"
-for task_id in $(seq "$FIRST_TASK_ID" 9); do
+for task_id in $(seq "$FIRST_TASK_ID" "$PEFT_END_TASK_ID"); do
   export PEFT_TASK_ID="$task_id"
   unset PEFT_TASK_IDS PEFT_ARROW_COLLECTION_MANIFEST
   export PEFT_LABEL="${PEFT_ALL_TASK_LABEL:-smolvla_fresh_arrow_bc5}_task_${task_id}"
   export PEFT_RUN_ROOT="$PEFT_ALL_TASK_RUN_ROOT/task_${task_id}/run"
   export PEFT_ARCHIVE_ROOT="$PEFT_ALL_TASK_ARCHIVE_ROOT/task_${task_id}"
   export PEFT_SCRATCH_ROOT="$PEFT_ALL_TASK_RUN_ROOT/task_${task_id}"
-  printf '[%s] starting task %s/9 in job %s\n' "$(date +'%F %T')" "$task_id" "$SLURM_JOB_ID"
+  printf '[%s] starting task %s/%s in job %s\n' "$(date +'%F %T')" "$task_id" "$PEFT_END_TASK_ID" "$SLURM_JOB_ID"
   bash "$RUNNER"
-  printf '[%s] completed task %s/9 in job %s\n' "$(date +'%F %T')" "$task_id" "$SLURM_JOB_ID"
+  printf '[%s] completed task %s/%s in job %s\n' "$(date +'%F %T')" "$task_id" "$PEFT_END_TASK_ID" "$SLURM_JOB_ID"
 done
 
-printf 'VERIFIED task-specific runs %s..9 completed sequentially in job %s\n' "$FIRST_TASK_ID" "$SLURM_JOB_ID"
+printf 'VERIFIED task-specific runs %s..%s completed sequentially in job %s\n' "$FIRST_TASK_ID" "$PEFT_END_TASK_ID" "$SLURM_JOB_ID"
