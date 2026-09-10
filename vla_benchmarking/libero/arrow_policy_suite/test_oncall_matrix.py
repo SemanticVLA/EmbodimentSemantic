@@ -164,12 +164,32 @@ def test_finalize_layout_aggregates_takeover_and_archive_is_idempotent(tmp_path:
     assert summary["status"] == "COMPLETED" and summary["takeover_count"] == 0
     assert (root / "tasks/task_00/episodes/episode_00/execution_receipt.json").is_file()
     assert (archive / "matrix_status.json").is_file()
+    archived_receipts = list((archive / "tasks").glob("task_*/episodes/episode_*/execution_receipt.json"))
+    archived_workers = list((archive / "worker_status").glob("task_*.json"))
+    assert len(archived_receipts) == 100 and len(archived_workers) == 10
+    archive_status = json.loads((archive / "matrix_status.json").read_text())
+    assert archive_status["status"] == "VERIFIED" and archive_status["required_counts"]["execution_receipts"] == 100
     assert matrix.finalize(config_path=CONFIG, output_root=root, archive_root=archive)["status"] == "COMPLETED"
     (archive / "matrix_status.json").unlink()
     # Simulate a process dying after the run-root COMPLETED marker but before
     # the archive status write. A later finalizer must repair the archive.
     repaired = matrix.finalize(config_path=CONFIG, output_root=root, archive_root=archive)
     assert repaired["status"] == "COMPLETED" and (archive / "matrix_status.json").is_file()
+
+
+def test_archive_copy_failure_cannot_publish_verified_status(tmp_path: Path, monkeypatch):
+    root = tmp_path / "copy_failure"; _write_matrix(root, tmp_path)
+    matrix.finalize(config_path=CONFIG, output_root=root)
+    archive = tmp_path / "copy_failure_archive"
+    original_write = matrix.write_artifact
+    def fail_task_copy(path, data, **kwargs):
+        if "tasks" in str(path):
+            raise OSError("simulated archive copy failure")
+        return original_write(path, data, **kwargs)
+    monkeypatch.setattr(matrix, "write_artifact", fail_task_copy)
+    with pytest.raises(Exception, match="archive copy failure"):
+        matrix.finalize(config_path=CONFIG, output_root=root, archive_root=archive)
+    assert not (archive / "matrix_status.json").exists()
 
 
 def test_finalize_rejects_receipt_or_video_digest_mismatch(tmp_path: Path):

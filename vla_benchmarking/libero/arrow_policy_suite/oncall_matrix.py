@@ -360,18 +360,35 @@ def _publish_archive(root: Path, archive_root: Path, sources: Sequence[Path]) ->
         if destination.exists():
             if destination.read_bytes() != data: raise ContractError(f"archive artifact disagreement: {destination}")
         else: write_artifact(destination, data, kind="arrow-oncall-archive-artifact")
-        published.append({"path": str(destination.relative_to(archive_root)), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+        published.append({"path": destination.relative_to(archive_root).as_posix(), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+    counts = {
+        "execution_receipts": sum(item["path"].startswith("tasks/") and item["path"].endswith("/execution_receipt.json") for item in published),
+        "episode_results": sum(item["path"].startswith("tasks/") and item["path"].endswith("/episode_result.json") for item in published),
+        "task_summaries": sum(item["path"].startswith("tasks/") and item["path"].endswith("/task_summary.json") for item in published),
+        "worker_terminal_receipts": sum(item["path"].startswith("worker_status/") and item["path"].endswith(".json") for item in published),
+        "videos": sum(item["path"].startswith("videos/") and item["path"].endswith(".mp4") for item in published),
+    }
+    required_counts = {"execution_receipts": 100, "episode_results": 100,
+                       "task_summaries": 10, "worker_terminal_receipts": 10, "videos": 10}
+    if counts != required_counts:
+        raise ContractError(f"global archive required-count mismatch: {counts}")
+    inventory_sha256 = _canonical_digest(published)
     marker = archive_root / "COMPLETED"
     marker_data = b"completed\n"
     _write_bytes_or_verify(marker, marker_data, kind="arrow-oncall-archive-complete")
     published.append({"path": "COMPLETED", "sha256": hashlib.sha256(marker_data).hexdigest(), "bytes": len(marker_data)})
-    status = {"schema": f"{MATRIX_SCHEMA}.archive_status.v1", "experiment_evidence": False, "status": "VERIFIED", "artifacts": published}
+    status = {"schema": f"{MATRIX_SCHEMA}.archive_status.v1", "experiment_evidence": False,
+              "status": "VERIFIED", "artifacts": published, "required_counts": counts,
+              "inventory_sha256": inventory_sha256}
     _write_or_verify(archive_root / "matrix_status.json", status, kind="arrow-oncall-archive-status")
     return status
 
 
 def _archive_sources(root: Path) -> list[Path]:
     sources = [root / "matrix_plan.json", root / "summary.json", root / "summary.csv"]
+    for directory in (root / "tasks", root / "worker_status"):
+        if directory.is_dir():
+            sources.extend(sorted(path for path in directory.rglob("*") if path.is_file()))
     for task in TASK_IDS:
         sources.extend((root / "videos" / f"task_{task:02d}_episode_00.mp4",
                         root / "videos" / f"task_{task:02d}_episode_00.mp4.json"))

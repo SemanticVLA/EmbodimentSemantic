@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # Arrow OnCall exploratory matrix: ten LIBERO tasks, ten fixed episodes per task.
-# One array element owns one task and invokes the sealed Python matrix runner;
+# One worker lane owns one task and invokes the sealed Python matrix runner;
 # the runner is responsible for the episode schedule and annotated task video.
 # This wrapper owns only cluster/runtime setup, provenance, and archival.
 
 #SBATCH --job-name=arrow_oncall_matrix
-#SBATCH --array=0-9%2
 #SBATCH --partition=gpu_a40
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
 #SBATCH --time=1-00:00:00
-#SBATCH --output=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%A_%a.out
-#SBATCH --error=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%A_%a.err
+#SBATCH --output=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%j.out
+#SBATCH --error=/home/hjaber/EmbodimentSemantic_runtime/operator/logs/%x_%j.err
 
 set -Eeuo pipefail
 umask 027
@@ -34,8 +33,50 @@ unset ARROW_MOLMOPOINT_MODEL ARROW_MOLMOPOINT_REVISION \
   SMOLVLA_BASE_POLICY
 
 die() { printf 'arrow oncall matrix: %s\n' "$*" >&2; exit 2; }
-[[ -n "${SLURM_JOB_ID:-}" && "${SLURM_ARRAY_TASK_ID:-}" =~ ^[0-9]+$ ]] || die 'submit with sbatch as an array'
-[[ "$SLURM_ARRAY_TASK_ID" -ge 0 && "$SLURM_ARRAY_TASK_ID" -le 9 ]] || die 'array task must be in 0..9'
+[[ -n "${SLURM_JOB_ID:-}" ]] || die 'submit with sbatch'
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+
+# Legion has arrays disabled; this is intentionally one ordinary job.  The
+# driver recursively executes the same sealed worker once per task inside the
+# two-GPU allocation.
+if [[ "${ARROW_ONCALL_SINGLE_TASK_ID:-}" =~ ^[0-9]+$ ]]; then
+  selected_task_id="$ARROW_ONCALL_SINGLE_TASK_ID"
+else
+  # Arrays are disabled on the current Legion configuration.  Keep the
+  # approved concurrency bound inside this single allocation: two lanes, each
+  # pinned to one scheduler-assigned visible GPU and responsible for five
+  # disjoint tasks.  Never assume GPU ordinals; Slurm may provide UUIDs.
+  scheduler_gpu_list="${CUDA_VISIBLE_DEVICES:-}"
+  [[ -n "$scheduler_gpu_list" ]] || die 'Slurm did not provide CUDA_VISIBLE_DEVICES'
+  IFS=',' read -r -a lane_gpus <<< "$scheduler_gpu_list"
+  [[ "${#lane_gpus[@]}" -eq 2 ]] || die "expected exactly two scheduler GPUs, got: $scheduler_gpu_list"
+  for lane_gpu in "${lane_gpus[@]}"; do
+    [[ "$lane_gpu" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "unsafe scheduler GPU identifier: $lane_gpu"
+  done
+  lane_log_root="$ARROW_ONCALL_RUN_ROOT/task_logs"
+  mkdir -p "$lane_log_root" || die 'cannot create task-specific lane logs'
+  run_lane() {
+    local lane_gpu="$1"; shift
+    local lane_rc=0 child_rc task_id task_log_name
+    for task_id in "$@"; do
+      task_log_name="task_$(printf '%02d' "$task_id")"
+      CUDA_VISIBLE_DEVICES="$lane_gpu" ARROW_ONCALL_SINGLE_TASK_ID="$task_id" \
+        ARROW_ONCALL_LOG_ROOT="$lane_log_root" bash "$SCRIPT_PATH" \
+        > "$lane_log_root/${task_log_name}.out" 2> "$lane_log_root/${task_log_name}.err" || {
+        child_rc=$?
+        [[ "$lane_rc" -eq 0 ]] && lane_rc="$child_rc"
+      }
+    done
+    return "$lane_rc"
+  }
+  run_lane "${lane_gpus[0]}" 0 2 4 6 8 & lane0_pid=$!
+  run_lane "${lane_gpus[1]}" 1 3 5 7 9 & lane1_pid=$!
+  matrix_rc=0
+  if wait "$lane0_pid"; then :; else child_rc=$?; [[ "$matrix_rc" -eq 0 ]] && matrix_rc="$child_rc"; fi
+  if wait "$lane1_pid"; then :; else child_rc=$?; [[ "$matrix_rc" -eq 0 ]] && matrix_rc="$child_rc"; fi
+  exit "$matrix_rc"
+fi
+[[ "$selected_task_id" -ge 0 && "$selected_task_id" -le 9 ]] || die 'task must be in 0..9'
 
 for name in ARROW_ONCALL_REPO_ROOT ARROW_ONCALL_EXPECTED_COMMIT \
   ARROW_ONCALL_RUN_ROOT ARROW_ONCALL_ARCHIVE_ROOT ARROW_ONCALL_CONFIG \
@@ -75,7 +116,7 @@ case "$ARCHIVE_ROOT" in "$REPO_ROOT"|"$REPO_ROOT"/*) die 'archive root overlaps 
 case "$RUN_ROOT" in "$ARCHIVE_ROOT"|"$ARCHIVE_ROOT"/*) die 'run/archive roots overlap' ;; esac
 case "$ARCHIVE_ROOT" in "$RUN_ROOT"|"$RUN_ROOT"/*) die 'archive/run roots overlap' ;; esac
 
-TASK_ID="$SLURM_ARRAY_TASK_ID"
+TASK_ID="$selected_task_id"
 TASK_NAME="task_$(printf '%02d' "$TASK_ID")"
 TASK_RUN_ROOT="$RUN_ROOT/tasks/$TASK_NAME"
 TASK_ARCHIVE_ROOT="$ARCHIVE_ROOT/tasks/$TASK_NAME"
@@ -95,28 +136,24 @@ copy_tree() {
   fi
 }
 
-archive_on_exit() {
-  local workload_rc=$? archive_rc=0
-  trap - EXIT
-  set +e
+status_root="$RUN_ROOT/worker_status"
+status_path="$status_root/$TASK_NAME.json"
+finalize_log="$RUN_ROOT/finalize_logs/$TASK_NAME.log"
 
-  # Record a terminal worker receipt before copying anything.  This is the
-  # create-only failure ledger used by the matrix finalizer when a compute
-  # preflight or Python worker crashes before task_summary.json exists.  The
-  # receipt is written/fsynced to a unique temporary file, then published by
-  # hard-link so readers never observe a partially written target.
-  status_root="$RUN_ROOT/worker_status"
-  status_path="$status_root/$TASK_NAME.json"
-  mkdir -p "$status_root" || archive_rc=$?
-  publish_worker_status() {
-    local task_status=FAILED_INFRASTRUCTURE temp_path validator
-    [[ "${task_rc:-125}" -eq 0 ]] && task_status=COMPLETED
-    validator="${PYTHON:-}"
-    if [[ ! -x "$validator" ]]; then validator="$(command -v python3 2>/dev/null || true)"; fi
+# Publish a terminal worker receipt atomically.  The target is never opened
+# directly: a unique, fsynced temporary is hard-linked into place, and an
+# existing target is accepted only after schema/task validation.
+publish_worker_status() {
+  local task_exit_code="$1" workload_exit_code="$2"
+  local task_status=FAILED_INFRASTRUCTURE temp_path validator writer_rc
+  [[ "$task_exit_code" -eq 0 ]] && task_status=COMPLETED
+  validator="${PYTHON:-}"
+  if [[ ! -x "$validator" ]]; then validator="$(command -v python3 2>/dev/null || true)"; fi
+  mkdir -p "$status_root" || return $?
 
-    if [[ -e "$status_path" ]]; then
-      [[ -x "$validator" ]] || return 1
-      "$validator" - "$status_path" "$TASK_ID" <<'PY'
+  if [[ -e "$status_path" ]]; then
+    [[ -x "$validator" ]] || return 1
+    "$validator" - "$status_path" "$TASK_ID" <<'PY'
 import json
 import pathlib
 import sys
@@ -132,12 +169,12 @@ if payload.get("task_id") != int(sys.argv[2]):
 if payload.get("task_status") not in {"COMPLETED", "FAILED_INFRASTRUCTURE"}:
     raise SystemExit("worker status terminal value mismatch")
 PY
-      return $?
-    fi
+    return $?
+  fi
 
-    temp_path="$(mktemp "$status_root/.${TASK_NAME}.terminal.XXXXXX")" || return 1
-    if [[ -x "${PYTHON:-}" ]]; then
-      "$PYTHON" - "$temp_path" "$TASK_ID" "$task_status" "${task_rc:-125}" "$workload_rc" <<'PY'
+  temp_path="$(mktemp "$status_root/.${TASK_NAME}.terminal.XXXXXX")" || return 1
+  if [[ -x "${PYTHON:-}" ]]; then
+    "$PYTHON" - "$temp_path" "$TASK_ID" "$task_status" "$task_exit_code" "$workload_exit_code" <<'PY'
 import json
 import os
 import pathlib
@@ -196,51 +233,59 @@ if payload.get("task_id") != int(sys.argv[2]):
 if payload.get("task_status") not in {"COMPLETED", "FAILED_INFRASTRUCTURE"}:
     raise SystemExit("worker status terminal value mismatch")
 PY
-  }
-  publish_worker_status || archive_rc=$?
+}
 
-  # A failed preflight can bypass the normal post-run finalizer.  Let the
-  # terminal array element still attempt global sealing, but never replace the
-  # original workload exit code with this best-effort call's result.
-  finalize_log="$RUN_ROOT/finalize_logs/$TASK_NAME.log"
+# Copy one task's artifacts, worker receipt, logs, and inventory.  This is
+# intentionally callable before finalize and again from EXIT for durability.
+archive_task_artifacts() {
+  local local_rc=0 archive_status
+  copy_tree "$TASK_RUN_ROOT" "$TASK_ARCHIVE_ROOT" || local_rc=$?
+  if [[ -s "$status_path" ]]; then
+    mkdir -p "$TASK_ARCHIVE_ROOT/worker_status" || local_rc=$?
+    cp -p -- "$status_path" "$TASK_ARCHIVE_ROOT/worker_status/" || local_rc=$?
+  fi
+  if [[ -s "$finalize_log" ]]; then
+    cp -p -- "$finalize_log" "$TASK_ARCHIVE_ROOT/" || local_rc=$?
+  fi
+  log_root="${ARROW_ONCALL_LOG_ROOT:-${SLURM_LOG_ROOT:-$HOME/EmbodimentSemantic_runtime/operator/logs}}"
+  mkdir -p "$TASK_ARCHIVE_ROOT/slurm_logs" || local_rc=$?
+  for suffix in out err; do
+    log_path="$log_root/task_$(printf '%02d' "$TASK_ID").$suffix"
+    [[ -f "$log_path" ]] && cp -p -- "$log_path" "$TASK_ARCHIVE_ROOT/slurm_logs/" || true
+  done
+  if [[ -d "$TASK_ARCHIVE_ROOT" ]]; then
+    find "$TASK_ARCHIVE_ROOT" -type f ! -name inventory.sha256 ! -name tree_sha256 -print0 |
+      sort -z | xargs -0 -r sha256sum > "$TASK_ARCHIVE_ROOT/inventory.sha256" || local_rc=$?
+    sha256sum "$TASK_ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$TASK_ARCHIVE_ROOT/tree_sha256" || local_rc=$?
+    archive_status=PRESERVED_FAILURE
+    if [[ "$local_rc" -eq 0 &&
+      -s "$TASK_ARCHIVE_ROOT/task_summary.json" &&
+      -s "$TASK_ARCHIVE_ROOT/worker_status/$TASK_NAME.json" &&
+      -s "$TASK_ARCHIVE_ROOT/inventory.sha256" ]]; then
+      archive_status=VERIFIED
+    fi
+    printf 'schema=arrow_policy_suite_oncall_task_archive.v1\nexperiment_evidence=false\nstatus=%s\njob_id=%s\ntask_id=%s\nrepo_commit=%s\nrun_root=%s\narchive_root=%s\n' \
+      "$archive_status" "$SLURM_JOB_ID" "$TASK_ID" "$actual_commit" \
+      "$TASK_RUN_ROOT" "$TASK_ARCHIVE_ROOT" > "$TASK_ARCHIVE_ROOT/archive_status.env" || local_rc=$?
+  fi
+  return "$local_rc"
+}
+
+archive_on_exit() {
+  local workload_rc=$? archive_rc=0
+  trap - EXIT
+  set +e
+  publish_worker_status "${task_rc:-125}" "$workload_rc" || archive_rc=$?
+  archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
   mkdir -p "$RUN_ROOT/finalize_logs" || archive_rc=$?
-  if [[ -x "${PYTHON:-}" && -n "${ARROW_ONCALL_CONFIG:-}" && -n "${RUN_ROOT:-}" && -n "${ARCHIVE_ROOT:-}" ]]; then
+  if [[ -x "${PYTHON:-}" && -n "${ARROW_ONCALL_CONFIG:-}" ]]; then
     "$PYTHON" -m vla_benchmarking.libero.arrow_policy_suite.oncall_matrix finalize \
       --config "$ARROW_ONCALL_CONFIG" --output-root "$RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
       --factory vla_benchmarking.libero.arrow_policy_suite.native_legion_factory:build_host \
       --checkpoint "$ARROW_ONCALL_CHECKPOINT" --controller "$ARROW_ONCALL_CONTROLLER" \
       >> "$finalize_log" 2>&1 || true
   fi
-
-  copy_tree "$TASK_RUN_ROOT" "$TASK_ARCHIVE_ROOT" || archive_rc=$?
-  if [[ -s "$status_path" ]]; then
-    mkdir -p "$TASK_ARCHIVE_ROOT/worker_status" || archive_rc=$?
-    cp -p -- "$status_path" "$TASK_ARCHIVE_ROOT/worker_status/" || archive_rc=$?
-  fi
-  if [[ -s "$finalize_log" ]]; then
-    cp -p -- "$finalize_log" "$TASK_ARCHIVE_ROOT/" || archive_rc=$?
-  fi
-  log_root="${SLURM_LOG_ROOT:-$HOME/EmbodimentSemantic_runtime/operator/logs}"
-  mkdir -p "$TASK_ARCHIVE_ROOT/slurm_logs" || archive_rc=$?
-  for suffix in out err; do
-    log_path="$log_root/${SLURM_JOB_NAME}_${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}_${TASK_ID}.$suffix"
-    [[ -f "$log_path" ]] && cp -p -- "$log_path" "$TASK_ARCHIVE_ROOT/slurm_logs/" || true
-  done
-  if [[ -d "$TASK_ARCHIVE_ROOT" ]]; then
-    find "$TASK_ARCHIVE_ROOT" -type f ! -name inventory.sha256 ! -name tree_sha256 -print0 |
-      sort -z | xargs -0 -r sha256sum > "$TASK_ARCHIVE_ROOT/inventory.sha256" || archive_rc=$?
-    sha256sum "$TASK_ARCHIVE_ROOT/inventory.sha256" | awk '{print tolower($1)}' > "$TASK_ARCHIVE_ROOT/tree_sha256" || archive_rc=$?
-    archive_status=PRESERVED_FAILURE
-    if [[ "$workload_rc" -eq 0 && "$archive_rc" -eq 0 &&
-      -s "$TASK_ARCHIVE_ROOT/task_summary.json" &&
-      -s "$TASK_ARCHIVE_ROOT/worker_status/$TASK_NAME.json" &&
-      -s "$TASK_ARCHIVE_ROOT/inventory.sha256" ]]; then
-      archive_status=VERIFIED
-    fi
-    printf 'schema=arrow_policy_suite_oncall_task_archive.v1\nexperiment_evidence=false\nstatus=%s\njob_id=%s\narray_task_id=%s\nrepo_commit=%s\nrun_root=%s\narchive_root=%s\n' \
-      "$archive_status" \
-      "$SLURM_JOB_ID" "$TASK_ID" "$actual_commit" "$TASK_RUN_ROOT" "$TASK_ARCHIVE_ROOT" > "$TASK_ARCHIVE_ROOT/archive_status.env" || archive_rc=$?
-  fi
+  archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
   [[ "$workload_rc" -eq 0 && "$archive_rc" -ne 0 ]] && workload_rc=$archive_rc
   exit "$workload_rc"
 }
@@ -387,6 +432,13 @@ set +e
 task_rc=$?
 set -e
 
+# Publish the terminal receipt and durable task archive before global finalize.
+# A successful finalizer must therefore observe this task's detailed receipt,
+# task summary, archive seal, and inventory already in the persistent archive.
+archive_rc=0
+publish_worker_status "$task_rc" "$task_rc" || archive_rc=$?
+archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
+
 # Finalization is deliberately attempted even after a task-side infrastructure
 # failure, so the matrix retains a sealed partial ledger and the task archive.
 set +e
@@ -400,7 +452,12 @@ set +e
 final_rc=$?
 set -e
 
-# The finalizer is allowed to return before the other array elements finish.
+# Refresh the task archive after finalizer logging.  This cannot retroactively
+# make a failed archive verified, but it preserves the complete detail/log
+# evidence for the global archive publication.
+archive_task_artifacts || { local_rc=$?; [[ "$archive_rc" -eq 0 ]] && archive_rc="$local_rc"; }
+
+# The finalizer is allowed to return before the other task lanes finish.
 # Once all ten task manifests are present, however, a successful finalizer must
 # have emitted the durable archive-level seal/status requested by the matrix
 # contract.  This catches a Python finalizer that only writes scratch output.
@@ -416,4 +473,5 @@ if [[ "$task_manifest_count" -eq 10 && "$final_rc" -eq 0 &&
 fi
 
 if [[ "$task_rc" -ne 0 ]]; then exit "$task_rc"; fi
+if [[ "$archive_rc" -ne 0 ]]; then exit "$archive_rc"; fi
 exit "$final_rc"

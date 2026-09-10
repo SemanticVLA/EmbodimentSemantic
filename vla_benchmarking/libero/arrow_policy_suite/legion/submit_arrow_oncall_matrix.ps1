@@ -71,11 +71,16 @@ $remoteLines = @(
     'test -f "$ARROW_ONCALL_CONTROLLER"'
     'test -x "$ARROW_ONCALL_RUNTIME_PYTHON"'
     'test -d "$ARROW_ONCALL_HF_CACHE"'
+    'unset ARROW_ONCALL_SINGLE_TASK_ID'
     'test ! -e "$ARROW_ONCALL_RUN_ROOT"'
     'test ! -e "$ARROW_ONCALL_ARCHIVE_ROOT"'
     "test -f 'vla_benchmarking/libero/arrow_policy_suite/legion/run_arrow_oncall_matrix.sbatch'"
     "bash -n 'vla_benchmarking/libero/arrow_policy_suite/legion/run_arrow_oncall_matrix.sbatch'"
-    "sbatch --parsable --array=0-9%2 --partition='$Partition' --time='$TimeLimit' --export=ALL 'vla_benchmarking/libero/arrow_policy_suite/legion/run_arrow_oncall_matrix.sbatch'"
+    "sbatch_args=(--parsable --partition='$Partition' --time='$TimeLimit' --export=ALL)"
+    'array_mode=two_lane'
+    'job_id="$(sbatch "${sbatch_args[@]}" vla_benchmarking/libero/arrow_policy_suite/legion/run_arrow_oncall_matrix.sbatch)" || { rc=$?; printf "sbatch failed (rc=%s)\n" "$rc" >&2; exit "$rc"; }'
+    '[[ "$job_id" =~ ^[0-9]+(;[A-Za-z0-9_.-]+)?$ ]] || { printf "sbatch returned an invalid job id: %s\n" "$job_id" >&2; exit 1; }'
+    'printf "job_id=%s mode=%s\n" "$job_id" "$array_mode"'
 )
 $remote = ($remoteLines -join "`n") + "`n"
 

@@ -17,15 +17,77 @@ SBATCH = ROOT / "run_arrow_oncall_matrix.sbatch"
 SUBMIT = ROOT / "submit_arrow_oncall_matrix.ps1"
 
 
-def test_sbatch_is_a_single_bounded_array() -> None:
+def test_sbatch_is_a_single_bounded_two_lane_job() -> None:
     text = SBATCH.read_text(encoding="utf-8")
-    assert "#SBATCH --array=0-9%2" in text
-    assert text.count("#SBATCH --array=") == 1
-    assert "#SBATCH --gres=gpu:1" in text
+    assert "#SBATCH --array=" not in text
+    assert "for task_id in \"$@\"; do" in text
+    assert 'ARROW_ONCALL_SINGLE_TASK_ID="$task_id"' in text
+    assert 'ARROW_ONCALL_LOG_ROOT="$lane_log_root" bash "$SCRIPT_PATH"' in text
+    assert "SLURM_ARRAY" not in text
+    assert "#SBATCH --gres=gpu:2" in text
+    assert "#SBATCH --cpus-per-task=16" in text
+    assert "#SBATCH --mem=128G" in text
+    assert "%a" not in text
+    assert 'run_lane "${lane_gpus[0]}" 0 2 4 6 8' in text
+    assert 'run_lane "${lane_gpus[1]}" 1 3 5 7 9' in text
+    assert "CUDA_VISIBLE_DEVICES=\"$lane_gpu\"" in text
     assert "#SBATCH --partition=gpu_a40" in text
     assert "#SBATCH --time=1-00:00:00" in text
-    assert "SLURM_ARRAY_TASK_ID" in text
     assert "-le 9" in text
+
+
+def test_scheduler_gpu_identifiers_are_consumed_exactly() -> None:
+    """Exercise the launcher's GPU-list parser with ordinals and UUIDs."""
+    text = SBATCH.read_text(encoding="utf-8")
+    start = text.index('  scheduler_gpu_list="${CUDA_VISIBLE_DEVICES:-}"')
+    end = text.index("  run_lane()", start)
+    parser = text[start:end].replace("\r", "")
+    harness = f'''set -Eeuo pipefail
+die() {{ printf '%s\\n' "$*" >&2; exit 2; }}
+ARROW_ONCALL_RUN_ROOT=/tmp/arrow_oncall_launcher_test
+{parser}
+printf '%s,%s\\n' "${{lane_gpus[0]}}" "${{lane_gpus[1]}}"
+'''
+    bash = shutil.which("bash")
+    if bash is None:
+        return
+    probe = subprocess.run([bash, "-c", 'v=probe; printf "%s\\n" "$v"'], capture_output=True, text=True)
+    # The Windows WSL shim available in some developer environments does not
+    # preserve shell assignments through -c/stdin; run this dynamic Bash test
+    # on real Bash (including Legion) and retain the static contract checks on
+    # the shim.
+    if probe.returncode != 0 or probe.stdout.strip() != "probe":
+        return
+    for value, expected in (
+        ("2,5", "2,5"),
+        (
+            "GPU-11111111-2222-3333-4444-555555555555,GPU-aaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "GPU-11111111-2222-3333-4444-555555555555,GPU-aaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        ),
+    ):
+        case_script = harness.replace(
+            "ARROW_ONCALL_RUN_ROOT=",
+            f'CUDA_VISIBLE_DEVICES="{value}"\nARROW_ONCALL_RUN_ROOT=',
+            1,
+        )
+        result = subprocess.run(
+            [bash, "-c", case_script],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+    rejected_script = harness.replace(
+        "ARROW_ONCALL_RUN_ROOT=",
+        'CUDA_VISIBLE_DEVICES="2,5,7"\nARROW_ONCALL_RUN_ROOT=',
+        1,
+    )
+    rejected = subprocess.run(
+        [bash, "-c", rejected_script],
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode != 0
 
 
 def test_sbatch_seals_the_schedule_and_calls_both_matrix_commands() -> None:
@@ -142,12 +204,17 @@ def test_submit_front_door_requires_explicit_immutable_inputs() -> None:
         "ArchiveRoot",
     ):
         assert re.search(rf"\[Parameter\(Mandatory = \$true\)\].*\[string\]\${name}\b", text)
-    assert "--array=0-9%2" in text
+    assert "--array" not in text
+    assert "array_mode=two_lane" in text
+    assert "mode=%s" in text
+    assert "sbatch failed (rc=%s)" in text
+    assert "invalid job id" in text
     assert "ARROW_*|SMOLVLA_BASE_POLICY) unset" in text
     assert "ARROW_ONCALL_" in text
     assert "--export=ALL" in text
     assert "bash -n" in text
     assert "automatic_ttt" not in text
+    assert "--array" not in SUBMIT.read_text(encoding="utf-8")
 
 
 def test_bash_syntax_when_available() -> None:
