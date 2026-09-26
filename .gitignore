@@ -1,0 +1,16 @@
+.cache/
+.pytest_cache/
+.pytest_*/
+.pytest-local*/
+__pycache__/
+*.py[cod]
+pytest.ini
+*.err.log
+*.out.log
+*.mp4
+~BROMIUM/
+.tmp-tests
+artifacts
+vlm_benchmarking/output/samgraph-*/
+tmpx
+.tmp

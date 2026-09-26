@@ -1,0 +1,17 @@
+{
+  "schema": "samgraph.aggregate_evaluation.v1",
+  "dataset": "LIBERO-Spatial",
+  "camera": "eye_in_hand",
+  "tasks": 10,
+  "episodes_per_task": 10,
+  "task_episodes": 100,
+  "sampled_frames": 2551,
+  "precision": 0.5321,
+  "recall": 0.3863,
+  "micro_f1": 0.4476,
+  "mean_per_task_f1": 0.3017,
+  "limitations": [
+    "This evaluation covers 10 episodes per task and is smaller than the external-camera evaluation.",
+    "The wrist pipeline depends on external-camera predictions for object identity."
+  ]
+}

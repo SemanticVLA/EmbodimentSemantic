@@ -1,0 +1,115 @@
+{
+  "schema": "samgraph.so101_objects.v1",
+  "objects": {
+    "black_bowl": {
+      "count": 1,
+      "role": "bowl",
+      "descriptions": [
+        "shallow matte black bowl",
+        "round black bowl",
+        "black bowl",
+        "black ceramic bowl",
+        "open-top shallow black serving bowl",
+        "wide black bowl with a visible rim",
+        "open black bowl resting on a pink drawer organizer"
+      ]
+    },
+    "cookie_packet": {
+      "count": 1,
+      "role": "support",
+      "descriptions": [
+        "white and orange cookie packet",
+        "packaged cookie snack bag",
+        "small white and orange snack packet",
+        "wrapped cookie snack packet",
+        "small orange and white wrapped cookie snack packet"
+      ]
+    },
+    "white_plate": {
+      "count": 1,
+      "role": "support",
+      "descriptions": [
+        "small round white plate",
+        "white circular plate",
+        "small white ceramic dish",
+        "small shallow white plate",
+        "white saucer",
+        "small round white saucer on the table"
+      ]
+    },
+    "red_drawer": {
+      "count": 1,
+      "role": "support",
+      "descriptions": [
+        "red and pink plastic drawer tower",
+        "small pink drawer organizer"
+      ]
+    },
+    "black_stove": {
+      "count": 1,
+      "role": "support",
+      "descriptions": [
+        "large flat black rectangular cooktop",
+        "large black stove platform",
+        "large black rectangular tray with geometric pattern"
+      ]
+    }
+  },
+  "tasks": {
+    "move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-le": {
+      "instruction": "Move the black bowl from the top of the drawer to on top of the cookie at the left",
+      "objects": ["black_bowl", "cookie_packet", "white_plate", "red_drawer", "black_stove"]
+    },
+    "move-the-black-bowl-from-the-top-of-the-drawer-to-on-top-of-the-cookie-at-the-ri": {
+      "instruction": "Move the black bowl from the top of the drawer to on top of the cookie at the right",
+      "objects": ["black_bowl", "cookie_packet", "white_plate", "red_drawer", "black_stove"]
+    },
+    "place-the-black-bowl-from-on-top-of-the-drawer-to-the-stove": {
+      "instruction": "Place the black bowl from on top of the drawer to the stove",
+      "objects": ["black_bowl", "cookie_packet", "white_plate", "red_drawer", "black_stove"]
+    },
+    "place-the-black-bowl-from-the-left-to-the-top-of-the-stove": {
+      "instruction": "Place the black bowl from the left to the top of the stove",
+      "objects": ["black_bowl", "cookie_packet", "white_plate", "red_drawer", "black_stove"]
+    },
+    "place-the-black-bowl-from-the-right-to-the-top-of-the-stove": {
+      "instruction": "Place the black bowl from the right to the top of the stove",
+      "objects": ["black_bowl", "cookie_packet", "white_plate", "red_drawer", "black_stove"]
+    }
+  },
+  "camera_convention": {
+    "camera": "agent_view",
+    "pixel_frame": "raw_rgb_top_left_origin_x_right_y_down",
+    "horizontal_label_rule": "smaller_x_is_left_of",
+    "vertical_label_rule": "larger_y_is_in_front_of_image_plane_proxy",
+    "support_rule": "mask_bbox_intersection_over_min_area_visual_heuristic",
+    "depth_claim": false,
+    "physical_contact_claim": false,
+    "calibration_status": "uncalibrated_2d_rgb"
+  },
+  "persistence": {
+    "policy": "role_aware_causal_v1",
+    "manipulated_object_ids": ["black_bowl"],
+    "temporal_reference": "latest_accepted_mask",
+    "reacquisition_reference": "clean_maximum_area_anchor",
+    "max_remembered_native_frames": 5,
+    "expired_state": "unresolved",
+    "claim": "remembered masks are short-horizon image-plane estimates, not current observations"
+  },
+  "geometry": {
+    "profile": "samgraph_spatial_mask_geometry",
+    "bbox_padding_x": 0.0,
+    "bbox_padding_y": 0.0,
+    "containment_iomin_threshold": 0.8,
+    "direction_horizontal_axis": "x",
+    "direction_horizontal_sign": -1,
+    "direction_vertical_axis": "y",
+    "direction_vertical_sign": 1,
+    "direction_vertical_scale": 1.0,
+    "direction_tie_axis": "horizontal",
+    "stack_order": "higher_vertical_is_top",
+    "drawer_stack_order": "higher_vertical_is_top",
+    "drawer_mode": "disabled",
+    "notebook_pair_semantics": false
+  }
+}

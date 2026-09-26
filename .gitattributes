@@ -1,0 +1,3 @@
+# Keep executable scripts runnable after checkout on Windows.
+*.sh text eol=lf
+*.sbatch text eol=lf

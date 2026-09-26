@@ -1,0 +1,15 @@
+# Install torch separately with the right CUDA wheel:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+h5py
+numpy
+opencv-python-headless
+Pillow
+pyarrow
+PyYAML
+tqdm
+python-dotenv
+transformers>=4.40.0
+accelerate>=0.27.0
+qwen-vl-utils
+bitsandbytes>=0.46.1
+timm

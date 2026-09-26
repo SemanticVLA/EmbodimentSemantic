@@ -1,0 +1,22 @@
+{
+  "schema": "samgraph.aggregate_evaluation.v1",
+  "dataset": "LIBERO-Spatial",
+  "camera": "agentview",
+  "tasks": 10,
+  "task_episodes": 500,
+  "sampled_frames": 12648,
+  "frame_stride": 5,
+  "true_positives": 431122,
+  "false_positives": 94090,
+  "false_negatives": 100094,
+  "precision": 0.8208532935271852,
+  "recall": 0.8115757055510376,
+  "micro_f1": 0.8161881358691743,
+  "mean_per_task_f1": 0.8196,
+  "identity_policy": "Original VLM per-frame bowl swap with evaluation-only provisional aliases.",
+  "frames_with_bowl_swap": 3980,
+  "limitations": [
+    "Metrics depend on the stated bowl-identity policy.",
+    "Evaluation uses sampled frames rather than every recorded frame."
+  ]
+}

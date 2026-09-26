@@ -1,0 +1,14 @@
+{
+  "schema": "samgraph.export_summary.v1",
+  "dataset": "SO101",
+  "camera": "agent_view",
+  "task_episodes": 50,
+  "sampled_frames": 835,
+  "predicted_triplets": 16268,
+  "ground_truth_available": false,
+  "accuracy_metrics": null,
+  "limitations": [
+    "Verified triplet-level ground truth is not available for this subset.",
+    "The record reports export coverage only and must not be interpreted as an accuracy result."
+  ]
+}

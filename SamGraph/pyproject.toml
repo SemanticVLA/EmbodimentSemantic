@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "embodiment-samgraph"
+version = "0.1.0"
+description = "SAM-based scene-graph extraction for embodied manipulation observations"
+requires-python = ">=3.12"
+dependencies = ["numpy", "Pillow>=9.0", "scipy>=1.10"]
+
+[project.optional-dependencies]
+benchmark = ["h5py>=3.8"]
+so101 = ["av>=12", "imageio[ffmpeg]>=2.34", "pyarrow>=14"]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["samgraph_core*", "samgraph_benchmark*", "samgraph_so101*", "samgraph_wrist*"]
